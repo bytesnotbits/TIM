@@ -9,7 +9,7 @@ if (typeof Papa === 'undefined') {
   
   // --- Global State ---
   let database = { inventory: [], transactionHistory: [] };
-  let currentFilters = { location: null, status: 'active' }; // Added status filter, default to active
+  let currentFilters = { location: null, status: 'active', searchTerm: '' }; // Add searchTerm
   let currentInventory = [];
   let currentUserIdentifier = 'Default User'; // User identifier state
   
@@ -164,20 +164,40 @@ if (typeof Papa === 'undefined') {
       }
   }
   
-  // --- Event Listener Setup ---
-  function setupEventListeners() {
-      try {
-          // Hamburger Menu
-          const hamburgerButton = document.getElementById('hamburger-button');
-          const navMenu = document.getElementById('nav-menu');
-          if (hamburgerButton && navMenu) {
-              hamburgerButton.addEventListener('click', () => navMenu.classList.toggle('active'));
-              navMenu.addEventListener('click', (e) => {
-                  if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') { // Close on link or button click
-                      navMenu.classList.remove('active');
-                  }
-              });
-          }
+    // --- Event Listener Setup ---
+    function setupEventListeners() {
+        try {
+            // Hamburger Menu
+            const hamburgerButton = document.getElementById('hamburger-button');
+            const navMenu = document.getElementById('nav-menu');
+            if (hamburgerButton && navMenu) {
+                hamburgerButton.addEventListener('click', () => navMenu.classList.toggle('active'));
+                navMenu.addEventListener('click', (e) => {
+                    if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') { // Close on link or button click
+                        navMenu.classList.remove('active');
+                    }
+                });
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.addEventListener('input', debounce(wrapHandler(() => {
+                    // No need to manually call applyCurrentFilters here if debounce triggers it
+                    applyCurrentFilters(); // The handler now reads the search term
+                }, 'search input'), 300)); // Debounce for 300ms
+            }
+            
+            // Add debounce function (place it somewhere accessible, e.g., near helpers)
+            function debounce(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func.apply(this, args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            }
+        }
   
           // User Identifier
           document.getElementById('userIdentifierInput')?.addEventListener('input', (event) => {
@@ -375,47 +395,66 @@ function applyCurrentFilters() {
         // Get filter values from UI
         const locationInput = document.getElementById('locationFilterInput');
         const statusSelect = document.getElementById('statusFilterSelect');
+        const searchInput = document.getElementById('searchInput'); // Get search input
 
         currentFilters.location = locationInput ? locationInput.value.trim().toLowerCase() : null;
-        currentFilters.status = statusSelect ? statusSelect.value : 'active'; // Default to 'active'
+        currentFilters.status = statusSelect ? statusSelect.value : 'active';
+        currentFilters.searchTerm = searchInput ? searchInput.value.trim().toLowerCase() : ''; // Get and store search term
 
         console.log("Applying filters:", currentFilters);
 
-        // Filter logic - NOW INCLUDES toCount
-        currentInventory = database.inventory.filter(item => {
+        // --- Primary Filtering (Location, Status, ToCount) ---
+        let filteredInventory = database.inventory.filter(item => {
             const locationMatch = !currentFilters.location || (item.location && item.location.toLowerCase().includes(currentFilters.location));
             const statusMatch = currentFilters.status === 'all' ||
                                 (currentFilters.status === 'active' && item.isActive) ||
                                 (currentFilters.status === 'inactive' && !item.isActive);
-            // --- NEW: Only include items marked for the current count cycle ---
-            const toCountMatch = item.toCount === true;
+            const toCountMatch = item.toCount === true; // Still filter by toCount initially
 
             return locationMatch && statusMatch && toCountMatch;
         });
 
-        // Optional: Add sorting
-        currentInventory.sort((a, b) => a.SKU.localeCompare(b.SKU));
+        // --- Secondary Filtering (Search Term) ---
+        if (currentFilters.searchTerm) {
+            filteredInventory = filteredInventory.filter(item => {
+                const skuMatch = item.SKU && item.SKU.toLowerCase().includes(currentFilters.searchTerm);
+                const descMatch = item.Description && item.Description.toLowerCase().includes(currentFilters.searchTerm);
+                const reelNumMatch = item.reelNumber && item.reelNumber.toLowerCase().includes(currentFilters.searchTerm);
+                return skuMatch || descMatch || reelNumMatch;
+            });
+            console.log(`Applied search term "${currentFilters.searchTerm}", ${filteredInventory.length} items remain.`);
+        }
 
-        // Re-render the list with filtered data
+        // Assign to currentInventory and sort
+        currentInventory = filteredInventory;
+        currentInventory.sort((a, b) => (a.SKU || '').localeCompare(b.SKU || ''));
+
+        // Re-render the list
         renderInventoryList(); // This function needs to handle the "no items match" message correctly
+        // Note: We'll address searching the *full* database for the "Add to Count" feature separately.
 
     } catch (error) {
         console.error("Error applying filters or refreshing current inventory:", error);
         currentInventory = []; // Fallback to empty on error
         renderInventoryList(); // Render the empty state or error message
     }
-}  
-  function clearAllFilters() {
-      const locationInput = document.getElementById('locationFilterInput');
-      const statusSelect = document.getElementById('statusFilterSelect');
-      if (locationInput) locationInput.value = '';
-      if (statusSelect) statusSelect.value = 'active'; // Reset status to active
-  
-      // Update global state and re-apply/render
-      currentFilters.location = null;
-      currentFilters.status = 'active';
-      applyCurrentFilters(); // Re-run filter logic and render
-  }
+}
+
+// Update clearAllFilters to clear search
+function clearAllFilters() {
+    const locationInput = document.getElementById('locationFilterInput');
+    const statusSelect = document.getElementById('statusFilterSelect');
+    const searchInput = document.getElementById('searchInput'); // Get search input
+    if (locationInput) locationInput.value = '';
+    if (statusSelect) statusSelect.value = 'active'; // Reset status to active
+    if (searchInput) searchInput.value = ''; // Clear search input
+
+    // Update global state and re-apply/render
+    currentFilters.location = null;
+    currentFilters.status = 'active';
+    currentFilters.searchTerm = ''; // Clear search term state
+    applyCurrentFilters(); // Re-run filter logic and render
+}
   
   
   // --- Core Logic Functions ---
@@ -688,21 +727,23 @@ function applyCurrentFilters() {
         container.innerHTML = ''; // Clear previous list
 
         if (currentInventory.length === 0) {
-             // --- MODIFIED Message ---
-             let message = 'No items marked "To Count" in the current cycle.';
-             if (currentFilters.location || currentFilters.status !== 'active') { // If filters are active *beyond* the default 'active' and 'toCount'
-                 message = `No items marked "To Count" match the current filters (Location: "${currentFilters.location || 'Any'}", Status: "${currentFilters.status}").`;
-             }
-             // Check if there are *any* items in the database at all
-             else if (database.inventory.length === 0) {
-                 message = 'Inventory is empty. Import a CSV to begin.';
-             }
-              // Check if there are items, but none are marked toCount
-             else if (!database.inventory.some(item => item.toCount)) {
-                  message = 'No items currently marked "To Count". Start a new count cycle via CSV import.';
-             }
-             container.innerHTML = `<p>${message}</p>`;
-             return;
+            let message = 'No items marked "To Count" in the current cycle.';
+            if (currentFilters.searchTerm) {
+                message = `No items marked "To Count" match the current search term ("${currentFilters.searchTerm}")`;
+                if (currentFilters.location || currentFilters.status !== 'active') {
+                     message += ` and filters (Location: "${currentFilters.location || 'Any'}", Status: "${currentFilters.status}")`;
+                }
+                message += ".";
+                 // TODO: Add suggestion here to search entire inventory?
+            } else if (currentFilters.location || currentFilters.status !== 'active') {
+                message = `No items marked "To Count" match the current filters (Location: "${currentFilters.location || 'Any'}", Status: "${currentFilters.status}").`;
+            } else if (database.inventory.length === 0) {
+                message = 'Inventory is empty. Import a CSV to begin.';
+            } else if (!database.inventory.some(item => item.toCount)) {
+                message = 'No items currently marked "To Count". Start a new count cycle via CSV import.';
+            }
+            container.innerHTML = `<p>${message}</p>`;
+            return;
         }
 
         const fragment = document.createDocumentFragment();
@@ -736,14 +777,18 @@ function applyCurrentFilters() {
               columns.actions.className = 'item-actions';
 
 
-              // --- Populate Details Column (Add Reel Number) ---
-               const reelInfo = item.isReel ? ` (Reel${item.reelNumber ? `: ${item.reelNumber}` : ''}${item.isTwoWayReel ? ', 2-Way' : ''})` : '';
-              columns.details.innerHTML = `
-                  <div class="item-sku">SKU: ${item.SKU}${reelInfo} ${!item.isActive ? ' [INACTIVE]' : ''}</div>
-                  <div class="item-desc">${item.Description || 'N/A'}</div>
-                  <div class="item-loc">Loc: ${item.location || 'N/A'}</div>
-                  <div class="item-id" style="font-size: 0.7em; color: grey;">ID: ${item.itemId}</div>
-              `;
+            // --- Populate Details Column (Add Reel Number AND ToCount Indicator) ---
+            const reelInfo = item.isReel ? ` (Reel${item.reelNumber ? `: ${item.reelNumber}` : ''}${item.isTwoWayReel ? ', 2-Way' : ''})` : '';
+            const toCountIndicator = item.toCount ? `<span class="tocount-indicator" title="Marked for current count cycle">🎯</span>` : ''; // Target emoji or use a class for CSS icon
+
+            columns.details.innerHTML = `
+                <div class="item-sku">
+                    ${toCountIndicator} ${item.SKU}${reelInfo} ${!item.isActive ? ' [INACTIVE]' : ''}
+                </div>
+                <div class="item-desc">${item.Description || 'N/A'}</div>
+                <div class="item-loc">Loc: ${item.location || 'N/A'}</div>
+                <div class="item-id" style="font-size: 0.7em; color: grey;">ID: ${item.itemId}</div>
+            `;
 
               // --- Populate Count Column --- (No changes needed here)
                const countInput = document.createElement('input'); /* ... */
