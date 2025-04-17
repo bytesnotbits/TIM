@@ -37,15 +37,6 @@ This tool provides a user-friendly interface for:
 *   **User Identification:** Records a user-provided name/ID alongside transactions in the history log.
 *   **Responsive Design:** Basic responsiveness for use on different screen sizes.
 
-## Screenshots (Placeholder)
-
-*Include screenshots here to showcase the UI.*
-
-`[Screenshot Placeholder: Main Inventory View with Filters]`
-`[Screenshot Placeholder: Item Detail Showing Reel Calculation]`
-`[Screenshot Placeholder: Item History Modal]`
-`[Screenshot Placeholder: Global History View]`
-
 ## Getting Started
 
 This is a client-side application and does not require a web server to run.
@@ -88,16 +79,16 @@ The CSV importer uses PapaParse and attempts to automatically detect headers (ca
     *   `location` (or `loc`)
 *   **Optional Headers (Will update existing item data or set for new items):**
     *   `counted` (or `quantity`, `qty`, `count`) - Explicit quantity. *Note: This is ignored if valid sequences are provided for a reel.*
-    *   `capturedQuantity` (or `expectedquantity`, `expected qty`, `captured qty`) - An optional field to store an expected or previously recorded quantity.
+    *   `capturedQuantity` (or `expectedquantity`, `expected qty`, `captured qty`, `captured`) - An optional field to store an expected or previously recorded quantity.
     *   `notes` (or `note`, `comments`)
     *   `isActive` (or `active`) - `true`, `1`, `yes` for active; `false`, `0`, `no` for inactive. Defaults to active if missing or not recognized as inactive.
-    *   `isReel` (or `reel`) - `true`, `1`, `yes` if it's a reel; otherwise `false`. Defaults to false.
+    *   `isReel` (or `reel`, 'reel #', 'reel no', 'reel no.' 'reel number', 'reel number') - `true`, `1`, `yes` if it's a reel; otherwise `false`. Defaults to false.
     *   `isTwoWayReel` (or `twowayreel`, `two way reel`) - `true`, `1`, `yes` if it's a two-way reel; otherwise `false`. Only applicable if `isReel` is also true. Defaults to false.
-    *   `footageFactor` (or `factor`, `ft factor`) - The numerical factor used for footage calculation on reels.
-    *   `innerSequence` (or `inner seq`, `inner`) - First inner sequence number.
-    *   `outerSequence` (or `outer seq`, `outer`) - First outer sequence number.
-    *   `innerSequence2` (or `inner seq 2`, `inner2`) - Second inner sequence number (for two-way reels).
-    *   `outerSequence2` (or `outer seq 2`, `outer2`) - Second outer sequence number (for two-way reels).
+    *   `footageFactor` (or `factor`, `ft factor`, 'feet, 'footage', 'ft', 'reelft', 'reel ft,' 'reel footage') - The numerical factor used for footage calculation on reels.
+    *   `innerSequence` (or `inner seq`, `inner`, 'in1', 'inner1', 'i1') - First inner sequence number.
+    *   `outerSequence` (or `outer seq`, `outer`, 'ou1', 'outer1', 'o1') - First outer sequence number.
+    *   `innerSequence2` (or `inner seq 2`, `inner2`, 'in2', 'inner2', 'i2') - Second inner sequence number (for two-way reels).
+    *   `outerSequence2` (or `outer seq 2`, `outer2`, 'ou2', 'outer2', 'o2') - Second outer sequence number (for two-way reels).
 
 **Import Logic:**
 
@@ -121,9 +112,7 @@ The CSV importer uses PapaParse and attempts to automatically detect headers (ca
 
 *   Implement robust search functionality within the inventory list.
 *   Add more advanced filtering/sorting options (e.g., by description, date last counted).
-*   Integrate barcode scanning capabilities (e.g., using device camera).
 *   Add basic reporting/analytics within the app.
-*   Improve UI/UX, potentially with a modern framework (though the goal here was simplicity).
 *   Implement unit/integration tests.
 *   Offer a cloud synchronization option (would require backend infrastructure).
 
