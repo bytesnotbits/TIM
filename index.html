@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telecom Inventory Helper</title>
+    <link rel="stylesheet" href="visuals.css">
+    <style>
+        /* Style for the user identifier input area */
+        .user-identifier {
+            padding: 0.5rem 1.5rem;
+            background-color: #e9ecef; /* Light background */
+            border-bottom: 1px solid var(--medium-gray);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9em;
+        }
+        .user-identifier label {
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+        .user-identifier input {
+            flex-grow: 1; /* Allow input to take space */
+            max-width: 250px; /* Limit input width */
+        }
+        /* Style for general error messages */
+        .error-message {
+            color: var(--danger-color);
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 0.8rem;
+            margin: 1rem 0;
+            border-radius: 5px;
+        }
+         /* Modal Styles */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1500; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0,0,0,0.5); /* Black w/ opacity */
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto; /* 10% from the top and centered */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%; /* Could be more or less, depending on screen size */
+            max-width: 700px;
+            border-radius: 8px;
+            position: relative;
+        }
+        .modal-close {
+            color: #aaa;
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .modal-close:hover,
+        .modal-close:focus {
+            color: black;
+            text-decoration: none;
+        }
+        .modal h3 {
+            margin-top: 0;
+            color: var(--primary-color);
+            border-bottom: 1px solid var(--medium-gray);
+            padding-bottom: 10px;
+        }
+        .modal-body {
+            max-height: 60vh; /* Limit height and allow scrolling */
+            overflow-y: auto;
+            padding-top: 10px;
+        }
+         /* Subtle display for captured quantity */
+        .captured-qty-display {
+            font-size: 0.8em;
+            color: var(--dark-gray);
+            margin-left: 5px;
+            font-style: italic;
+        }
+        /* Styling for notes text area */
+        .item-notes textarea {
+            width: 100%; /* Take full width available in its container */
+            min-height: 50px; /* Start with a decent height */
+            font-size: 0.9em;
+            padding: 5px;
+            border: 1px solid var(--medium-gray);
+            border-radius: 4px;
+            resize: vertical; /* Allow vertical resizing */
+            margin-top: 5px;
+        }
+        /* Inactive item styling */
+        .inventory-item.is-inactive {
+            opacity: 0.6;
+            background-color: #f1f3f5; /* Lighter gray */
+            border-left-color: var(--medium-gray);
+        }
+        .inventory-item.is-inactive .item-details div {
+             text-decoration: line-through; /* Optional: strike-through text */
+        }
+        .inventory-item.is-inactive input,
+        .inventory-item.is-inactive textarea,
+        .inventory-item.is-inactive button:not([data-action="view-history"]) { /* Allow viewing history */
+            pointer-events: none; /* Disable interactions */
+            background-color: #e9ecef;
+        }
+         /* Filter controls layout */
+        .filter-controls {
+             display: flex;
+             flex-wrap: wrap;
+             gap: 1rem;
+             align-items: center;
+             margin-bottom: 1rem; /* Space below filters */
+        }
+         .filter-controls label {
+             font-weight: bold;
+             margin-right: 0.5rem;
+             color: var(--primary-color);
+        }
+        .filter-controls input[type="text"],
+        .filter-controls select {
+             padding: 0.6rem;
+             font-size: 0.9rem;
+             border: 1px solid var(--medium-gray);
+             border-radius: 4px;
+        }
+         .filter-controls button {
+             padding: 0.6rem 1rem;
+        }
+
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">Telecom Inventory Helper</div>
+        <nav>
+            <button class="hamburger" id="hamburger-button" aria-label="Toggle navigation menu">☰</button>
+            <ul class="nav-menu" id="nav-menu">
+                <li><a href="#dashboard">Dashboard</a></li>
+                <li><a href="#inventory">Inventory</a></li>
+                <li><a href="#" id="view-history-link">View All History</a></li>
+                <li><button id="finalize-inventory-btn" class="btn-danger">Finalize Inventory</button></li>
+            </ul>
+        </nav>
+        <!-- Removed user-auth div */-->
+    </header>
+
+    <!-- User Identifier Input -->
+    <section class="user-identifier">
+        <label for="userIdentifierInput">Counter Name:</label>
+        <input type="text" id="userIdentifierInput" placeholder="Enter your name or ID">
+    </section>
+
+    <main id="dashboard">
+        <!-- {/* Placeholder for critical initialization errors */} -->
+        <div id="initialization-error-container" style="display: none;"></div>
+
+        <section class="summary-cards">
+            <!-- Card structure (example) -->
+             <div class="card" id="total-items">
+                 <h3>Total Items</h3>
+                 <p>0</p>
+             </div>
+             <div class="card" id="active-items">
+                <h3>Active Items</h3>
+                <p>0</p>
+            </div>
+             <div class="card" id="counted-items">
+                 <h3>Counted (Active)</h3>
+                 <p>0</p>
+             </div>
+             <div class="card" id="uncounted-items">
+                 <h3>Uncounted (Active)</h3>
+                 <p>0</p>
+             </div>
+        </section>
+
+        <section class="quick-actions">
+            <!-- Existing buttons -->
+            <button id="start-new-count-btn" class="btn-warning">Start New Count Cycle</button>
+            <button id="import-csv-btn">Import CSV</button>
+            <button id="export-csv-btn">Export CSV</button>
+            <button id="export-pdf-btn">Export PDF</button>
+            <!-- Removed Finalize button from here, moved to nav -->
+        </section>
+
+        <section class="inventory-management" id="inventory">
+            <h2>Inventory Items</h2>
+            <!-- Combined Filter Controls -->
+            <div class="filter-controls">
+                 <label for="locationFilterInput">Filter Location:</label>
+                 <input type="text" id="locationFilterInput" placeholder="Enter location...">
+                 <label for="statusFilterSelect">Status:</label>
+                 <select id="statusFilterSelect">
+                     <option value="active" selected>Active</option>
+                     <option value="inactive">Inactive</option>
+                     <option value="all">All</option>
+                 </select>
+                 <button id="apply-filters-btn" class="btn-secondary">Apply Filters</button>
+                 <button id="clear-filters-btn">Clear Filters</button>
+            </div>
+
+            <div class="inventory-list" id="inventoryList">
+                <p>Loading inventory...</p>
+            </div>
+        </section>
+
+        <section id="history-view" style="display: none;">
+            <h2>All Transaction History</h2>
+             <div class="history-controls">
+                 <button id="close-history-btn" class="btn-secondary">Close History</button>
+                 <!-- Maybe add search/filter later -->
+             </div>
+            <div id="historyListContainer">
+                <p>Loading history...</p>
+            </div>
+        </section>
+    </main>
+
+     <!-- Item History Modal -->
+    <div id="itemHistoryModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" id="itemHistoryModalClose">&times;</span>
+            <h3 id="itemHistoryModalTitle">History for SKU: ...</h3>
+            <div class="modal-body" id="itemHistoryModalBody">
+                <p>Loading item history...</p>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- {/* External Libraries */} -->
+    <script src="papaparse.min.js"></script>
+    <script src="jspdf.umd.min.js"></script>
+    <script src="jspdf.plugin.autotable.min.js"></script>
+
+    <!-- {/* Application Logic */} -->
+    <script src="offlineDB.js"></script>
+    <script src="appLogic.js"></script>
+</body>
+</html>

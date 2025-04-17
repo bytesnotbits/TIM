@@ -1,0 +1,538 @@
+/* --- START OF FILE visuals.css --- */
+:root {
+    --primary-color: #2c3e50;
+    --secondary-color: #3498db;
+    --light-gray: #f8f9fa;
+    --medium-gray: #dee2e6;
+    --dark-gray: #6c757d;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --success-color: #28a745;
+    --white-color: #ffffff;
+    --black-color: #000000;
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 0; /* Remove body padding, control padding within sections */
+    background-color: var(--light-gray); /* Light background for the page */
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.8rem 1.5rem; /* Adjust padding */
+    background-color: var(--primary-color);
+    color: var(--white-color);
+    position: sticky; /* Keep header visible */
+    top: 0;
+    z-index: 1000; /* Ensure header is above other content */
+}
+
+.logo {
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+
+/* --- Hamburger Menu Styles --- */
+.hamburger {
+    display: none; /* Hidden by default on larger screens */
+    font-size: 1.8rem;
+    background: none;
+    border: none;
+    color: var(--white-color);
+    cursor: pointer;
+    padding: 0.5rem;
+}
+
+nav {
+    display: flex;
+    align-items: center;
+}
+
+.nav-menu {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex; /* Horizontal layout on larger screens */
+    align-items: center; /* Align items vertically */
+    gap: 1.5rem; /* Spacing between nav items */
+}
+
+.nav-menu li {
+    display: flex; /* Allow buttons inside li */
+    align-items: center;
+}
+
+.nav-menu li a {
+    color: var(--white-color);
+    text-decoration: none;
+    padding: 0.5rem 0;
+    transition: opacity 0.2s ease-in-out;
+}
+.nav-menu li a:hover {
+    opacity: 0.8;
+}
+/* Style button within nav */
+.nav-menu li button {
+    margin-left: 0.5rem; /* Space it slightly from potential preceding link */
+    font-size: 0.85rem; /* Slightly smaller button in nav */
+    padding: 0.5rem 0.8rem;
+}
+
+
+/* --- Responsive Nav --- */
+@media (max-width: 880px) { /* Adjusted breakpoint */
+    .hamburger {
+        display: block; /* Show hamburger on smaller screens */
+    }
+
+    .nav-menu {
+        display: none; /* Hide normal nav menu */
+        position: absolute;
+        top: 60px; /* Position below header (adjust based on header height) */
+        left: 0;
+        right: 0;
+        background-color: var(--primary-color);
+        flex-direction: column; /* Stack items vertically */
+        align-items: stretch; /* Make items take full width */
+        padding: 1rem;
+        gap: 1rem;
+        border-top: 1px solid var(--secondary-color);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+
+    .nav-menu.active {
+        display: flex; /* Show the menu when active */
+    }
+
+    .nav-menu li {
+        text-align: center;
+        justify-content: center; /* Center button in li */
+    }
+     .nav-menu li a {
+        padding: 0.8rem 1rem;
+        display: block; /* Make links take full width */
+    }
+    .nav-menu li button {
+        margin-left: 0; /* Remove margin for stacked layout */
+        width: 80%; /* Make button wider */
+        max-width: 250px;
+    }
+
+    nav {
+        order: 1;
+    }
+     .logo {
+       order: 0;
+    }
+}
+
+/* --- Main Content Area --- */
+main {
+    padding: 20px; /* Add padding around the main content */
+}
+
+/* --- Cards --- */
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); /* Adjust min width */
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.card {
+    background: var(--white-color);
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+    border-top: 4px solid var(--secondary-color); /* Accent border */
+    display: flex; /* Use flex for better alignment */
+    flex-direction: column; /* Stack title and value */
+    justify-content: space-between; /* Push value down */
+}
+
+.card h3 {
+    margin-top: 0;
+    margin-bottom: 0.8rem; /* Space below title */
+    font-size: 1rem; /* Slightly smaller titles */
+    color: var(--primary-color);
+}
+
+.card p {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: var(--dark-gray);
+    margin-bottom: 0;
+    text-align: right; /* Align value to the right */
+}
+
+
+/* --- Quick Actions & Filters --- */
+.quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    align-items: center;
+}
+/* Filter controls layout */
+.filter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1.5rem; /* Space below filters */
+    padding: 1rem;
+    background-color: #e9ecef; /* Light background for filter bar */
+    border-radius: 6px;
+}
+.filter-controls label {
+    font-weight: bold;
+    margin-right: 0.5rem;
+    color: var(--primary-color);
+}
+.filter-controls input[type="text"],
+.filter-controls select {
+    padding: 0.6rem;
+    font-size: 0.9rem;
+    border: 1px solid var(--medium-gray);
+    border-radius: 4px;
+}
+.filter-controls button {
+    padding: 0.6rem 1rem;
+}
+
+
+button {
+    padding: 0.7rem 1.2rem; /* Default button size */
+    background-color: var(--secondary-color);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    white-space: nowrap; /* Prevent text wrapping */
+}
+
+button:hover:not(:disabled) {
+    background-color: #2980b9; /* Darker blue on hover */
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+button:active:not(:disabled) {
+    background-color: #2c3e50; /* Even darker on click */
+}
+button:disabled {
+    background-color: var(--medium-gray);
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+
+/* Specific Button Styles */
+button.btn-danger { background-color: var(--danger-color); }
+button.btn-danger:hover:not(:disabled) { background-color: #c82333; }
+button.btn-warning { background-color: var(--warning-color); color: var(--black-color); }
+button.btn-warning:hover:not(:disabled) { background-color: #e0a800; }
+button.btn-secondary { background-color: var(--dark-gray); }
+button.btn-secondary:hover:not(:disabled) { background-color: #5a6268; }
+
+
+input[type="text"], input[type="number"], select, textarea {
+    padding: 0.7rem;
+    border: 1px solid var(--medium-gray);
+    border-radius: 5px;
+    font-size: 0.9rem;
+}
+input:disabled, select:disabled, textarea:disabled {
+    background-color: #e9ecef; /* Standard disabled background */
+    cursor: not-allowed;
+}
+
+input[type="number"] {
+    width: 100px; /* Default width for number inputs */
+}
+
+/* --- Inventory Section --- */
+.inventory-management {
+    background-color: var(--white-color);
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+    margin-bottom: 2rem;
+}
+.inventory-management h2 {
+    margin-top: 0;
+    border-bottom: 1px solid var(--medium-gray);
+    padding-bottom: 0.5rem;
+    color: var(--primary-color);
+}
+
+.inventory-list {
+    display: grid;
+    gap: 1rem; /* Space between items */
+}
+
+.inventory-item {
+    padding: 1rem;
+    border: 1px solid var(--medium-gray);
+    border-radius: 6px;
+    display: grid; /* Use grid for more complex layout */
+    grid-template-columns: 2fr 1fr 1.5fr 1.5fr 2fr 1fr; /* Adjust column widths as needed */
+    /* Columns: Details | Count | Seq1 | Seq2 | Notes | Actions */
+    gap: 1rem; /* Spacing between grid columns */
+    align-items: start; /* Align items to the top of their cell */
+    transition: background-color 0.2s ease, opacity 0.3s ease;
+}
+
+/* Responsive Grid Layout */
+@media (max-width: 1200px) {
+    .inventory-item {
+        grid-template-columns: 2fr 1fr 2fr 2fr 1fr; /* Details | Count | Seq (Combined?) | Notes | Actions */
+        /* Combine sequences visually if needed or stack */
+    }
+     /* Example: Stacking sequence columns */
+     .item-sequences.seq-pair-1, .item-sequences.seq-pair-2 { grid-column: 3 / 4; }
+     .item-notes { grid-column: 4 / 5; }
+     .item-actions { grid-column: 5 / 6; }
+}
+@media (max-width: 992px) {
+    .inventory-item {
+        grid-template-columns: repeat(2, 1fr); /* Simpler 2-column layout */
+        gap: 1.5rem;
+    }
+    /* Assign elements to new grid structure */
+    .item-details { grid-column: 1 / 2; grid-row: 1 / 2; }
+    .item-count { grid-column: 2 / 3; grid-row: 1 / 2; text-align: right;}
+    .item-sequences.seq-pair-1 { grid-column: 1 / 3; grid-row: 2 / 3; }
+    .item-sequences.seq-pair-2 { grid-column: 1 / 3; grid-row: 3 / 4; }
+    .item-notes { grid-column: 1 / 3; grid-row: 4 / 5; }
+    .item-actions { grid-column: 1 / 3; grid-row: 5 / 6; justify-content: flex-end; }
+
+     .item-sequences { justify-content: space-around; } /* Space out inputs */
+}
+
+
+.inventory-item:hover {
+    background-color: #fdfdfd; /* Slight highlight on hover */
+}
+
+/* Status Styling */
+.inventory-item.is-inactive {
+    opacity: 0.6;
+    background-color: #f1f3f5; /* Lighter gray */
+    border-left: 5px solid var(--medium-gray);
+}
+.inventory-item.is-inactive .item-details div:not(.item-id) { /* Don't strikethrough ID */
+     text-decoration: line-through; /* Optional: strike-through text */
+}
+/* Inputs already disabled via JS/HTML, but visual style helps */
+.inventory-item.is-inactive input,
+.inventory-item.is-inactive textarea,
+.inventory-item.is-inactive select {
+    background-color: #e9ecef !important;
+}
+
+.inventory-item.is-uncounted {
+    background-color: #fff9e6; /* Light yellow background for uncounted */
+    border-left: 5px solid var(--warning-color);
+}
+
+.inventory-item.is-counted {
+     border-left: 5px solid var(--success-color);
+}
+
+
+/* Item Column Specifics */
+.item-details {
+    /* Flex/Grid item takes available space */
+}
+.item-details > div {
+    margin-bottom: 0.3rem;
+}
+.item-sku { font-weight: bold; color: var(--primary-color); }
+.item-desc { font-size: 0.95em; }
+.item-loc { font-size: 0.85em; font-style: italic; color: var(--dark-gray); }
+.item-id { font-size: 0.7em; color: grey; margin-top: 5px; }
+
+.item-count, .item-sequences, .item-actions, .item-notes {
+    display: flex;
+    flex-direction: column; /* Stack elements vertically within notes/actions if needed */
+    gap: 0.5rem; /* Spacing within groups */
+}
+.item-count, .item-sequences {
+    flex-direction: row; /* Keep count/sequence elements in a row */
+    align-items: center;
+    flex-wrap: wrap; /* Allow wrapping within sequences */
+}
+
+.item-count span:first-child { /* Style the "Qty:" label */
+    font-weight: bold;
+    margin-right: 5px;
+}
+.item-count input[type="number"] {
+    width: 80px;
+}
+.captured-qty-display {
+    font-size: 0.8em;
+    color: var(--dark-gray);
+    margin-left: 5px;
+    font-style: italic;
+}
+
+
+.item-sequences input[type="number"] {
+    width: 70px;
+}
+.item-sequences span { /* Labels like Inner:, Outer: */
+    font-size: 0.85em;
+}
+.calculated-footage-display {
+    font-weight: bold;
+    min-width: 60px; /* Ensure space for display */
+    text-align: right;
+    font-size: 0.9em;
+    padding: 0 5px;
+}
+.calculated-footage-display.total-footage {
+     color: var(--primary-color);
+     border-left: 1px solid var(--medium-gray);
+     margin-left: 10px;
+}
+
+.item-notes textarea {
+    width: 100%; /* Take full width available in its container */
+    min-height: 40px; /* Start smaller */
+    font-size: 0.85em;
+    padding: 5px;
+    border: 1px solid var(--medium-gray);
+    border-radius: 4px;
+    resize: vertical; /* Allow vertical resizing */
+}
+
+.item-actions {
+     flex-direction: row; /* Keep buttons in a row */
+     align-items: center;
+     justify-content: flex-end; /* Align buttons to the right */
+}
+.item-actions button {
+    padding: 0.4rem 0.7rem; /* Smaller buttons within items */
+    font-size: 0.75rem;
+}
+
+
+/* --- History View (Global) --- */
+#history-view {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background-color: var(--white-color);
+    border: 1px solid var(--medium-gray);
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+}
+#history-view h2 {
+    margin-top: 0;
+    border-bottom: 1px solid var(--medium-gray);
+    padding-bottom: 0.5rem;
+    color: var(--primary-color);
+}
+.history-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    align-items: center;
+}
+#historyListContainer {
+    max-height: 70vh; /* Limit height */
+    overflow-y: auto; /* Add scroll */
+}
+.history-entry {
+    border-bottom: 1px solid #eee;
+    padding: 0.8rem 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+.history-entry:last-child { border-bottom: none; }
+.history-meta { color: var(--dark-gray); font-size: 0.8em; margin-bottom: 0.3rem;}
+.history-details { margin-left: 1rem; }
+.history-details strong { color: var(--primary-color); }
+.history-details i { color: var(--dark-gray); } /* Style notes indicator */
+
+
+/* --- Modal Styles --- */
+.modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1500; /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    overflow: auto; /* Enable scroll if needed */
+    background-color: rgba(0,0,0,0.5); /* Black w/ opacity */
+    backdrop-filter: blur(3px); /* Optional: blur background */
+}
+.modal-content {
+    background-color: #fefefe;
+    margin: 8% auto; /* Adjust vertical margin */
+    padding: 25px;
+    border: 1px solid #888;
+    width: 85%;
+    max-width: 800px; /* Allow wider modal for history */
+    border-radius: 8px;
+    position: relative;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+}
+.modal-close {
+    color: #aaa;
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1;
+}
+.modal-close:hover,
+.modal-close:focus {
+    color: black;
+    text-decoration: none;
+}
+.modal h3 {
+    margin-top: 0;
+    color: var(--primary-color);
+    border-bottom: 1px solid var(--medium-gray);
+    padding-bottom: 10px;
+    margin-bottom: 15px; /* Space below title */
+}
+.modal-body {
+    max-height: 65vh; /* Limit height and allow scrolling */
+    overflow-y: auto;
+    padding-right: 10px; /* Add padding for scrollbar */
+}
+/* Use history entry styles within modal too */
+.modal-body .history-entry { font-size: 0.85em; }
+.modal-body .history-meta { font-size: 0.75em; }
+
+
+/* --- Utility --- */
+.error-message {
+    color: var(--danger-color);
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    padding: 0.8rem;
+    margin: 1rem 0;
+    border-radius: 5px;
+}
+.error-item { /* Style list items that failed to render */
+     background-color: #f8d7da !important;
+     border-color: var(--danger-color) !important;
+}
+/* --- END OF FILE visuals.css --- */
