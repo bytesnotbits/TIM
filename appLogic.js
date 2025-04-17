@@ -1818,57 +1818,117 @@ async function showImportDialog(isNewCountCycle = false) { // Added parameter wi
                         existingItem.Description = incomingDesc; // Update existing item directly
                     }
 
-                    // Prepare Item Data Object
-                    const newItemData = {};
+                    // Inside the forEach loop, after finding existingItem and setting up isSet...
+                    // --- Prepare Item Data Object (Robust Fallback Logic) ---
+                    const newItemData = {}; // Start empty
+
+                    // Helper function to safely get value: CSV -> Existing -> Default
+                    const getValue = (headerName, existingProp, defaultValue) => {
+                        const csvValue = row[headerName];
+                        // Check if CSV value exists and is not just whitespace
+                        if (isSet(csvValue) && String(csvValue).trim() !== '') {
+                            // Trim only if it's a string, otherwise return the value as is (e.g., for numbers parsed later)
+                            return typeof csvValue === 'string' ? csvValue.trim() : csvValue;
+                        }
+                        // If no valid CSV value, check existing item
+                        if (existingItem && isSet(existingItem[existingProp])) {
+                            return existingItem[existingProp]; // Use existing item's value
+                        }
+                        // Otherwise, return the default
+                        return defaultValue;
+                    };
+
+                    // Helper function for boolean values (CSV -> Existing -> Default)
+                    const getBooleanValue = (headerName, existingProp, defaultValue, trueStrings = ['true', '1', 'yes'], falseStrings = ['false', '0', 'no']) => {
+                        const csvValueRaw = row[headerName];
+                        const csvValue = isSet(csvValueRaw) ? String(csvValueRaw).toLowerCase().trim() : null;
+
+                        if (csvValue !== null) {
+                            if (trueStrings.includes(csvValue)) return true;
+                            if (falseStrings.includes(csvValue)) return false;
+                        }
+                        // If CSV value wasn't decisive, check existing item
+                        if (existingItem && typeof existingItem[existingProp] === 'boolean') {
+                            return existingItem[existingProp];
+                        }
+                        return defaultValue;
+                    };
+
+                    // Helper function for numeric values (CSV -> Existing -> Default)
+                    const getNumericValue = (headerName, existingProp, defaultValue, allowNegative = false) => {
+                        let resultValue = defaultValue; // Start with default
+
+                        const csvValueRaw = getValue(headerName, existingProp, null); // Use getValue to handle CSV/Existing priority
+
+                        if (isSet(csvValueRaw) && String(csvValueRaw).trim() !== '') {
+                             const parsedNum = Number(String(csvValueRaw).trim());
+                              if (!isNaN(parsedNum) && (allowNegative || parsedNum >= 0)) {
+                                 resultValue = parsedNum; // Use valid number from CSV or existing
+                             } else {
+                                 console.warn(`Invalid numeric value '${csvValueRaw}' for ${headerName} (SKU: ${sku}, Row: ${rowNum}). Using default: ${defaultValue}.`);
+                                 // Keep the defaultValue assigned initially
+                             }
+                        } else {
+                             // If csvValueRaw was null/empty string after checking CSV/Existing, use default
+                             resultValue = defaultValue;
+                        }
+
+
+                        // Specific validations after determining the value
+                        if (headerName === footageFactorHeader && (resultValue === null || resultValue <= 0)) {
+                            return null;
+                        }
+                        if (headerName === capturedQtyHeader && (resultValue === null || resultValue < 0)) {
+                             return null;
+                        }
+
+                        return resultValue;
+                    };
+
+                    // --- Populate newItemData using helpers ---
                     newItemData.SKU = sku;
-                    newItemData.itemId = (existingItem && isSet(existingItem.itemId)) ? existingItem.itemId : DB.generateSimpleId();
-                    newItemData.Description = incomingDesc;
-                    newItemData.location = String(row[locHeader] || (existingItem && isSet(existingItem.location) ? existingItem.location : 'No Location')).trim(); // Keep original case for display
-                    newItemData.reelNumber = reelNumber || (existingItem && isSet(existingItem.reelNumber) ? existingItem.reelNumber : ''); // Store reel number
-                    newItemData.notes = String(row[notesHeader] || (existingItem && isSet(existingItem.notes)) ? existingItem.notes : '').trim();
+                    newItemData.itemId = existingItem ? existingItem.itemId : DB.generateSimpleId();
 
-                    let defaultIsActive = (existingItem && isSet(existingItem.isActive)) ? existingItem.isActive : true;
-                    newItemData.isActive = (isActiveHeader && isSet(row[isActiveHeader]) && ['false', '0', 'no'].includes(String(row[isActiveHeader]).toLowerCase())) ? false : defaultIsActive;
+                    // Description was handled earlier due to logging, just assign
+                    newItemData.Description = incomingDesc; // Already potentially updated in existingItem
 
-                    let defaultIsReel = (existingItem && isSet(existingItem.isReel)) ? existingItem.isReel : false;
-                     // Determine isReel based on either the flag or presence of a reel number
-                    newItemData.isReel = isLikelyReel || defaultIsReel; // If CSV indicates reel OR it was previously a reel
+                    newItemData.location = getValue(locHeader, 'location', 'No Location');
+                    newItemData.reelNumber = getValue(reelNumHeader, 'reelNumber', '');
+                    newItemData.notes = getValue(notesHeader, 'notes', '');
+                    newItemData.isActive = getBooleanValue(isActiveHeader, 'isActive', true);
 
-                    newItemData.isTwoWayReel = false; // Set below
+                    // Determine isReel based on flag OR presence of reel number
+                    let isLikelyReelFromCSV = (isReelHeader && ['true', '1', 'yes'].includes(String(row[isReelHeader] || '').toLowerCase())) || (reelNumHeader && (row[reelNumHeader] || '').trim() !== '');
+                    newItemData.isReel = isLikelyReelFromCSV || (existingItem ? existingItem.isReel : false);
 
-                    let defaultFootageFactor = (existingItem && isSet(existingItem.footageFactor)) ? existingItem.footageFactor : null;
-                    newItemData.footageFactor = (footageFactorHeader && isSet(row[footageFactorHeader]) && row[footageFactorHeader] !== '') ? (Number(row[footageFactorHeader]) || null) : defaultFootageFactor;
+                    newItemData.footageFactor = getNumericValue(footageFactorHeader, 'footageFactor', null);
+                    newItemData.innerSequence = getValue(innerSeqHeader, 'innerSequence', '');
+                    newItemData.outerSequence = getValue(outerSeqHeader, 'outerSequence', '');
+                    newItemData.innerSequence2 = getValue(innerSeq2Header, 'innerSequence2', '');
+                    newItemData.outerSequence2 = getValue(outerSeq2Header, 'outerSequence2', '');
+                    newItemData.capturedQuantity = getNumericValue(capturedQtyHeader, 'capturedQuantity', null);
 
-                    // Sequences - Store them regardless of import type
-                    newItemData.innerSequence = String(row[innerSeqHeader] || (existingItem && isSet(existingItem.innerSequence)) ? existingItem.innerSequence : '').trim();
-                    newItemData.outerSequence = String(row[outerSeqHeader] || (existingItem && isSet(existingItem.outerSequence)) ? existingItem.outerSequence : '').trim();
-                    newItemData.innerSequence2 = String(row[innerSeq2Header] || (existingItem && isSet(existingItem.innerSequence2)) ? existingItem.innerSequence2 : '').trim();
-                    newItemData.outerSequence2 = String(row[outerSeq2Header] || (existingItem && isSet(existingItem.outerSequence2)) ? existingItem.outerSequence2 : '').trim();
+                    // Preserve certain existing states unless overwritten by logic below
+                    newItemData.counted = existingItem ? existingItem.counted : null;
+                    newItemData.isUncounted = existingItem ? existingItem.isUncounted : true; // Default new items to uncounted
+                    newItemData.calculatedFootage = existingItem ? existingItem.calculatedFootage : null;
+                    newItemData.lastCountTimestamp = existingItem ? existingItem.lastCountTimestamp : null;
+                    newItemData.toCount = existingItem ? existingItem.toCount : false; // Preserve flag or default to false
 
-                    let defaultCapturedQty = (existingItem && isSet(existingItem.capturedQuantity)) ? existingItem.capturedQuantity : null;
-                    newItemData.capturedQuantity = (capturedQtyHeader && isSet(row[capturedQtyHeader]) && row[capturedQtyHeader] !== '') ? (Number(row[capturedQtyHeader]) || null) : defaultCapturedQty;
+                    // Determine isTwoWayReel (depends on isReel)
+                    newItemData.isTwoWayReel = getBooleanValue(isTwoWayReelHeader, 'isTwoWayReel', false);
+                    newItemData.isTwoWayReel = newItemData.isReel && newItemData.isTwoWayReel; // Enforce dependency
 
-                    // Preserve existing count state initially, override below based on context
-                    newItemData.counted = (existingItem && isSet(existingItem.counted)) ? existingItem.counted : null;
-                    newItemData.isUncounted = (existingItem && isSet(existingItem.isUncounted)) ? existingItem.isUncounted : true; // Default to uncounted if new/no prior state
-                    newItemData.calculatedFootage = (existingItem && isSet(existingItem.calculatedFootage)) ? existingItem.calculatedFootage : null;
-                    newItemData.lastCountTimestamp = (existingItem && isSet(existingItem.lastCountTimestamp)) ? existingItem.lastCountTimestamp : null;
 
-                    // --- Validate/Clean up parsed numbers ---
-                    if (isNaN(newItemData.footageFactor) || newItemData.footageFactor <= 0) newItemData.footageFactor = null;
-                    if (isNaN(newItemData.capturedQuantity) || newItemData.capturedQuantity < 0) newItemData.capturedQuantity = null;
-
-                    // --- Apply Reel Logic ---
-                    let defaultIsTwoWayReel = (existingItem && isSet(existingItem.isTwoWayReel)) ? existingItem.isTwoWayReel : false;
-                    newItemData.isTwoWayReel = newItemData.isReel && (isTwoWayReelHeader && isSet(row[isTwoWayReelHeader]) && ['true', '1', 'yes'].includes(String(row[isTwoWayReelHeader]).toLowerCase()) ? true : defaultIsTwoWayReel);
-                    if (!newItemData.isReel) { // Ensure non-reels don't have reel flags/data
-                        newItemData.reelNumber = ''; // Clear reel number if not a reel
-                        newItemData.isTwoWayReel = false;
-                        newItemData.footageFactor = null;
-                        newItemData.innerSequence = ''; newItemData.outerSequence = '';
-                        newItemData.innerSequence2 = ''; newItemData.outerSequence2 = '';
-                        newItemData.calculatedFootage = null;
-                    }
+                    // --- Apply Reel Logic Cleanup ---
+                     if (!newItemData.isReel) { // Ensure non-reels don't have reel flags/data
+                         newItemData.reelNumber = '';
+                         newItemData.isTwoWayReel = false;
+                         newItemData.footageFactor = null;
+                         newItemData.innerSequence = ''; newItemData.outerSequence = '';
+                         newItemData.innerSequence2 = ''; newItemData.outerSequence2 = '';
+                         newItemData.calculatedFootage = null;
+                     }
 
                     // --- Determine Current Count based on CSV (Context Aware) ---
                     let countSource = "preserved";
