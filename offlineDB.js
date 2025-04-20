@@ -3,16 +3,12 @@
 
 const DB = {
     name: 'TelecomInventoryDB',
-    version: 4, // <<-- Incremented version for schema changes (toCount, reelNumber)
-    connection: null, // Hold the database connection
+    version: 7, // <<-- Incremented version for recountBatches store
+    connection: null,
 
-    // Initialize the database connection
     init: () => {
         return new Promise((resolve, reject) => {
-            if (DB.connection) {
-                console.log("Database connection already established.");
-                return resolve(DB.connection);
-            }
+            if (DB.connection) return resolve(DB.connection);
             console.log(`Opening database ${DB.name} version ${DB.version}`);
             const request = indexedDB.open(DB.name, DB.version);
 
@@ -23,371 +19,318 @@ const DB = {
 
                 // --- Inventory Store ---
                 let invStore;
+                if (event.oldVersion < 5 && db.objectStoreNames.contains('inventory')) {
+                    console.log("Recreating 'inventory' store for keyPath change...");
+                    db.deleteObjectStore('inventory');
+                }
                 if (!db.objectStoreNames.contains('inventory')) {
                     console.log("Creating 'inventory' object store...");
-                    invStore = db.createObjectStore('inventory', { keyPath: 'SKU' });
+                    invStore = db.createObjectStore('inventory', { keyPath: 'itemId' });
+                    // Create indexes immediately
+                    invStore.createIndex('SKU_idx', 'SKU', { unique: false });
+                    invStore.createIndex('location_idx', 'location', { unique: false });
+                    invStore.createIndex('isActive_idx', 'isActive', { unique: false });
+                    invStore.createIndex('toCount_idx', 'toCount', { unique: false });
+                    invStore.createIndex('recountBatchId_idx', 'currentRecountBatchId', { unique: false });
+                    invStore.createIndex('reelNumber_idx', 'reelNumber', { unique: false });
+                    console.log("Created indexes on new 'inventory' store.");
                 } else {
                     invStore = transaction.objectStore('inventory');
+                    // Verify/Add indexes if upgrading from v5 or v6
+                    if (!invStore.indexNames.contains('SKU_idx')) invStore.createIndex('SKU_idx', 'SKU', { unique: false });
+                    if (!invStore.indexNames.contains('location_idx')) invStore.createIndex('location_idx', 'location', { unique: false });
+                    if (!invStore.indexNames.contains('isActive_idx')) invStore.createIndex('isActive_idx', 'isActive', { unique: false });
+                    if (!invStore.indexNames.contains('toCount_idx')) invStore.createIndex('toCount_idx', 'toCount', { unique: false });
+                    if (!invStore.indexNames.contains('recountBatchId_idx')) invStore.createIndex('recountBatchId_idx', 'currentRecountBatchId', { unique: false });
+                    if (!invStore.indexNames.contains('reelNumber_idx')) invStore.createIndex('reelNumber_idx', 'reelNumber', { unique: false });
+                    console.log("Verified/Created indexes on 'inventory' store.");
                 }
 
                 // --- Transaction History Store ---
                 let historyStore;
                 if (!db.objectStoreNames.contains('transactionHistory')) {
-                    console.log("Creating 'transactionHistory' object store...");
+                     console.log("Creating 'transactionHistory' object store...");
                     historyStore = db.createObjectStore('transactionHistory', { keyPath: 'id', autoIncrement: true });
-                } else {
-                    // If history store exists, ensure transaction is available for potential index adds later
-                    historyStore = transaction.objectStore('transactionHistory');
-                }
-
-
-                // --- Index Creation/Verification (Idempotent) ---
-
-                // Inventory Indexes
-                if (!invStore.indexNames.contains('isActive_idx')) {
-                    invStore.createIndex('isActive_idx', 'isActive', { unique: false });
-                    console.log("Created 'isActive_idx' index on inventory.");
-                }
-                 if (!invStore.indexNames.contains('toCount_idx')) {
-                    invStore.createIndex('toCount_idx', 'toCount', { unique: false });
-                    console.log("Created 'toCount_idx' index on inventory.");
-                }
-                 // Add other inventory indexes here if needed in the future
-
-                // Transaction History Indexes
-                if (!historyStore.indexNames.contains('sku_idx')) {
                     historyStore.createIndex('sku_idx', 'SKU', { unique: false });
-                     console.log("Created 'sku_idx' index on transactionHistory.");
-                }
-                if (!historyStore.indexNames.contains('timestamp_idx')) {
                     historyStore.createIndex('timestamp_idx', 'timestamp', { unique: false });
-                     console.log("Created 'timestamp_idx' index on transactionHistory.");
+                    historyStore.createIndex('itemId_idx', 'itemId', { unique: false });
+                    historyStore.createIndex('location_idx', 'location', { unique: false });
+                     console.log("Created indexes on new 'transactionHistory' store.");
+                } else {
+                    historyStore = transaction.objectStore('transactionHistory');
+                    if (!historyStore.indexNames.contains('sku_idx')) historyStore.createIndex('sku_idx', 'SKU', { unique: false });
+                    if (!historyStore.indexNames.contains('timestamp_idx')) historyStore.createIndex('timestamp_idx', 'timestamp', { unique: false });
+                    if (!historyStore.indexNames.contains('itemId_idx')) historyStore.createIndex('itemId_idx', 'itemId', { unique: false });
+                    if (!historyStore.indexNames.contains('location_idx')) historyStore.createIndex('location_idx', 'location', { unique: false });
+                    console.log("Verified/Created indexes on 'transactionHistory' store.");
                 }
 
-                 console.log("Database upgrade/schema check complete.");
-            };
+                // --- Recount Adjustments Store ---
+                let adjustmentStore;
+                 if (!db.objectStoreNames.contains('recountAdjustments')) {
+                    console.log("Creating 'recountAdjustments' object store...");
+                    adjustmentStore = db.createObjectStore('recountAdjustments', { keyPath: 'adjustmentId', autoIncrement: true });
+                    adjustmentStore.createIndex('itemId_idx', 'itemId', { unique: false });
+                    adjustmentStore.createIndex('recordedDuringRecountBatchId_idx', 'recordedDuringRecountBatchId', { unique: false });
+                    adjustmentStore.createIndex('adjustmentTransactionId_idx', 'adjustmentTransactionId', { unique: false });
+                     console.log("Created indexes on new 'recountAdjustments' store.");
+                } else {
+                     adjustmentStore = transaction.objectStore('recountAdjustments');
+                    if (!adjustmentStore.indexNames.contains('itemId_idx')) adjustmentStore.createIndex('itemId_idx', 'itemId', { unique: false });
+                    if (!adjustmentStore.indexNames.contains('recordedDuringRecountBatchId_idx')) adjustmentStore.createIndex('recordedDuringRecountBatchId_idx', 'recordedDuringRecountBatchId', { unique: false });
+                    if (!adjustmentStore.indexNames.contains('adjustmentTransactionId_idx')) adjustmentStore.createIndex('adjustmentTransactionId_idx', 'adjustmentTransactionId', { unique: false });
+                    console.log("Verified/Created indexes on 'recountAdjustments' store.");
+                }
 
-            request.onsuccess = (event) => {
-                DB.connection = event.target.result;
-                console.log("Database connection successful.");
+                // --- ** NEW: Recount Batches Store ** ---
+                let batchStore;
+                if (!db.objectStoreNames.contains('recountBatches')) {
+                    console.log("Creating 'recountBatches' object store...");
+                    // Use recountBatchId itself as the key, it should be unique
+                    batchStore = db.createObjectStore('recountBatches', { keyPath: 'recountBatchId' });
+                    // Add indexes
+                    batchStore.createIndex('status_idx', 'status', { unique: false }); // To find 'open' batches
+                    batchStore.createIndex('createdAt_idx', 'createdAt', { unique: false }); // For sorting
+                    console.log("Created indexes on new 'recountBatches' store.");
+                } else {
+                    batchStore = transaction.objectStore('recountBatches');
+                    if (!batchStore.indexNames.contains('status_idx')) batchStore.createIndex('status_idx', 'status', { unique: false });
+                    if (!batchStore.indexNames.contains('createdAt_idx')) batchStore.createIndex('createdAt_idx', 'createdAt', { unique: false });
+                    console.log("Verified/Created indexes on 'recountBatches' store.");
+                }
 
-                // Add error handling for the connection itself
-                DB.connection.onerror = (event) => {
-                    console.error("Database error:", event.target.errorCode);
-                };
 
-                resolve(DB.connection);
-            };
+                console.log("Database upgrade/schema check complete for version 7.");
+            }; // end onupgradeneeded
 
-            request.onerror = (event) => {
-                console.error("Database initialization error:", request.error);
-                reject(request.error);
-            };
-
-            request.onblocked = () => {
-                console.warn("Database connection blocked. Please close other tabs using this app.");
-                // Optionally alert the user
-                alert("Database update blocked. Please close other tabs/windows running this application and refresh.");
-                 reject(new Error("Database connection blocked"));
-            };
+            request.onsuccess = (event) => { DB.connection = event.target.result; DB.connection.onerror = (e) => { console.error("DB Error:", e.target.errorCode);}; console.log("DB connection successful."); resolve(DB.connection); };
+            request.onerror = (event) => { console.error("DB Init Error:", request.error); reject(request.error); };
+            request.onblocked = () => { console.warn("DB connection blocked."); alert("DB update blocked. Close other tabs & refresh."); reject(new Error("DB connection blocked")); };
         });
+    }, // end init
+
+    // --- Inventory Functions (Unchanged from v5/v6) ---
+    loadInventory: () => DB._readAll('inventory', 'inventory items'),
+    saveInventory: (data) => DB._clearAndWrite('inventory', data, ['itemId', 'SKU', 'location']),
+
+    // --- Transaction History Functions (Unchanged from v5/v6) ---
+    loadTransactionHistory: () => DB._readAll('transactionHistory', 'history records', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+    saveTransactionHistory: (data) => DB._clearAndWrite('transactionHistory', data, ['timestamp', 'type'], true), // Use add=true
+    addTransaction: (data) => DB._addOne('transactionHistory', data, ['timestamp', 'type']),
+
+    // --- Recount Adjustment Functions (Unchanged from v6) ---
+    addRecountAdjustment: (data) => DB._addOne('recountAdjustments', data, ['itemId', 'recordedDuringRecountBatchId', 'adjustmentTransactionId', 'adjustmentQuantity', 'timestamp', 'user']),
+    getRecountAdjustmentsByItemId: (itemId) => DB._getAllByIndex('recountAdjustments', 'itemId_idx', itemId, 'adjustments', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+
+    // --- ** NEW: Recount Batch Functions ** ---
+    createRecountBatch: (batchData) => {
+        // batchData = { recountBatchId: '...', cutOffDate: '...', status: 'open', createdAt: '...' }
+        return DB._addOne('recountBatches', batchData, ['recountBatchId', 'cutOffDate', 'status', 'createdAt']);
     },
 
-    // *** ADD THIS FUNCTION ***
-    loadInventory: () => {
+    getRecountBatchDetails: (recountBatchId) => {
         return new Promise((resolve, reject) => {
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available. Call DB.init() first."));
-            }
+            if (!DB.connection) return reject(new Error("DB not init"));
             try {
-                const transaction = DB.connection.transaction(['inventory'], 'readonly');
-                const store = transaction.objectStore('inventory');
-                const request = store.getAll(); // Get all items
+                const transaction = DB.connection.transaction(['recountBatches'], 'readonly');
+                const store = transaction.objectStore('recountBatches');
+                const request = store.get(recountBatchId); // Get by key
 
                 request.onsuccess = () => {
-                    console.log(`Loaded ${request.result ? request.result.length : 0} items from inventory store.`);
-                    resolve(request.result || []); // Resolve with the array of items or empty array
+                    resolve(request.result); // Returns the batch object or undefined
                 };
-
-                request.onerror = (event) => {
-                    console.error("Error loading inventory from store:", event.target.error);
-                    reject(new Error(`Failed to load inventory: ${event.target.error}`));
-                };
-
-                transaction.onerror = (event) => {
-                    console.error("Transaction error loading inventory:", event.target.error);
-                    reject(new Error(`Transaction failed while loading inventory: ${event.target.error}`));
-                };
-                transaction.oncomplete = () => { // Good practice to log completion
-                    console.log("Read transaction for loading inventory completed.");
-                };
-            } catch (error) {
-                 console.error("Error initiating transaction to load inventory:", error);
-                 reject(new Error(`Failed to start transaction for loading inventory: ${error.message}`));
-            }
-        });
-    },
-    // *** END OF ADDED FUNCTION ***
-
-    saveInventory: (inventoryData) => {
-        // ...(rest of saveInventory function)...
-        return new Promise(async (resolve, reject) => { // Make sure it returns a promise
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available. Call DB.init() first."));
-            }
-            if (!Array.isArray(inventoryData)) {
-                 console.error("saveInventory received non-array data:", inventoryData);
-                 return reject(new Error("Invalid data format: Expected an array for inventory."));
-            }
-
-            try {
-                const transaction = DB.connection.transaction(['inventory'], 'readwrite');
-                const store = transaction.objectStore('inventory');
-                let successCount = 0;
-                let errorCount = 0;
-
-                // Clear the store first (be careful with large datasets, but simplest for sync)
-                const clearRequest = store.clear();
-                clearRequest.onsuccess = () => {
-                     console.log("Inventory store cleared. Starting save...");
-
-                     // Use Promise.allSettled to handle individual item save errors gracefully
-                     const savePromises = inventoryData.map(item => {
-                         return new Promise((resolveItem, rejectItem) => {
-                            if (!item || typeof item.SKU !== 'string' || item.SKU.trim() === '') {
-                                console.warn("Skipping invalid item during save:", item);
-                                return rejectItem(new Error("Invalid item data (missing/invalid SKU)")); // Reject promise for this item
-                            }
-                            try {
-                                const request = store.put(item); // Use put for add/update
-                                request.onsuccess = () => {
-                                    successCount++;
-                                    resolveItem(); // Resolve promise for this item
-                                };
-                                request.onerror = (event) => {
-                                    console.error(`Error saving item ${item.SKU}:`, event.target.error);
-                                    errorCount++;
-                                    rejectItem(event.target.error); // Reject promise for this item
-                                };
-                            } catch (putError) {
-                                 console.error(`Synchronous error putting item ${item.SKU}:`, putError);
-                                 errorCount++;
-                                 rejectItem(putError); // Reject promise for this item
-                            }
-                         });
-                     });
-
-                    Promise.allSettled(savePromises).then(results => {
-                         // Log results of individual saves if needed
-                         results.forEach((result, index) => {
-                            if (result.status === 'rejected') {
-                                console.warn(`Failed to save item at index ${index}:`, result.reason);
-                            }
-                         });
-                         console.log(`Inventory save attempt finished. Success: ${successCount}, Failed: ${errorCount}`);
-                         // Even if some fail, the transaction might still commit what succeeded before the error
-                    });
-                };
-                 clearRequest.onerror = (event) => {
-                    console.error("Error clearing inventory store:", event.target.error);
-                    reject(new Error(`Failed to clear inventory store: ${event.target.error}`));
-                 };
-
-
-                transaction.oncomplete = () => {
-                    console.log(`Inventory save transaction completed. ${successCount} items processed (check logs for errors).`);
-                    resolve({ successCount, errorCount });
-                };
-
-                transaction.onerror = (event) => {
-                    console.error("Transaction error saving inventory:", event.target.error);
-                    reject(new Error(`Transaction failed while saving inventory: ${event.target.error}`));
-                };
-            } catch (error) {
-                console.error("Error initiating transaction to save inventory:", error);
-                reject(new Error(`Failed to start transaction for saving inventory: ${error.message}`));
-            }
+                request.onerror = (event) => { reject(new Error(`Failed to get batch ${recountBatchId}: ${event.target.error}`)); };
+                transaction.onerror = (event) => { reject(new Error(`Tx error getting batch: ${event.target.error}`)); };
+            } catch (error) { reject(error); }
         });
     },
 
-     loadTransactionHistory: () => {
-        // ...(rest of loadTransactionHistory function)...
+    getActiveRecountBatches: () => {
+        // Returns array of open batch objects, sorted by creation date descending
+        return DB._getAllByIndex('recountBatches', 'status_idx', 'open', 'active batches', (a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    },
+
+    closeRecountBatch: (recountBatchId) => {
         return new Promise((resolve, reject) => {
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available. Call DB.init() first."));
-            }
+            if (!DB.connection) return reject(new Error("DB not init"));
             try {
-                const transaction = DB.connection.transaction(['transactionHistory'], 'readonly');
-                const store = transaction.objectStore('transactionHistory');
+                const transaction = DB.connection.transaction(['recountBatches'], 'readwrite');
+                const store = transaction.objectStore('recountBatches');
+                const request = store.get(recountBatchId);
+
+                request.onsuccess = () => {
+                    const batch = request.result;
+                    if (batch) {
+                        if (batch.status === 'closed') {
+                            console.warn(`Recount batch ${recountBatchId} is already closed.`);
+                            resolve(batch); // Already closed, resolve successfully
+                            return;
+                        }
+                        batch.status = 'closed';
+                        const updateRequest = store.put(batch);
+                        updateRequest.onsuccess = () => { console.log(`Recount batch ${recountBatchId} marked as closed.`); resolve(batch); };
+                        updateRequest.onerror = (event) => { reject(new Error(`Failed to update batch status: ${event.target.error}`)); };
+                    } else {
+                        reject(new Error(`Recount batch ${recountBatchId} not found.`));
+                    }
+                };
+                request.onerror = (event) => { reject(new Error(`Failed to get batch for closing: ${event.target.error}`)); };
+                transaction.oncomplete = () => { /* console.log('Close batch tx complete'); */ };
+                transaction.onerror = (event) => { reject(new Error(`Tx error closing batch: ${event.target.error}`)); };
+            } catch (error) { reject(error); }
+        });
+    },
+
+    // --- History Query Functions (Unchanged from v5/v6) ---
+    getTransactionHistoryBySKU: (sku) => DB._getAllByIndex('transactionHistory', 'sku_idx', sku, 'SKU history', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+    getTransactionHistoryByItemId: (itemId) => DB._getAllByIndex('transactionHistory', 'itemId_idx', itemId, 'itemId history', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
+
+
+    // --- Internal Helper Functions ---
+    _readAll: (storeName, logName = 'items', sortFn = null) => {
+        return new Promise((resolve, reject) => {
+            if (!DB.connection) return reject(new Error("DB not init"));
+            try {
+                const transaction = DB.connection.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
                 const request = store.getAll();
-
                 request.onsuccess = () => {
-                    console.log(`Loaded ${request.result ? request.result.length : 0} history records.`);
-                    // Optional: Sort here if needed, e.g., descending by timestamp
-                    // const sortedHistory = (request.result || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    // resolve(sortedHistory);
-                    resolve(request.result || []);
+                    let result = request.result || [];
+                    if (sortFn && typeof sortFn === 'function') {
+                        result = result.sort(sortFn);
+                    }
+                    console.log(`Loaded ${result.length} ${logName}.`);
+                    resolve(result);
                 };
-                 request.onerror = (event) => {
-                    console.error("Error loading transaction history:", event.target.error);
-                    reject(new Error(`Failed to load transaction history: ${event.target.error}`));
-                };
-                 transaction.onerror = (event) => {
-                    console.error("Transaction error loading history:", event.target.error);
-                    reject(new Error(`Transaction failed while loading history: ${event.target.error}`));
-                 };
-            } catch (error) {
-                 console.error("Error initiating transaction to load history:", error);
-                 reject(new Error(`Failed to start transaction for loading history: ${error.message}`));
-            }
+                request.onerror = (event) => { console.error(`Error loading ${logName}:`, event.target.error); reject(event.target.error); };
+                transaction.onerror = (event) => { console.error(`Read tx error loading ${logName}:`, event.target.error); reject(event.target.error); };
+            } catch (error) { console.error(`Error init tx load ${logName}:`, error); reject(error); }
         });
     },
 
-    saveTransactionHistory: (historyData) => {
-        // ...(rest of saveTransactionHistory function)...
-        return new Promise(async (resolve, reject) => { // Make async if using await inside
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available. Call DB.init() first."));
-            }
-            if (!Array.isArray(historyData)) {
-                console.error("saveTransactionHistory received non-array data:", historyData);
-                return reject(new Error("Invalid data format: Expected an array for history."));
-            }
+    _clearAndWrite: (storeName, data, requiredFields = [], useAdd = false) => {
+        return new Promise(async (resolve, reject) => {
+            if (!DB.connection) return reject(new Error("DB not init"));
+            if (!Array.isArray(data)) return reject(new Error("Invalid data: Expected array"));
             try {
-                const transaction = DB.connection.transaction(['transactionHistory'], 'readwrite');
-                const store = transaction.objectStore('transactionHistory');
-                let successCount = 0;
-                let errorCount = 0;
-
-                // Clear the store first
+                const transaction = DB.connection.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                let successCount = 0, errorCount = 0, skippedCount = 0;
                 const clearRequest = store.clear();
+
+                clearRequest.onerror = (event) => { console.error(`Error clearing ${storeName} store:`, event.target.error); /* Tx will abort */ };
                 clearRequest.onsuccess = () => {
-                    console.log("Transaction history store cleared. Starting save...");
-                    // Use Promise.allSettled for robustness
-                    const savePromises = historyData.map(entry => {
-                        return new Promise((resolveItem, rejectItem) => {
-                            // Add minimal validation for history entries if needed
-                            if (!entry || typeof entry.timestamp !== 'string') {
-                                console.warn("Skipping invalid history entry:", entry);
-                                return rejectItem(new Error("Invalid history entry format"));
+                    console.log(`${storeName} store cleared. Starting write...`);
+                    const writePromises = data.map(item => {
+                        return new Promise((resolveItem) => {
+                            const missingField = requiredFields.find(field => item[field] === undefined || item[field] === null || String(item[field]).trim() === '');
+                            if (missingField) {
+                                console.warn(`Skipping invalid item in ${storeName} (missing ${missingField}):`, item);
+                                skippedCount++; resolveItem({ status: 'skipped' }); return;
                             }
                             try {
-                                // Since history has autoIncrement key, use add()
-                                const request = store.add(entry);
-                                request.onsuccess = () => {
-                                    successCount++;
-                                    resolveItem();
-                                };
-                                request.onerror = (event) => {
-                                    console.error("Error saving history entry:", event.target.error, entry);
-                                    errorCount++;
-                                    rejectItem(event.target.error);
-                                };
-                             } catch (addError) {
-                                console.error("Synchronous error adding history entry:", addError, entry);
-                                errorCount++;
-                                rejectItem(addError);
-                            }
+                                const request = useAdd ? store.add(item) : store.put(item);
+                                request.onsuccess = () => { successCount++; resolveItem({ status: 'success' }); };
+                                request.onerror = (event) => { console.error(`Error writing item to ${storeName}:`, event.target.error, item); errorCount++; resolveItem({ status: 'error' }); };
+                            } catch (writeError) { console.error(`Sync error writing item to ${storeName}:`, writeError, item); errorCount++; resolveItem({ status: 'error' }); }
                         });
                     });
-
-                     Promise.allSettled(savePromises).then(results => {
-                        // Log results if needed
-                        console.log(`History save attempt finished. Success: ${successCount}, Failed: ${errorCount}`);
-                    });
+                    Promise.allSettled(writePromises).then(() => { console.log(`${storeName} write attempt processed.`); });
                 };
-                clearRequest.onerror = (event) => {
-                     console.error("Error clearing transaction history store:", event.target.error);
-                     reject(new Error(`Failed to clear transaction history store: ${event.target.error}`));
-                };
-
-                transaction.oncomplete = () => {
-                    console.log(`Transaction history save transaction completed. ${successCount} entries processed.`);
-                    resolve({ successCount, errorCount });
-                };
-                transaction.onerror = (event) => {
-                    console.error("Transaction error saving history:", event.target.error);
-                    reject(new Error(`Transaction failed while saving history: ${event.target.error}`));
-                };
-            } catch (error) {
-                console.error("Error initiating transaction to save history:", error);
-                reject(new Error(`Failed to start transaction for saving history: ${error.message}`));
-            }
+                transaction.oncomplete = () => { console.log(`${storeName} write tx completed. S:${successCount},F:${errorCount},K:${skippedCount}`); (errorCount === 0) ? resolve({ successCount, errorCount, skippedCount }) : reject(new Error(`${storeName} write tx completed with ${errorCount} errors.`)); };
+                transaction.onerror = (event) => { console.error(`Tx error writing ${storeName}:`, event.target.error); reject(new Error(`Tx failed writing ${storeName}: ${event.target.error}`)); };
+            } catch (error) { console.error(`Error init tx write ${storeName}:`, error); reject(error); }
         });
     },
 
-    addTransaction: (transactionData) => {
+     _addOne: (storeName, data, requiredFields = []) => {
         return new Promise((resolve, reject) => {
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available."));
+            if (!DB.connection) return reject(new Error("DB not init"));
+            const missingField = requiredFields.find(field => data[field] === undefined || data[field] === null || (typeof data[field] === 'string' && data[field].trim() === ''));
+            if (missingField) {
+                 console.error(`Invalid data for ${storeName} (missing ${missingField}):`, data);
+                 return reject(new Error(`Invalid data format for ${storeName}`));
             }
             try {
-                const transaction = DB.connection.transaction(['transactionHistory'], 'readwrite');
-                const store = transaction.objectStore('transactionHistory');
-                const request = store.add(transactionData); // Use add for auto-increment key
-
-                request.onsuccess = (event) => {
-                    console.log("Transaction added successfully with key:", event.target.result);
-                    resolve(event.target.result); // Resolve with the new key
-                };
-
-                request.onerror = (event) => {
-                    console.error("Error adding transaction:", event.target.error);
-                    reject(new Error(`Failed to add transaction: ${event.target.error}`));
-                };
-
-                transaction.onerror = (event) => {
-                    console.error("Transaction error adding transaction:", event.target.error);
-                     // Don't reject here if request.onerror already did
-                };
-            } catch (error) {
-                 console.error("Error initiating transaction to add transaction:", error);
-                 reject(new Error(`Failed to start transaction for adding transaction: ${error.message}`));
-            }
+                const transaction = DB.connection.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                const request = store.add(data);
+                request.onsuccess = (event) => { resolve(event.target.result); }; // Result is the new key
+                request.onerror = (event) => { console.error(`Error adding to ${storeName}:`, event.target.error, data); reject(event.target.error); };
+                transaction.onerror = (event) => { console.error(`Tx error adding to ${storeName}:`, event.target.error); /* Request should catch */ };
+            } catch (error) { console.error(`Error init tx add to ${storeName}:`, error); reject(error); }
         });
     },
 
-    getTransactionHistoryBySKU: (sku) => {
-        return new Promise((resolve, reject) => {
-            if (!DB.connection) {
-                return reject(new Error("Database connection is not available."));
-            }
-             if (!sku) {
-                 return reject(new Error("SKU is required to fetch item history."));
-             }
+    _getAllByIndex: (storeName, indexName, key, logName = 'items', sortFn = null) => {
+         return new Promise((resolve, reject) => {
+            if (!DB.connection) return reject(new Error("DB not init"));
+            if (key === undefined || key === null) return reject(new Error("Index key required"));
             try {
-                const transaction = DB.connection.transaction(['transactionHistory'], 'readonly');
-                const store = transaction.objectStore('transactionHistory');
-                const index = store.index('sku_idx'); // Use the SKU index
-                const request = index.getAll(sku); // Get all records matching the SKU
+                const transaction = DB.connection.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                if (!store.indexNames.contains(indexName)) return reject(new Error(`Index '${indexName}' not found on ${storeName}.`));
+                const index = store.index(indexName);
+                const request = index.getAll(IDBKeyRange.only(key)); // Use key range for exact match
 
                 request.onsuccess = () => {
-                    console.log(`Found ${request.result ? request.result.length : 0} history records for SKU ${sku}.`);
-                    // Sort descending by timestamp
-                    const sortedHistory = (request.result || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-                    resolve(sortedHistory);
+                    let result = request.result || [];
+                     if (sortFn && typeof sortFn === 'function') {
+                        result = result.sort(sortFn);
+                    }
+                    console.log(`Found ${result.length} ${logName} for index ${indexName}=${key}.`);
+                    resolve(result);
                 };
-
-                request.onerror = (event) => {
-                    console.error(`Error fetching history for SKU ${sku}:`, event.target.error);
-                    reject(new Error(`Failed to fetch history for SKU ${sku}: ${event.target.error}`));
-                };
-                 transaction.onerror = (event) => {
-                     console.error("Transaction error fetching item history:", event.target.error);
-                      // Don't reject here if request.onerror already did
-                 };
-
-            } catch (error) {
-                console.error(`Error initiating transaction to fetch history for SKU ${sku}:`, error);
-                reject(new Error(`Failed to start transaction for fetching item history: ${error.message}`));
-            }
+                request.onerror = (event) => { console.error(`Error fetching ${logName} by ${indexName}:`, event.target.error); reject(event.target.error); };
+                transaction.onerror = (event) => { console.error(`Read tx error fetching ${logName} by index:`, event.target.error); reject(event.target.error); };
+            } catch (error) { console.error(`Error init tx fetch ${logName} by index:`, error); reject(error); }
         });
     },
 
+    // --- Utility ---
     generateSimpleId: () => {
-        // Basic pseudo-random ID generator
-        return Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
-    }
+        const randomPart = Math.random().toString(36).substring(2, 11);
+        const timePart = Date.now().toString(36);
+        return `${timePart}-${randomPart}`;
+    },
 
+    addTransaction: (data) => {
+        console.log(`[DB.addTransaction] Attempting to add history record:`, data); // <-- ADD THIS LOG
+        // Ensure required fields (SKU, itemId, etc.) are present in 'data' here
+        if (!data.SKU || !data.itemId) {
+             console.error("[DB.addTransaction] History record is missing SKU or itemId!", data);
+             // Optionally reject the promise here if these are critical
+        }
+        return DB._addOne('transactionHistory', data, ['timestamp', 'type', 'itemId', 'SKU']); // Ensure SKU and itemId are required here
+    },
+    
+    _addOne: (storeName, data, requiredFields = []) => {
+        return new Promise((resolve, reject) => {
+            // ... (initial checks) ...
+            try {
+                const transaction = DB.connection.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                console.log(`[DB._addOne: ${storeName}] Adding item:`, data); // <-- ADD LOG
+                const request = store.add(data);
+    
+                request.onsuccess = (event) => {
+                    console.log(`[DB._addOne: ${storeName}] Add successful. New key:`, event.target.result); // <-- ADD LOG
+                    resolve(event.target.result); // Result is the new key
+                };
+                request.onerror = (event) => {
+                    console.error(`[DB._addOne: ${storeName}] Error adding item:`, event.target.error, 'Data:', data); // <-- Enhanced LOG
+                    reject(event.target.error);
+                };
+                transaction.onerror = (event) => {
+                     console.error(`[DB._addOne: ${storeName}] Transaction error adding item:`, event.target.error); // <-- ADD LOG
+                     /* Request should catch */
+                };
+            } catch (error) {
+                console.error(`[DB._addOne: ${storeName}] Sync error initiating transaction/add:`, error); // <-- ADD LOG
+                reject(error);
+            }
+        });
+    },
 };
+
 // --- END OF FILE offlineDB.js ---

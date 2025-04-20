@@ -1,0 +1,245 @@
+This document provides a comprehensive, detailed breakdown of the current assessment and the agreed-upon plan for refining the Telecom Inventory Helper application. It incorporates all the feedback and clarifications from our discussion, aiming to be a self-contained reference for future development sessions.
+
+**Comprehensive Assessment and Implementation Plan (Version 3.0)**
+
+**I. Application Overview**
+
+The Telecom Inventory Helper is a single-page web application designed for managing and counting telecommunications inventory items. It utilizes HTML, CSS, and JavaScript, employing PapaParse for CSV handling, jsPDF for PDF exports, and IndexedDB (`offlineDB.js`) for offline data persistence. The core logic resides in `appLogic.js`. The application currently supports inventory display, filtering (location, status, and an implicit 'to count' flag), CSV import/export, PDF export, item counting (manual quantity and calculated reel footage), item flagging, transaction history logging (global and per-item), and a count cycle management process involving CSV import and finalization.
+
+**II. Agreed Requirements and Implementation Plan**
+
+The following sections detail the required changes, agreed solutions, and implementation steps, incorporating feedback from previous discussions and analysis of provided sample data (`Book1.csv`).
+
+---
+
+**1. Manual Item Addition**
+
+*   **Current Status/Problem:** The application currently lacks a user interface mechanism to manually add a new, previously unlisted inventory item directly within the application. Items can only be introduced via CSV import. This functionality was reportedly present previously but was accidentally removed.
+*   **Requirement:** Users must be able to add a new inventory item (including its details like SKU, Description, Location, Type, Reel Number, Sequences, Factor, etc.) directly through the UI, especially when encountering an item during a count that wasn't in the initial import list. The newly added item should be immediately included in the current count cycle (marked `toCount = true`). (CLARIFICATION: This new item should already exist in the historical database. If it doesn't, do not allow the user to create the new item.)
+*   **Agreed Solution (Detailed):**
+    *   **UI:**
+        *   Add an "Add New Item" button, logically placed (e.g., within the "Quick Actions" section or near the filter controls).
+        *   Clicking this button will open a modal dialog (`#addNewItemModal`).
+        *   The modal will initially display fields for:
+            *   `SKU` (text input, mandatory)
+            *   `Location` (text input, mandatory)
+            *   `Description` (text input, optional initially but recommended)
+        *   A distinct, initially hidden section or button within the modal labeled "Create New SKU Details" will be present.
+    *   **Logic (SKU Check & Flow):**
+        *   Upon the user entering text in the `SKU` field and moving focus (on blur), or potentially debounced key input:
+            *   The application will query the `database.inventory` using the (to-be-implemented) non-unique `SKU` index (e.g., `DB.findItemsBySku(enteredSku)`).
+            *   **Scenario 1: SKU Exists:**
+                *   A message appears in the modal: "SKU '[enteredSku]' already exists in the database. Do you want to add this item to Location '[enteredLocation]'?"
+                *   The modal will display read-only details of the *first* found existing item with that SKU (e.g., Description, Type) for user confirmation.
+                *   If the existing item is a Reel, the `Reel Number` field becomes visible and **mandatory** in the modal. The app must check if the specific `SKU` + `Reel Number` combination already exists at the target `Location`. If so, prevent adding a duplicate (or offer to update - TBD, initial focus on add).
+                *   The "Create New SKU Details" button remains hidden/disabled.
+                *   An "Add Item to Location" button is enabled.
+            *   **Scenario 2: SKU Does NOT Exist:**
+                *   A message appears: "SKU '[enteredSku]' not found."
+                *   The "Create New SKU Details" button becomes visible and enabled.
+                *   The "Add Item to Location" button is disabled until the new SKU details are provided *or* the user corrects the SKU to an existing one.
+        *   **Creating New SKU Details:**
+            *   Clicking "Create New SKU Details" expands the modal (or reveals a hidden section) with additional mandatory/optional fields:
+                *   `Description` (if not already entered)
+                *   `Item Type` (Dropdown/Radio: "Standard", "Reel", "Two-Way Reel" - mandatory)
+                *   `Reel Number` (Visible and mandatory if Type is Reel or Two-Way Reel)
+                *   `Footage Factor` (Number input, visible if Type is Reel or Two-Way Reel)
+                *   Other relevant fields (e.g., `capturedQuantity`, `notes`) can be included optionally.
+            *   Upon filling these, the main "Add Item" button is enabled.
+    *   **Logic (Saving):**
+        *   Clicking the final "Add Item" button (either after confirming an existing SKU for a new location/reel# or after defining a new SKU) triggers `addNewInventoryItem(itemData)`:
+            *   Collects all data from the modal fields.
+            *   Performs validation (e.g., required fields filled, numeric types valid, unique SKU+Reel# combination if applicable).
+            *   Generates a unique `itemId` using `DB.generateSimpleId()`.
+            *   Creates the new item object, applying defaults using `applyDataDefaults([newItemData])[0]`.
+            *   Crucially sets `toCount = true` for the new item.
+            *   Sets `isUncounted = true`, `counted = null`.
+            *   Adds the `newItem` object to the `database.inventory` array.
+            *   Logs a transaction: `{ type: 'create_item', SKU: newItem.SKU, itemId: newItem.itemId, details: { ...item details... } }`.
+            *   Calls `autoSave()` to persist changes to IndexedDB.
+            *   Calls `applyCurrentFilters()` to refresh the displayed inventory list (the new item should appear).
+            *   Calls `updateSummaryCards()`.
+            *   Closes the modal and provides user feedback (e.g., alert or temporary message).
+*   **Implementation Steps (Detailed):**
+    1.  **HTML (`index.html`):** Add the "Add New Item" button. Define the modal structure (`#addNewItemModal`) with all necessary input fields, labels, messages, and the initially hidden "Create New SKU Details" section/button. Use appropriate IDs for elements.
+    2.  **CSS (`visuals.css`):** Style the modal, input fields, buttons, and potentially add classes for showing/hiding the new SKU details section.
+    3.  **JS (`appLogic.js`):**
+        *   Add event listener for the "Add New Item" button to open the modal.
+        *   Add event listeners within the modal (SKU input blur/change, "Create New SKU" button click, Type selection change, final "Add Item" button click).
+        *   Implement the SKU check logic (requires DB interaction - needs `DB.findItemsBySku` or similar index query after refactor #2).
+        *   Implement the dynamic showing/hiding of fields based on SKU check results and Item Type selection.
+        *   Implement the `addNewInventoryItem` function containing the validation, data creation, state update, logging, saving, and UI refresh logic described above.
+        *   Ensure modal closure and cleanup.
+    4.  **JS (`offlineDB.js`):** (Post-refactor #2) Ensure functions exist to efficiently query by SKU index (e.g., `findItemsBySku`).
+    5.  **Documentation:** Update the Feature/Function Reference List.
+*   **Complexity:** High.
+
+---
+
+**2. Multiple Reels per SKU / Primary Key Refactor**
+
+*   **Current Status/Problem:** The database schema uses `SKU` as the `keyPath` (primary key) for the `inventory` object store. This prevents storing multiple distinct items (e.g., different reels like '6B63', '6B66' for SKU '480') that share the same `SKU`. The current CSV import incorrectly handles subsequent rows with the same SKU after the first one is processed.
+*   **Requirement:** The application must correctly store and manage multiple distinct inventory items that share the same `SKU`, especially reels identified by a unique `reelNumber`. The `itemId` should serve as the unique internal identifier, while users continue interacting via SKU, Reel Number, etc. CSV import must handle this correctly and provide better feedback on skipped rows.
+*   **Agreed Solution (Detailed - Highest Priority):**
+    *   **Database Schema (`offlineDB.js`):**
+        *   Increment `DB.version` (e.g., to 5 or higher).
+        *   In the `onupgradeneeded` handler:
+            *   If the `inventory` store exists, *delete* it (`db.deleteObjectStore('inventory')`). Handle potential errors during deletion.
+            *   Re-create the `inventory` object store with `keyPath: 'itemId'`.
+            *   Create necessary indexes:
+                *   `invStore.createIndex('sku_idx', 'SKU', { unique: false });`
+                *   `invStore.createIndex('reelNumber_idx', 'reelNumber', { unique: false });` (Useful for checking reel duplicates)
+                *   `invStore.createIndex('location_idx', 'location', { unique: false });`
+                *   `invStore.createIndex('toCount_idx', 'toCount', { unique: false });` (Already exists, ensure it's recreated)
+                *   `invStore.createIndex('isActive_idx', 'isActive', { unique: false });` (Already exists, ensure it's recreated)
+        *   **Data Migration:** Due to the key change, direct migration is complex. The agreed approach is that this upgrade will **wipe existing inventory data**. Users will need to rely on the JSON Backup/Restore feature (#4) to repopulate data after the application updates. Clear communication to the user about this is essential before they update/first run the new version.
+    *   **Internal `itemId` Usage (`appLogic.js`, `offlineDB.js`):**
+        *   The `itemId` (generated by `DB.generateSimpleId()` for new items, preserved for existing) is the sole unique identifier used internally for fetching, updating, or deleting a *specific* record.
+        *   User-facing search/filter operations will use the newly created indexes (SKU, Reel Number, Location, Description search if implemented).
+    *   **Logic Refactoring (`appLogic.js`):**
+        *   Replace all instances of `findInventoryItem(sku)` with `findItemById(itemId)` when an action originates from a specific item in the UI (e.g., clicking a button within an item's div). The `itemId` will be retrieved from the element's `data-item-id` attribute.
+        *   Functions needing modification include: `recordCount`, `flagUncounted`, `updateCount`, `updateSequences`, `updateItemNotes`, potentially parts of `finalizeInventory`, and especially the event delegation handlers (`handleInventoryListClick`, `handleInventoryListChange`, `handleInventoryListInput`).
+        *   Implement necessary search functions that utilize the new indexes, likely in `offlineDB.js` and called from `appLogic.js` (e.g., `DB.findItemsBySku(sku)`, `DB.findItemBySkuAndReel(sku, reelNumber)`).
+    *   **CSV Import Logic (`showImportDialog`):**
+        *   **Duplicate Check (Within File):** Continue checking for duplicate `reelNumber`s within the *current CSV file*. Also check for duplicate non-reel `SKU`+`Location` combinations within the file.
+        *   **Database Lookup:** For each valid row:
+            *   If `isReel` (or has `reelNumber`): Query DB using `DB.findItemBySkuAndReel(sku, reelNumber)`.
+            *   If not a reel: Query DB using `DB.findItemsBySkuAndLocation(sku, location)` (or similar logic).
+            *   **Action:** If a unique match is found in the DB -> Get its `itemId` and update that record. If no match -> Create a new item record with a *new* `itemId`.
+        *   **Error/Skip Reporting:**
+            *   Maintain a list (`skippedRowsDetails`) during import, storing the row number, row data, and reason for skipping.
+            *   Modify the final `alert` message to accurately report `Added: X, Updated: Y, Skipped: Z`.
+            *   If `skippedCount > 0`, the alert will include text like: "Z rows were skipped. [Download Skipped Rows Report]" where the text in brackets is a clickable link/button.
+            *   Implement a function `downloadSkippedRowsReport(skippedRowsDetails)` that generates and triggers the download of a CSV or text file listing the skipped rows and reasons.
+    *   **UI Rendering (`renderInventoryList`):**
+        *   Ensure each `.inventory-item` div has the correct `data-item-id="${item.itemId}"`.
+        *   The primary display grouping/sorting will initially remain by SKU (achieved by sorting `currentInventory` by SKU before rendering).
+    *   **Future UI Sorting:** Implement clickable table headers (or similar UI) that modify a `sortCriteria` state variable. Update `applyCurrentFilters` to sort `currentInventory` based on `sortCriteria` *after* filtering but *before* passing to `renderInventoryList`.
+*   **Implementation Steps (Detailed):**
+    1.  **DB Schema (`offlineDB.js`):** Implement the `DB.version` increment and the detailed `onupgradeneeded` logic (delete/recreate store, set `keyPath: 'itemId'`, create all specified indexes). Add helper functions for index-based searches (e.g., `findItemsBySku`, `findItemBySkuAndReel`).
+    2.  **Core Logic (`appLogic.js`):** Perform a codebase search for `findInventoryItem` and replace its usage with `findItemById`, ensuring `itemId` is correctly obtained from the UI context (usually `event.target.closest('.inventory-item').dataset.itemId`). Adapt all functions that modify item state.
+    3.  **CSV Import (`appLogic.js` - `showImportDialog`):** Rewrite the database lookup logic to use new index searches (`DB.find...`). Implement the collection of `skippedRowsDetails`. Update the final `alert` message. Add the `downloadSkippedRowsReport` function and the trigger mechanism (e.g., dynamically creating a link/button in the alert or a more persistent UI element).
+    4.  **UI Rendering (`appLogic.js` - `renderInventoryList`):** Verify `data-item-id` is correctly set.
+    5.  **Testing:** Rigorously test CSV imports with duplicate SKUs/Reel Numbers, updates to existing items, and new item creation via CSV. Test all item interaction buttons (Flag, History) and inputs (Qty, Sequences, Notes). Test the skipped rows report download.
+    6.  **User Communication:** Prepare clear instructions for users regarding the data wipe upon upgrade and the need to use JSON restore.
+*   **Complexity:** Very High (Requires careful, widespread changes).
+
+---
+
+**3. Entering Sequences for Reels**
+
+*   **Current Status/Problem:** Sequence input fields, though present in code, are not rendering for many reels in `Book1.csv` because the rendering logic incorrectly requires `footageFactor` to be positive. The calculation logic also needs adjustment to handle partial input and potentially reversed inner/outer sequences.
+*   **Requirement:** Sequence inputs should be visible for all items marked as reels (`isReel: true`) to allow data entry during counting. The calculation (`calculateFootage`) must be flexible, use `Math.abs()`, treat blanks as zero when a pair is partially entered, and only yield a final numeric footage if a valid `footageFactor > 0` exists.
+*   **Agreed Solution (Detailed):**
+    *   **Rendering Condition (`renderInventoryList`):**
+        *   Modify the condition controlling the visibility of `columns.sequences1` and `columns.sequences2`. These containers (and their input fields) should be visible if `item.isReel === true`.
+        *   The display element showing the *calculated footage* (e.g., `.calculated-footage-display.total-footage`) should be conditionally populated or styled (e.g., grayed out, show "N/A") if `item.footageFactor` is not a number greater than 0, even if sequences are entered. The sequence *inputs themselves* remain active.
+    *   **Historical Sequence Display:**
+        *   **Initial Implementation:** Historical sequences will *not* be automatically displayed overlaid on the input fields. Users will use the existing item "History" button/modal to view past sequence data if needed.
+        *   **Rationale:** Avoids immediate complexity in data modeling and UI rendering. Keeps the primary input fields clean.
+        *   **Future Possibility:** Can be revisited later if strongly desired, potentially requiring adding fields like `lastInnerSequence`, etc., to the data model.
+    *   **Calculation Logic (`calculateFootage` in `appLogic.js`):**
+        *   The function will accept the `item` object and a `sequences` object `{ inner1, outer1, inner2, outer2 }`.
+        *   It will **no longer check if `outer >= inner`**.
+        *   For each pair (Pair 1: inner1/outer1; Pair 2: inner2/outer2 if `item.isTwoWayReel`):
+            *   Check if *at least one* input in the pair is non-empty (`trim() !== ''`).
+            *   If so, attempt to convert both inputs to numbers using `Number()`. Treat any resulting `NaN` or the original empty string as `0`. `const inner = Number(rawInner) || 0; const outer = Number(rawOuter) || 0;`
+            *   Calculate the difference for the pair using `Math.abs(outer - inner)`.
+            *   Add this difference to a `totalDifference` accumulator.
+            *   Keep track if at least one pair contributed a valid difference (`pairCalculationSuccess = true`).
+        *   **Final Calculation:** If `pairCalculationSuccess` is true AND `typeof item.footageFactor === 'number'` AND `item.footageFactor > 0`, return `totalDifference * item.footageFactor`.
+        *   Otherwise (no valid pairs entered, or `footageFactor` is invalid/missing/zero), return `null`.
+    *   **Dynamic Update (`updateSequences` in `appLogic.js`):**
+        *   This function (triggered by changes to sequence inputs) will gather the current sequence values from the UI.
+        *   It will call the refined `calculateFootage(item, sequenceValues)`.
+        *   It will update `item.calculatedFootage` with the result (even if `null`).
+        *   If the result is a valid number (not `null`), it will call `recordCount(itemId, calculatedFootage, "Calculated from sequences")` to update the main `counted` field, set `isUncounted = false`, and log the transaction.
+        *   If the result is `null`, it will *not* update the main `counted` field (preserving its previous state) but will still call `autoSave()` to save the raw sequence strings entered by the user (`item.innerSequence`, etc.) and the `null` calculated footage.
+        *   Finally, it calls `applyCurrentFilters()` to re-render the item, showing updated sequence inputs, the calculated footage display (or "N/A"), and potentially the updated main `counted` value.
+*   **Implementation Steps (Detailed):**
+    1.  **Rendering (`appLogic.js` - `renderInventoryList`):** Modify the `if` condition controlling sequence column visibility to depend only on `item.isReel === true`. Add conditional logic to the calculated footage display element to show "N/A" or appear disabled if `item.footageFactor` is not valid (> 0).
+    2.  **Calculation (`appLogic.js` - `calculateFootage`):** Completely rewrite the function body according to the detailed logic above, using `Math.abs()` and handling partial input as zero.
+    3.  **Sequence Update (`appLogic.js` - `updateSequences`):** Adjust the logic after calling `calculateFootage`. Ensure it calls `recordCount` only when the calculated footage is a valid number and handles the `null` case correctly (save sequences/null footage, don't update main count). Ensure it uses `itemId`.
+    4.  **Data Check:** Review the CSV import process (`showImportDialog`) to ensure `footageFactor` is being read correctly. Advise the user that `footageFactor` *must* be present and positive in the source data/CSV for footage calculations to work, even though the inputs will now render regardless.
+    5.  **Testing:** Test reels with and without footage factors, with complete sequence pairs, partial pairs (only inner or only outer), reversed pairs (inner > outer), and invalid inputs. Verify calculated footage display and the main `counted` field updates correctly.
+*   **Complexity:** Medium (Requires careful logic changes in calculation and rendering).
+
+---
+
+**4. Archiving/Re-upload (Full Database)**
+
+*   **Current Status/Problem:** No built-in mechanism exists to export or import the entire application state (inventory *and* transaction history) for backup, restore, or migration purposes.
+*   **Requirement:** Provide functionality to export the complete database (inventory + history) to a single file (JSON format preferred) and to restore the application state from such a file, overwriting existing data. This is separate from the CSV-based "Start New Count Cycle" process.
+*   **Agreed Solution (Detailed):**
+    *   **Export Function (`exportDatabaseJSON`):**
+        *   Create a new function `exportDatabaseJSON` in `appLogic.js`.
+        *   This function will:
+            *   Retrieve all inventory items: `const inventoryData = database.inventory;` (or potentially `await DB.loadInventory()` for absolute freshness, though global state should suffice).
+            *   Retrieve all history items: `const historyData = database.transactionHistory;` (or `await DB.loadTransactionHistory()`).
+            *   Create a wrapper object: `const backupData = { version: DB.version, timestamp: new Date().toISOString(), inventory: inventoryData, transactionHistory: historyData };` (Including DB version and timestamp is good practice).
+            *   Convert the object to a JSON string: `const jsonString = JSON.stringify(backupData, null, 2);` (Using `null, 2` for pretty-printing).
+            *   Create a Blob: `const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });`
+            *   Use the standard file download technique (create `<a>` tag, set `href` to `URL.createObjectURL(blob)`, set `download` attribute like `inventory_backup_${timestamp}.json`, click, remove tag).
+    *   **Import Function (`importDatabaseJSON`):**
+        *   Create a new function `importDatabaseJSON` in `appLogic.js`.
+        *   This function will:
+            *   Use a file input element (`<input type="file" accept=".json">`) to allow the user to select the JSON backup file.
+            *   **Confirmation:** Display a strong confirmation dialog (`confirm()` or a modal) warning the user that **"This action will completely replace all current inventory and history data with the contents of the selected file. This cannot be undone. Proceed?"**
+            *   If confirmed:
+                *   Read the file content using `FileReader`.
+                *   Parse the JSON string: `const backupData = JSON.parse(fileContent);`. Use a `try...catch` block to handle parsing errors.
+                *   **Validation:** Perform basic validation: check if `backupData.inventory` and `backupData.transactionHistory` exist and are arrays. Check if `backupData.version` matches or is compatible with `DB.version` (optional but recommended).
+                *   **Database Wipe & Restore:**
+                    *   Call helper functions (potentially in `offlineDB.js`) to clear the `inventory` and `transactionHistory` object stores within a single `readwrite` transaction. E.g., `await DB.clearStore('inventory'); await DB.clearStore('transactionHistory');`
+                    *   Iterate through `backupData.inventory` and add/put each item into the `inventory` store using `itemId` as the key.
+                    *   Iterate through `backupData.transactionHistory` and add each entry into the `transactionHistory` store (letting `autoIncrement` handle the `id`). Perform these writes within the same transaction if possible, or use efficient bulk methods if available in `offlineDB.js`.
+                *   **Reload Application:** After successful restore, either force a full page reload (`window.location.reload();`) or re-run the core parts of `initializeApp()` to load the newly imported data into the application's state (`database.inventory`, `database.transactionHistory`) and re-render the UI. A full reload is often simplest and safest after a major data change like this.
+                *   Provide success feedback to the user.
+            *   If not confirmed, or if errors occur during file read/parse/validation/restore, abort the process and inform the user.
+    *   **UI:** Add buttons in the UI (e.g., Quick Actions or Settings menu if one exists) for "Export Full Backup (JSON)" and "Import Full Backup (JSON)".
+*   **Implementation Steps (Detailed):**
+    1.  **Export (`appLogic.js`):** Implement the `exportDatabaseJSON` function as described.
+    2.  **Import (`appLogic.js`):** Implement the `importDatabaseJSON` function, including the file input creation, confirmation dialog, file reading, JSON parsing, validation, calling DB clear/restore operations, and triggering an app reload/refresh.
+    3.  **DB Helpers (`offlineDB.js`):** Optionally create helper functions like `clearStore(storeName)` and potentially bulk write functions (e.g., `bulkPutInventory(items)`, `bulkAddHistory(entries)`) to be called by `importDatabaseJSON` for efficiency. Ensure these operate within appropriate transactions.
+    4.  **HTML (`index.html`):** Add the UI buttons to trigger the export and import functions. Hide the actual file input used for import, triggering its click programmatically.
+    5.  **Event Listeners (`appLogic.js`):** Add listeners for the new buttons in `setupEventListeners`.
+    6.  **Testing:** Test exporting the current state. Test importing the exported file, confirming data is overwritten and the app reloads correctly with the restored state. Test import error handling (invalid JSON, incorrect structure).
+*   **Complexity:** Medium.
+
+---
+
+**5. Future Firebase/Network Storage**
+
+*   **Current Status/Problem:** Application is currently offline-only.
+*   **Requirement:** Plan for future capability to store/sync data with an online backend (like Firebase), while retaining robust offline functionality.
+*   **Agreed Solution (Detailed):**
+    *   **Architecture:** Continue leveraging the existing Data Access Layer (DAL) pattern embodied by `offlineDB.js`. The core application logic in `appLogic.js` should interact with the database *only* through the functions exposed by the DAL (e.g., `DB.loadInventory`, `DB.saveInventory`, `DB.addTransaction`).
+    *   **Future `onlineDB.js`:** When online functionality is developed, create a parallel `onlineDB.js` module. This module will implement the *exact same function signatures* as `offlineDB.js` but its internal logic will interact with Firebase APIs (e.g., Firestore `getDocs`, `setDoc`, `addDoc`, `runTransaction`) or a custom backend API.
+    *   **Switching Mechanism:** Introduce logic (e.g., in `initializeApp` or a dedicated module) to determine the current mode (online/offline) based on network status (`navigator.onLine`) and potentially user preference or system configuration. This logic will assign either `offlineDB` or `onlineDB` to the `DB` variable used by `appLogic.js`.
+    *   **Synchronization Strategy:** This is the most complex part and requires careful design *later*. Options include:
+        *   **Manual Sync:** User triggers sync when online. App compares local (IndexedDB) data with online (Firebase) data and performs merge/upload/download operations. Conflict resolution rules are needed (e.g., last write wins, prompt user).
+        *   **Firebase Offline Persistence:** Utilize Firestore's built-in offline capabilities, which cache data locally and sync automatically when online. This simplifies some aspects but still requires handling potential conflicts during the sync.
+        *   **Event Sourcing/Command Queuing:** Record user actions locally when offline and replay them against the online database when connected.
+    *   **Defer Implementation:** Focus entirely on stabilizing and completing the core offline features outlined in sections 1-4 first. The DAL architecture ensures the application is *ready* for online integration when the time comes.
+*   **Implementation Steps (Detailed):**
+    1.  **NOW:** Ensure `appLogic.js` consistently uses the `DB` object for all database interactions and does not directly call `indexedDB` APIs. Refactor if any direct calls exist.
+    2.  **FUTURE:** Design the Firebase data model. Implement `onlineDB.js`. Implement the switching mechanism. Design and implement the synchronization strategy and conflict resolution.
+*   **Complexity:** Very High (Synchronization is inherently complex).
+
+---
+
+**III. Priorities**
+
+The agreed-upon implementation order remains:
+
+1.  **Refactor Data Model (Issue #2)**
+2.  **Fix/Verify Sequence Input Display & Calculation (Issue #3)**
+3.  **Implement Manual Add Item (Issue #1)**
+4.  **Implement Backup/Restore (Issue #4)**
+5.  **Create Feature/Function Reference List (Issue #1 Deliverable)**
+6.  **Future:** Firebase/Online Sync (Issue #5), UI Sorting Enhancements (Issue #2).
+7.  **Future:** Connect, via API to Odoo.sh inventory app.
+
+---
+
+This detailed plan should provide a solid foundation for proceeding with the required changes. Please review this final version, and if it accurately captures our agreement, confirm, and we can begin working on the **Data Model Refactor**.
