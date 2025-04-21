@@ -394,9 +394,23 @@ function handleInventoryListInput(event) {
           console.warn("DB connection not ready for autosave. Attempting init.");
           await DB.init();
       }
+  
+      // *** DEBUG LOG: Check state before saving ***
+      console.log(`[autoSave] Before saving history, database.transactionHistory length: ${database.transactionHistory?.length ?? 'undefined'}`);
+      // Optional: Log a slice of the content to see if it looks right
+      // console.log(`[autoSave] History content (first 5):`, JSON.stringify(database.transactionHistory?.slice(0, 5) ?? []));
+  
+      const inventoryDataToSave = database.inventory; // Copy reference
+      const historyDataToSave = database.transactionHistory; // Copy reference
+  
+       // *** DEBUG LOG: Check copied references ***
+       console.log(`[autoSave] Saving inventoryDataToSave length: ${inventoryDataToSave?.length ?? 'undefined'}`);
+       console.log(`[autoSave] Saving historyDataToSave length: ${historyDataToSave?.length ?? 'undefined'}`);
+  
+  
       const results = await Promise.allSettled([
-           DB.saveInventory(database.inventory),
-           DB.saveTransactionHistory(database.transactionHistory)
+           DB.saveInventory(inventoryDataToSave), // Pass the explicit variable
+           DB.saveTransactionHistory(historyDataToSave) // Pass the explicit variable
        ]);
   
       let saveError = false;

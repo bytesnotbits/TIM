@@ -113,10 +113,14 @@ const DB = {
     loadInventory: () => DB._readAll('inventory', 'inventory items'),
     saveInventory: (data) => DB._clearAndWrite('inventory', data, ['itemId', 'SKU', 'location']),
 
-    // --- Transaction History Functions (Unchanged from v5/v6) ---
+    // --- Transaction History Functions ---
     loadTransactionHistory: () => DB._readAll('transactionHistory', 'history records', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
-    saveTransactionHistory: (data) => DB._clearAndWrite('transactionHistory', data, ['timestamp', 'type'], true), // Use add=true
-    addTransaction: (data) => DB._addOne('transactionHistory', data, ['timestamp', 'type']),
+    // *** Corrected: saveTransactionHistory uses _clearAndWrite (which now always uses PUT) ***
+    saveTransactionHistory: (data) => {
+        console.log(`[DB.saveTransactionHistory] Received history data array with length: ${data?.length ?? 'undefined'}`);
+        // Call _clearAndWrite, which now correctly uses PUT after clearing
+        return DB._clearAndWrite('transactionHistory', data, ['timestamp', 'type']); // Add required fields if needed, though less critical for PUT
+    },
 
     // --- Recount Adjustment Functions (Unchanged from v6) ---
     addRecountAdjustment: (data) => DB._addOne('recountAdjustments', data, ['itemId', 'recordedDuringRecountBatchId', 'adjustmentTransactionId', 'adjustmentQuantity', 'timestamp', 'user']),
@@ -208,38 +212,77 @@ const DB = {
         });
     },
 
-    _clearAndWrite: (storeName, data, requiredFields = [], useAdd = false) => {
+    // *** Refined _clearAndWrite: Now always uses PUT after clear ***
+    _clearAndWrite: (storeName, data, requiredFields = []) => {
         return new Promise(async (resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
-            if (!Array.isArray(data)) return reject(new Error("Invalid data: Expected array"));
+            if (!Array.isArray(data)) {
+                 console.error(`[DB._clearAndWrite:${storeName}] Error: Received non-array data:`, data);
+                 return reject(new Error("Invalid data: Expected array"));
+            }
+
+            console.log(`[DB._clearAndWrite:${storeName}] Received data array with length: ${data.length}`);
+
             try {
                 const transaction = DB.connection.transaction([storeName], 'readwrite');
                 const store = transaction.objectStore(storeName);
                 let successCount = 0, errorCount = 0, skippedCount = 0;
-                const clearRequest = store.clear();
+                const clearRequest = store.clear(); // Clear the store first
 
-                clearRequest.onerror = (event) => { console.error(`Error clearing ${storeName} store:`, event.target.error); /* Tx will abort */ };
-                clearRequest.onsuccess = () => {
-                    console.log(`${storeName} store cleared. Starting write...`);
+                clearRequest.onerror = (event) => {
+                    console.error(`[DB._clearAndWrite:${storeName}] Error clearing store:`, event.target.error);
+                    // Transaction should automatically abort on error here
+                };
+
+                clearRequest.onsuccess = () => { // Only proceed if clear was successful
+                    console.log(`[DB._clearAndWrite:${storeName}] Store cleared. Starting write...`);
+                    if (data.length === 0) {
+                        console.log(`[DB._clearAndWrite:${storeName}] Data array is empty, nothing to write.`);
+                        // The transaction will complete successfully after this.
+                        return;
+                    }
+
+                    // Write each item using PUT (overwrites or adds)
                     const writePromises = data.map(item => {
                         return new Promise((resolveItem) => {
-                            const missingField = requiredFields.find(field => item[field] === undefined || item[field] === null || String(item[field]).trim() === '');
-                            if (missingField) {
-                                console.warn(`Skipping invalid item in ${storeName} (missing ${missingField}):`, item);
-                                skippedCount++; resolveItem({ status: 'skipped' }); return;
-                            }
+                            // Check required fields if needed for PUT integrity, although less critical than ADD
+                            // const missingField = requiredFields.find(field => item[field] === undefined || item[field] === null || String(item[field]).trim() === '');
+                            // if (missingField) {
+                            //     console.warn(`[DB._clearAndWrite:${storeName}] Skipping invalid item for PUT (missing ${missingField}):`, item);
+                            //     skippedCount++; resolveItem({ status: 'skipped' }); return;
+                            // }
                             try {
-                                const request = useAdd ? store.add(item) : store.put(item);
+                                // *** Always use PUT after clearing ***
+                                const request = store.put(item);
                                 request.onsuccess = () => { successCount++; resolveItem({ status: 'success' }); };
-                                request.onerror = (event) => { console.error(`Error writing item to ${storeName}:`, event.target.error, item); errorCount++; resolveItem({ status: 'error' }); };
-                            } catch (writeError) { console.error(`Sync error writing item to ${storeName}:`, writeError, item); errorCount++; resolveItem({ status: 'error' }); }
+                                request.onerror = (event) => {
+                                    console.error(`[DB._clearAndWrite:${storeName}] Error writing item (PUT):`, event.target.error, item);
+                                    errorCount++; resolveItem({ status: 'error' });
+                                };
+                            } catch (writeError) {
+                                console.error(`[DB._clearAndWrite:${storeName}] Sync error during PUT:`, writeError, item);
+                                errorCount++; resolveItem({ status: 'error' });
+                            }
                         });
                     });
-                    Promise.allSettled(writePromises).then(() => { console.log(`${storeName} write attempt processed.`); });
+                    // Wait for all write operations to settle
+                    Promise.allSettled(writePromises).then(() => {
+                         console.log(`[DB._clearAndWrite:${storeName}] Write operations processed.`);
+                    });
+                }; // end clearRequest.onsuccess
+
+                transaction.oncomplete = () => {
+                     console.log(`[DB._clearAndWrite:${storeName}] Transaction completed. S:${successCount}, F:${errorCount}, K:${skippedCount}. Items processed: ${data.length}`);
+                     (errorCount === 0) ? resolve({ successCount, errorCount, skippedCount }) : reject(new Error(`${storeName} write tx completed with ${errorCount} errors.`));
                 };
-                transaction.oncomplete = () => { console.log(`${storeName} write tx completed. S:${successCount},F:${errorCount},K:${skippedCount}`); (errorCount === 0) ? resolve({ successCount, errorCount, skippedCount }) : reject(new Error(`${storeName} write tx completed with ${errorCount} errors.`)); };
-                transaction.onerror = (event) => { console.error(`Tx error writing ${storeName}:`, event.target.error); reject(new Error(`Tx failed writing ${storeName}: ${event.target.error}`)); };
-            } catch (error) { console.error(`Error init tx write ${storeName}:`, error); reject(error); }
+                transaction.onerror = (event) => {
+                     console.error(`[DB._clearAndWrite:${storeName}] Transaction error:`, event.target.error);
+                     reject(new Error(`Tx failed writing ${storeName}: ${event.target.error}`));
+                };
+            } catch (error) {
+                 console.error(`[DB._clearAndWrite:${storeName}] Error initiating transaction:`, error);
+                 reject(error);
+            }
         });
     },
 
@@ -294,15 +337,16 @@ const DB = {
         return `${timePart}-${randomPart}`;
     },
 
+    // addTransaction remains the same, using _addOne
     addTransaction: (data) => {
-        console.log(`[DB.addTransaction] Attempting to add history record:`, data); // <-- ADD THIS LOG
-        // Ensure required fields (SKU, itemId, etc.) are present in 'data' here
-        if (!data.SKU || !data.itemId) {
-             console.error("[DB.addTransaction] History record is missing SKU or itemId!", data);
-             // Optionally reject the promise here if these are critical
-        }
-        return DB._addOne('transactionHistory', data, ['timestamp', 'type', 'itemId', 'SKU']); // Ensure SKU and itemId are required here
-    },
+        console.log(`[DB.addTransaction] Attempting to add history record:`, data);
+       if (!data.SKU || !data.itemId) {
+            console.error("[DB.addTransaction] History record is missing SKU or itemId!", data);
+            // Optionally reject if critical
+            // return Promise.reject(new Error("Missing SKU or itemId in history record"));
+       }
+       return DB._addOne('transactionHistory', data, ['timestamp', 'type', 'itemId', 'SKU']);
+   },
     
     _addOne: (storeName, data, requiredFields = []) => {
         return new Promise((resolve, reject) => {
