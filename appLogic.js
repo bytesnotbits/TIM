@@ -1359,8 +1359,130 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
        }
   }
   
+
+  // --- Item Specific History Modal with ---
+async function showItemHistory(sku) { // Check this line carefully
+    console.log(`[showItemHistory] Function called with SKU: ${sku}`); // DEBUG LOG
+    const modal = document.getElementById('itemHistoryModal');
+    const title = document.getElementById('itemHistoryModalTitle');
+    const body = document.getElementById('itemHistoryModalBody'); // Check IDs are correct in HTML
+
+    if (!modal || !title || !body) {
+        console.error("[showItemHistory] Item history modal elements not found! Cannot display modal.");
+        alert("Error: Could not find the history modal elements.");
+        return; // Exit if elements are missing
+    }
+    console.log("[showItemHistory] Modal elements found:", { modal, title, body });
+
+    // Find item for description
+    const items = findInventoryItemsBySKU(sku); // Check if findInventoryItemsBySKU is working
+    if (!items || items.length === 0) {
+        console.warn(`[showItemHistory] No active inventory item found for SKU ${sku}.`);
+        title.textContent = `History for SKU: ${sku}`;
+    } else {
+        // Ensure items[0] and items[0].Description exist or handle gracefully
+        title.textContent = `History for SKU: ${sku} (${items[0]?.Description || 'No Description'})`;
+    }
+    console.log(`[showItemHistory] Set modal title to: ${title.textContent}`);
+
+    body.innerHTML = '<p>Loading history...</p>';
+
+    // Show the modal *before* fetching data
+    try {
+        console.log("[showItemHistory] Setting modal display to 'block'.");
+        modal.style.display = 'block'; // Ensure modal object is valid here
+    } catch (displayError) {
+         console.error("[showItemHistory] Error setting modal display style:", displayError);
+         alert("Error showing the history modal window.");
+         return;
+    }
+
+    // Fetch and Render Data
+    try {
+        console.log(`[showItemHistory] Querying history from DB for SKU: '${sku}'`);
+        // Ensure DB.getTransactionHistoryBySKU exists and is awaited correctly
+        const itemHistory = await DB.getTransactionHistoryBySKU(sku);
+        console.log(`[showItemHistory] History records received from DB for SKU ${sku}:`, itemHistory);
+
+        body.innerHTML = ''; // Clear loading message
+
+        // Check if itemHistory is an array (even if empty)
+        if (!Array.isArray(itemHistory) || itemHistory.length === 0) {
+            body.innerHTML = '<p>No specific transaction history found for this item.</p>';
+            console.log(`[showItemHistory] Displaying 'No history' message for SKU ${sku}.`);
+            // No return here, the modal should stay open showing this message
+        } else {
+            // Render the history entries...
+            const fragment = document.createDocumentFragment();
+            itemHistory.forEach(entry => { // Ensure itemHistory is iterable
+                // ... (rendering logic - CHECK FOR ERRORS HERE) ...
+                try { // Add inner try-catch for rendering individual entries
+                    const div = document.createElement('div');
+                    div.className = 'history-entry';
+                    const date = new Date(entry.timestamp); // Check if entry.timestamp is valid
+                    const formattedDate = date.toLocaleString();
+                    let detailsHtml = '';
+
+                    // Switch statement (ensure all cases handle potential missing data in entry.details)
+                    switch(entry.type) {
+                        // ... (all cases - VERIFY data access like entry.details.newValue etc.)
+                         case 'update_count':
+                            // Use optional chaining and nullish coalescing for safety
+                            detailsHtml = `Count set to <strong>${entry.details?.newValue ?? 'N/A'}</strong> (was ${entry.details?.oldValue ?? (entry.details?.wasUncounted ? 'uncounted' : 'N/A')}).`;
+                            if (entry.details?.notes) detailsHtml += ` <i>Note: ${entry.details.notes}</i>`;
+                            break;
+                        case 'flag_uncounted':
+                            detailsHtml = `Flagged as uncounted.`;
+                            break;
+                        case 'update_notes':
+                             detailsHtml = `Notes updated to: "${entry.details?.newValue ?? ''}"`;
+                             break;
+                         case 'description_change':
+                             detailsHtml = `Description changed to "${entry.details?.newDescription ?? ''}" (was "${entry.details?.oldDescription ?? ''}").`;
+                             break;
+                        case 'status_change':
+                             detailsHtml = `Status changed to <strong>${entry.details?.newStatus ? 'Active' : 'Inactive'}</strong>. Reason: ${entry.details?.reason || 'Unknown'}`;
+                             break;
+                         case 'import_csv':
+                             detailsHtml = `Item data updated during CSV Import (${entry.details?.fileName || 'N/A'}).`;
+                             break;
+                         case 'new_count_started_import':
+                            detailsHtml = `Marked 'To Count' and reset via New Count Cycle Import (${entry.details?.fileName || 'N/A'}).`;
+                            break;
+                         case 'recount_items_imported':
+                            detailsHtml = `Added to Recount Batch '${entry.details?.recountBatchId || 'N/A'}' via CSV Import (${entry.details?.fileName || 'N/A'}) and reset count.`;
+                            break;
+                        // ... other cases ...
+                         default:
+                             detailsHtml = `Action: ${entry.type}`;
+                    }
+
+                    // Ensure entry.user is accessed safely
+                    div.innerHTML = `
+                        <div class="history-meta">${formattedDate} - ${entry.user || 'System'} ${entry.itemId ? `(ItemID: ${entry.itemId})` : ''}</div>
+                        <div class="history-details">${detailsHtml}</div>
+                    `;
+                    fragment.appendChild(div);
+                } catch (renderEntryError) {
+                     console.error(`[showItemHistory] Error rendering single history entry:`, entry, renderEntryError);
+                     // Optionally add an error message placeholder to the fragment
+                }
+            });
+            body.appendChild(fragment);
+            console.log(`[showItemHistory] Rendered ${itemHistory.length} history entries.`);
+        }
+
+    } catch (error) {
+        console.error(`[showItemHistory] Error loading or rendering history for SKU ${sku}:`, error);
+        body.innerHTML = `<p class="error-message">Error loading history for this item. Check console.</p>`;
+    }
+}
+
   // --- Item Specific History Modal ---
-  async function showItemHistory(sku) {
+/*
+Please replace the existing showItemHistory function with the refined version above. Then, try clicking the "History" button again and observe the console. We should now either see the logs from inside the function, see the modal appear (perhaps with an error message inside if data fetching/rendering fails), or see a new specific error message in the console if a syntax error was indeed the problem or if data is missing during rendering.
+
+    async function showItemHistory(sku) {
       const modal = document.getElementById('itemHistoryModal');
       const title = document.getElementById('itemHistoryModalTitle');
       const body = document.getElementById('itemHistoryModalBody');
@@ -1446,7 +1568,9 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
       }
   }
 }
-  
+*/
+
+
 function closeItemHistoryModal() {
     const modal = document.getElementById('itemHistoryModal');
         if (modal) {
