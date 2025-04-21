@@ -396,73 +396,82 @@ function handleInventoryListInput(event) {
       }
   
       // *** DEBUG LOG: Check state before saving ***
-      console.log(`[autoSave] Before saving history, database.transactionHistory length: ${database.transactionHistory?.length ?? 'undefined'}`);
-      // Optional: Log a slice of the content to see if it looks right
-      // console.log(`[autoSave] History content (first 5):`, JSON.stringify(database.transactionHistory?.slice(0, 5) ?? []));
+      // console.log(`[autoSave] Before saving, database.inventory length: ${database.inventory?.length ?? 'undefined'}`);
+      // console.log(`[autoSave] Before saving, database.transactionHistory length (in-memory): ${database.transactionHistory?.length ?? 'undefined'}`);
   
       const inventoryDataToSave = database.inventory; // Copy reference
-      const historyDataToSave = database.transactionHistory; // Copy reference
   
-       // *** DEBUG LOG: Check copied references ***
-       console.log(`[autoSave] Saving inventoryDataToSave length: ${inventoryDataToSave?.length ?? 'undefined'}`);
-       console.log(`[autoSave] Saving historyDataToSave length: ${historyDataToSave?.length ?? 'undefined'}`);
+      // *** DEBUG LOG: Check copied reference ***
+      // console.log(`[autoSave] Saving inventoryDataToSave length: ${inventoryDataToSave?.length ?? 'undefined'}`);
   
   
-      const results = await Promise.allSettled([
-           DB.saveInventory(inventoryDataToSave), // Pass the explicit variable
-           DB.saveTransactionHistory(historyDataToSave) // Pass the explicit variable
-       ]);
-  
-      let saveError = false;
-      if (results[0].status === 'rejected') {
-          console.error("Auto-save failed for inventory:", results[0].reason);
-          saveError = true;
-      }
-       if (results[1].status === 'rejected') {
-          console.error("Auto-save failed for transaction history:", results[1].reason);
-          saveError = true;
+      // --- ONLY SAVE INVENTORY ---
+      try {
+          await DB.saveInventory(inventoryDataToSave); // Pass the explicit variable
+          console.log("Autosave completed for inventory to IndexedDB.");
+      } catch (invSaveError) {
+           console.error("Auto-save failed for inventory:", invSaveError);
+           console.warn("Autosave failed for inventory data store.");
       }
   
-      if (!saveError) {
-          console.log("Autosave completed to IndexedDB.");
-      } else {
-           console.warn("Autosave failed for one or more data stores.");
-      }
+      // --- REMOVED HISTORY SAVING ---
+      // const historyDataToSave = database.transactionHistory; // Copy reference (NO LONGER NEEDED)
+      // console.log(`[autoSave] Saving historyDataToSave length: ${historyDataToSave?.length ?? 'undefined'}`); (NO LONGER NEEDED)
+      // const results = await Promise.allSettled([ ... DB.saveTransactionHistory(historyDataToSave) ... ]); (NO LONGER NEEDED)
+      // ... (error checking for history removed) ...
+  
   
     } catch (error) {
       console.error("Unexpected error during auto-save process:", error);
     }
   }
   
+  
   // --- Audit Trail ---
-  function logTransaction(transactionData) {
-      try {
-          const timestamp = new Date().toISOString();
-          const user = getUserIdentifier();
-  
-          const fullTransaction = {
-              timestamp: timestamp,
-              user: user,
-              ...transactionData // Includes type, SKU, details etc.
-          };
-  
-          database.transactionHistory.unshift(fullTransaction); // Add to beginning for easy display reverse-chrono
-          console.log("Transaction logged:", fullTransaction);
-  
-          // Update global history view if visible
-          if (document.getElementById('history-view')?.style.display !== 'none') {
-              try {
-                  renderHistoryView();
-              } catch (renderError) {
-                   console.error("Error rendering history view after logging transaction:", renderError);
-              }
-          }
-          // No need to re-render item history modal here, it fetches fresh data when opened
-  
-      } catch (error) {
-          console.error("Error creating or logging transaction:", error);
-      }
-  }
+  async function logTransaction(transactionData) { // Make the function async
+    try {
+        const timestamp = new Date().toISOString();
+        const user = getUserIdentifier();
+
+        const fullTransaction = {
+            // id will be assigned by IndexedDB autoIncrement
+            timestamp: timestamp,
+            user: user,
+            ...transactionData // Includes type, SKU, itemId, details etc.
+        };
+
+        // 1. Attempt to add to IndexedDB FIRST
+        const addedTransactionId = await DB.addTransaction(fullTransaction); // Use the async DB function
+        console.log(`Transaction logged to DB with ID: ${addedTransactionId}`, fullTransaction);
+
+        // 2. If DB add was successful, update the in-memory array
+        // Assign the ID returned by the DB to the in-memory copy
+        fullTransaction.id = addedTransactionId;
+        database.transactionHistory.unshift(fullTransaction); // Add to beginning
+
+        // Sort the in-memory history just in case order matters for immediate display
+        // (though unshift keeps it reverse-chrono if loaded correctly initially)
+        database.transactionHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+
+        // Update global history view if visible
+        if (document.getElementById('history-view')?.style.display !== 'none') {
+            try {
+                renderHistoryView(); // Re-render the full history view with the new item
+            } catch (renderError) {
+                 console.error("Error rendering history view after logging transaction:", renderError);
+            }
+        }
+        // No need to re-render item history modal here, it fetches fresh data when opened
+
+    } catch (error) {
+        // Log the error, but don't necessarily halt execution unless critical
+        console.error("Error logging transaction (DB add or memory update):", error, transactionData);
+         // Optionally alert the user if DB logging fails?
+         // alert(`Warning: Failed to record transaction history entry. ${error.message}`);
+    }
+}
+
   
   
   // --- State Update Helper ---
