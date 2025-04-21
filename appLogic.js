@@ -275,7 +275,13 @@ function setupEventListeners() {
       };
   }
   
-  
+  /* 
+Looking at the two versions:
+The first instance seems like an older or incomplete version. It tries to use sku primarily for history.
+The second instance includes more detailed logging, explicitly checks for itemId, and correctly calls showItemHistory(itemId, sku), passing both identifiers. This version aligns with the overall shift to using itemId as the primary key.
+You should remove the first instance of handleInventoryListClick (the one starting around line 263).
+Keep the second instance (the one starting around line 290) as it appears to be the intended and more complete implementation.
+
   // --- Event Delegation Handlers ---
   function handleInventoryListClick(event) {
     const target = event.target;
@@ -306,6 +312,7 @@ if (!itemId) { // Add itemId check
         showItemHistory(sku); // <-- Pass SKU as originally intended
     }
 }
+    */
 
 // --- Event Delegation Handlers ---
 function handleInventoryListClick(event) {
@@ -314,17 +321,17 @@ function handleInventoryListClick(event) {
     if (!itemDiv) return;
     const itemId = itemDiv.dataset.itemId; // <-- GET itemId
     const sku = itemDiv.dataset.sku;       // <-- Keep SKU for history view if needed
-  
+
     console.log("[handleInventoryListClick] Click detected on itemDiv:", itemDiv); // DEBUG LOG
     console.log("[handleInventoryListClick] Extracted itemId:", itemId, "SKU:", sku); // DEBUG LOG
     console.log("[handleInventoryListClick] Clicked target element:", target); // DEBUG LOG
-  
+
     // Add a check to ensure itemId was found
     if (!itemId) {
         console.error("Could not find itemId on inventory item div:", itemDiv);
         return;
     }
-  
+
     if (target.matches('button[data-action="flag"]')) {
         console.log("[handleInventoryListClick] 'Flag' button matched."); // DEBUG LOG
         flagUncounted(itemId); // <-- PASS itemId
@@ -347,8 +354,9 @@ function handleInventoryListClick(event) {
     } else {
         console.log("[handleInventoryListClick] No matching action button found for click target."); // DEBUG LOG
     }
-  }
+}
 
+/*
 function handleInventoryListChange(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
@@ -367,7 +375,32 @@ function handleInventoryListChange(event) {
         updateSequences(itemId); // <-- PASS itemId
     }
 }
+    */
 
+// *** MODIFIED FOR NOTES FIX ***
+function handleInventoryListChange(event) {
+    const target = event.target;
+    const itemDiv = target.closest('.inventory-item');
+    if (!itemDiv) return;
+    const itemId = itemDiv.dataset.itemId; // <-- GET itemId
+
+    // Add a check to ensure itemId was found
+    if (!itemId) {
+        console.error("Could not find itemId on inventory item div:", itemDiv);
+        return;
+    }
+
+    if (target.matches('input[data-type="count-input"]:not(:disabled)')) {
+        updateCount(itemId, target.value); // <-- PASS itemId
+    } else if (target.matches('input[data-sequence]')) { // Matches inner, outer, inner2, outer2
+        updateSequences(itemId); // <-- PASS itemId
+    } else if (target.matches('textarea[data-type="notes-input"]')) { // <-- *** ADDED THIS BLOCK ***
+        // Trigger notes update on 'change' (typically on blur after modification)
+        updateItemNotes(itemId, target.value); // <-- PASS itemId
+    }
+}
+
+/* 
 function handleInventoryListInput(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
@@ -385,7 +418,22 @@ function handleInventoryListInput(event) {
         updateItemNotes(itemId, target.value); // <-- PASS itemId
     }
 }
-  
+*/
+
+// *** MODIFIED FOR NOTES FIX ***
+function handleInventoryListInput(event) {
+    // No longer need to handle notes textarea here.
+    const target = event.target;
+    const itemDiv = target.closest('.inventory-item');
+    if (!itemDiv) return;
+    const itemId = itemDiv.dataset.itemId;
+
+    if (!itemId) {
+        console.error("Could not find itemId on inventory item div:", itemDiv);
+        return;
+    }
+    // *** REMOVED the notes handling block from here ***
+}
   
   // --- Data Persistence (autoSave) ---
   async function autoSave() {
