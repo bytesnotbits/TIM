@@ -284,12 +284,17 @@ function setupEventListeners() {
     const itemId = itemDiv.dataset.itemId; // <-- GET itemId
     const sku = itemDiv.dataset.sku;       // <-- Keep SKU for history view if needed
 
-    // Add a check to ensure itemId was found
-    if (!itemId) {
-        console.error("Could not find itemId on inventory item div:", itemDiv);
-        return;
-    }
-
+// In handleInventoryListClick function:
+// ... (inside the 'else if' block for view-history)
+if (!sku) { // Keep SKU check for title potentially
+    console.error("Could not find SKU on inventory item div for history title:", itemDiv);
+    // Don't return yet if itemId exists
+}
+if (!itemId) { // Add itemId check
+     console.error("Could not find ItemID on inventory item div for history:", itemDiv);
+     alert("Error: Could not retrieve ItemID to show history.");
+     return;
+}
     if (target.matches('button[data-action="flag"]')) {
         flagUncounted(itemId); // <-- PASS itemId
     } else if (target.matches('button[data-action="view-history"]')) {
@@ -331,14 +336,14 @@ function handleInventoryListClick(event) {
              alert("Error: Could not retrieve SKU to show history."); // User feedback
              return;
         }
-        console.log(`[handleInventoryListClick] Calling showItemHistory with SKU: ${sku}`); // DEBUG LOG
-        // Wrap the call itself to catch errors specifically from showItemHistory execution
-        try {
-          showItemHistory(sku); // <-- Pass SKU as originally intended
-        } catch (historyError) {
-          console.error(`[handleInventoryListClick] Error directly calling showItemHistory:`, historyError);
-          alert(`An error occurred trying to display history for SKU ${sku}.`);
-        }
+        // *** CHANGE: Pass itemId instead of sku ***
+      console.log(`[handleInventoryListClick] Calling showItemHistory with ItemID: ${itemId} (SKU: ${sku} for title)`); // DEBUG LOG
+      try {
+        showItemHistory(itemId, sku); // Pass both: itemId for query, sku for title
+      } catch (historyError) {
+        console.error(`[handleInventoryListClick] Error directly calling showItemHistory:`, historyError);
+        alert(`An error occurred trying to display history for ItemID ${itemId}.`);
+      }
     } else {
         console.log("[handleInventoryListClick] No matching action button found for click target."); // DEBUG LOG
     }
@@ -1359,75 +1364,69 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
        }
   }
   
-
-  // --- Item Specific History Modal with ---
-async function showItemHistory(sku) { // Check this line carefully
-    console.log(`[showItemHistory] Function called with SKU: ${sku}`); // DEBUG LOG
+// --- Item Specific History Modal ---
+ // *** CHANGE: Accept itemId first, sku second (for title) ***
+async function showItemHistory(itemId, sku) {
+    // *** CHANGE: Log both parameters ***
+    console.log(`[showItemHistory] Function called with ItemID: ${itemId}, SKU: ${sku}`);
     const modal = document.getElementById('itemHistoryModal');
     const title = document.getElementById('itemHistoryModalTitle');
-    const body = document.getElementById('itemHistoryModalBody'); // Check IDs are correct in HTML
+    const body = document.getElementById('itemHistoryModalBody');
 
     if (!modal || !title || !body) {
         console.error("[showItemHistory] Item history modal elements not found! Cannot display modal.");
         alert("Error: Could not find the history modal elements.");
-        return; // Exit if elements are missing
+        return;
     }
     console.log("[showItemHistory] Modal elements found:", { modal, title, body });
 
-    // Find item for description
-    const items = findInventoryItemsBySKU(sku); // Check if findInventoryItemsBySKU is working
-    if (!items || items.length === 0) {
-        console.warn(`[showItemHistory] No active inventory item found for SKU ${sku}.`);
-        title.textContent = `History for SKU: ${sku}`;
+    // Find item for description using itemId first
+    const item = await findInventoryItemByItemId(itemId); // Use itemId to find the specific item
+    if (!item) {
+         console.warn(`[showItemHistory] No active inventory item found for ItemID ${itemId}. Using SKU for title.`);
+         // Fallback to SKU if item not found (might happen if item deleted but history remains)
+         title.textContent = `History for Item ID: ${itemId} (SKU: ${sku || 'Unknown'})`;
     } else {
-        // Ensure items[0] and items[0].Description exist or handle gracefully
-        title.textContent = `History for SKU: ${sku} (${items[0]?.Description || 'No Description'})`;
+        // Use description from the specific item found by ID
+        title.textContent = `History for Item ID: ${itemId} (SKU: ${item.SKU}, Desc: ${item.Description || 'No Description'})`;
     }
     console.log(`[showItemHistory] Set modal title to: ${title.textContent}`);
 
     body.innerHTML = '<p>Loading history...</p>';
 
-    // Show the modal *before* fetching data
     try {
         console.log("[showItemHistory] Setting modal display to 'block'.");
-        modal.style.display = 'block'; // Ensure modal object is valid here
+        modal.style.display = 'block';
     } catch (displayError) {
          console.error("[showItemHistory] Error setting modal display style:", displayError);
          alert("Error showing the history modal window.");
          return;
     }
 
-    // Fetch and Render Data
     try {
-        console.log(`[showItemHistory] Querying history from DB for SKU: '${sku}'`);
-        // Ensure DB.getTransactionHistoryBySKU exists and is awaited correctly
-        const itemHistory = await DB.getTransactionHistoryBySKU(sku);
-        console.log(`[showItemHistory] History records received from DB for SKU ${sku}:`, itemHistory);
+        // *** CHANGE: Query by ItemID using the appropriate DB function ***
+        console.log(`[showItemHistory] Querying history from DB for ItemID: '${itemId}'`);
+        const itemHistory = await DB.getTransactionHistoryByItemId(itemId); // <-- Use ItemID query
+        // *** CHANGE: Log based on ItemID ***
+        console.log(`[showItemHistory] History records received from DB for ItemID ${itemId}:`, itemHistory);
 
-        body.innerHTML = ''; // Clear loading message
+        body.innerHTML = '';
 
-        // Check if itemHistory is an array (even if empty)
         if (!Array.isArray(itemHistory) || itemHistory.length === 0) {
-            body.innerHTML = '<p>No specific transaction history found for this item.</p>';
-            console.log(`[showItemHistory] Displaying 'No history' message for SKU ${sku}.`);
-            // No return here, the modal should stay open showing this message
+             body.innerHTML = `<p>No specific transaction history found for this item (ID: ${itemId}).</p>`;
+             console.log(`[showItemHistory] Displaying 'No history' message for ItemID ${itemId}.`);
         } else {
-            // Render the history entries...
             const fragment = document.createDocumentFragment();
-            itemHistory.forEach(entry => { // Ensure itemHistory is iterable
-                // ... (rendering logic - CHECK FOR ERRORS HERE) ...
-                try { // Add inner try-catch for rendering individual entries
+            itemHistory.forEach(entry => {
+                try {
                     const div = document.createElement('div');
                     div.className = 'history-entry';
-                    const date = new Date(entry.timestamp); // Check if entry.timestamp is valid
+                    const date = new Date(entry.timestamp);
                     const formattedDate = date.toLocaleString();
                     let detailsHtml = '';
-
-                    // Switch statement (ensure all cases handle potential missing data in entry.details)
+                    // Switch statement remains the same conceptually (render details)
                     switch(entry.type) {
-                        // ... (all cases - VERIFY data access like entry.details.newValue etc.)
                          case 'update_count':
-                            // Use optional chaining and nullish coalescing for safety
                             detailsHtml = `Count set to <strong>${entry.details?.newValue ?? 'N/A'}</strong> (was ${entry.details?.oldValue ?? (entry.details?.wasUncounted ? 'uncounted' : 'N/A')}).`;
                             if (entry.details?.notes) detailsHtml += ` <i>Note: ${entry.details.notes}</i>`;
                             break;
@@ -1443,6 +1442,7 @@ async function showItemHistory(sku) { // Check this line carefully
                         case 'status_change':
                              detailsHtml = `Status changed to <strong>${entry.details?.newStatus ? 'Active' : 'Inactive'}</strong>. Reason: ${entry.details?.reason || 'Unknown'}`;
                              break;
+                         // Other cases... (keep them updated as before)
                          case 'import_csv':
                              detailsHtml = `Item data updated during CSV Import (${entry.details?.fileName || 'N/A'}).`;
                              break;
@@ -1452,12 +1452,12 @@ async function showItemHistory(sku) { // Check this line carefully
                          case 'recount_items_imported':
                             detailsHtml = `Added to Recount Batch '${entry.details?.recountBatchId || 'N/A'}' via CSV Import (${entry.details?.fileName || 'N/A'}) and reset count.`;
                             break;
-                        // ... other cases ...
-                         default:
-                             detailsHtml = `Action: ${entry.type}`;
+                        // ... etc ...
+                        default:
+                            detailsHtml = `Action: ${entry.type}`;
                     }
 
-                    // Ensure entry.user is accessed safely
+                    // Display remains the same
                     div.innerHTML = `
                         <div class="history-meta">${formattedDate} - ${entry.user || 'System'} ${entry.itemId ? `(ItemID: ${entry.itemId})` : ''}</div>
                         <div class="history-details">${detailsHtml}</div>
@@ -1465,15 +1465,15 @@ async function showItemHistory(sku) { // Check this line carefully
                     fragment.appendChild(div);
                 } catch (renderEntryError) {
                      console.error(`[showItemHistory] Error rendering single history entry:`, entry, renderEntryError);
-                     // Optionally add an error message placeholder to the fragment
                 }
             });
             body.appendChild(fragment);
-            console.log(`[showItemHistory] Rendered ${itemHistory.length} history entries.`);
+            console.log(`[showItemHistory] Rendered ${itemHistory.length} history entries for ItemID ${itemId}.`);
         }
 
     } catch (error) {
-        console.error(`[showItemHistory] Error loading or rendering history for SKU ${sku}:`, error);
+        // *** CHANGE: Log based on ItemID ***
+        console.error(`[showItemHistory] Error loading or rendering history for ItemID ${itemId}:`, error);
         body.innerHTML = `<p class="error-message">Error loading history for this item. Check console.</p>`;
     }
 }
