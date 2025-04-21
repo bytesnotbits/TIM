@@ -1183,9 +1183,8 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
                 columns.count.appendChild(countInput);
 
 
-              // --- Populate Sequences Columns --- (No changes needed here)
-               if (item.isReel && typeof item.footageFactor === 'number' && item.footageFactor > 0) { /* ... */ }
-               if (item.isReel && typeof item.footageFactor === 'number' && item.footageFactor > 0) {
+              // --- Populate Sequences Columns ---
+               if (item.isReel) {
                  // Pair 1
                  columns.sequences1.innerHTML = `
                       <span>Inner:</span>
@@ -1219,7 +1218,7 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
                   totalFootageDisplay.style.marginLeft = '10px';
                   totalFootageDisplay.textContent = (item.calculatedFootage !== null) ? `Total: ${item.calculatedFootage.toFixed(2)} ft` : 'Total: ---';
                   columns.sequences1.appendChild(totalFootageDisplay);
-                  columns.sequences1.innerHTML += ` <span style="font-size:0.8em;">(@ ${item.footageFactor})</span>`;
+                  const factorDisplay = (typeof item.footageFactor === 'number' && item.footageFactor > 0) ? `(@ ${item.footageFactor})` : '(@ No Factor)';  columns.sequences1.innerHTML += ` <span style="font-size:0.8em; color: ${factorDisplay.includes('No Factor') ? 'var(--dark-gray)' : 'inherit'};">${factorDisplay}</span>`;
              } else {
                  columns.sequences1.style.visibility = 'hidden';
                  columns.sequences2.style.visibility = 'hidden';
