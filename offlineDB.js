@@ -340,13 +340,23 @@ const DB = {
     // addTransaction remains the same, using _addOne
     addTransaction: (data) => {
         console.log(`[DB.addTransaction] Attempting to add history record:`, data);
-       if (!data.SKU || !data.itemId) {
-            console.error("[DB.addTransaction] History record is missing SKU or itemId!", data);
-            // Optionally reject if critical
-            // return Promise.reject(new Error("Missing SKU or itemId in history record"));
-       }
-       return DB._addOne('transactionHistory', data, ['timestamp', 'type', 'itemId', 'SKU']);
-   },
+
+        // ***** MODIFIED ***** - Check for SKU/itemId only on item-specific log types
+        const summaryLogTypes = ['import_csv', 'new_count_started_import', 'recount_items_imported', 'inventory_finalized'];
+        const isSummaryLog = summaryLogTypes.includes(data.type);
+
+        if (!isSummaryLog && (!data.SKU || !data.itemId)) {
+            // This is an item-specific log, and it's missing required fields
+            console.error("[DB.addTransaction] Item-specific history record is missing SKU or itemId!", data);
+            // Optionally reject if critical for item logs. For now, we log the error and proceed.
+            // return Promise.reject(new Error("Missing SKU or itemId in item-specific history record"));
+        }
+        // ***** END MODIFIED *****
+
+        // Required fields for ANY transaction type before adding to DB
+        const baseRequiredFields = ['timestamp', 'type'];
+        return DB._addOne('transactionHistory', data, baseRequiredFields);
+    },
     
     _addOne: (storeName, data, requiredFields = []) => {
         return new Promise((resolve, reject) => {
