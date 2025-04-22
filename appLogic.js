@@ -1108,7 +1108,7 @@ Modified: Added logic to attempt resetting the input field's visual value direct
 
 
 // Calculates footage based on sequences FOR A SPECIFIC ITEM OBJECT
-// Doesn't modify item state directly, just returns calculated value or null
+/* // Doesn't modify item state directly, just returns calculated value or null
 function calculateFootageForItem(item, sequences) {
     // sequences = { inner1, outer1, inner2, outer2 }
     if (!item || !item.isReel || typeof item.footageFactor !== 'number' || isNaN(item.footageFactor) || item.footageFactor <= 0) {
@@ -1178,8 +1178,92 @@ function calculateFootageForItem(item, sequences) {
         console.error(`Error calculating footage for itemId ${item.itemId}:`, error);
         return null;
     }
-}
+} */
 
+    /* Summary of Changes in calculateFootageForItem:
+Removed Multiplication: The code no longer multiplies the difference by item.footageFactor. The sum of the absolute differences is the result.
+Blank as Zero: The internal parseSequence helper now explicitly treats empty/blank/null sequence strings as 0 instead of causing an error or skipping the pair.
+Invalid Input Handling: The function now correctly flags an overall error (errorPresent = true) only if a non-blank input is invalid (non-numeric or negative). Blank inputs do not cause an error.
+"Any Input" Check: Added a flag (anyInputEntered) to detect if any sequence field had content. If all fields were blank, the function returns null (signifying no calculation performed), preventing the Qty field from being set to 0 erroneously.
+Pair Completion Not Required: The logic no longer requires both inner and outer of a pair to be present. It calculates the difference based on the parsed values (treating blanks as 0), provided no invalid data was entered in any field.
+Two-Way Logic: Correctly calculates diff2 only if item.isTwoWayReel is true, otherwise diff2 remains 0.
+Return Value: Returns the sum of diff1 and diff2, or null if errors were present or no input was entered.
+Logging: Added more detailed console logs to trace the parsing and calculation steps. */
+// --- Replace the existing calculateFootageForItem function in appLogic.js with this version ---
+// Calculates footage based on sequences FOR A SPECIFIC ITEM OBJECT, treating blanks as 0.
+// Returns calculated quantity or null if calculation is invalid or no input provided.
+function calculateFootageForItem(item, sequences) {
+    // sequences = { inner1, outer1, inner2, outer2 }
+    console.log(`[calculateFootageForItem] Called for itemId: ${item?.itemId}, sequences:`, sequences); // Log entry
+
+    if (!item || !item.isReel) {
+        console.log(`[calculateFootageForItem] Not a reel or item missing.`);
+        return null; // Not a reel
+    }
+
+    let anyInputEntered = false;
+    let errorPresent = false;
+
+    // Helper to parse, treating blank as 0, checking for validity
+    const parseSequence = (valueStr) => {
+        const trimmedStr = String(valueStr || '').trim(); // Ensure it's a string and trim
+
+        if (trimmedStr === '') {
+            return 0; // Treat blank as 0
+        }
+
+        anyInputEntered = true; // Mark that at least one field has content
+
+        const num = Number(trimmedStr);
+
+        if (isNaN(num) || num < 0) {
+             console.warn(`[calculateFootageForItem] Invalid sequence value detected: '${trimmedStr}' for itemId ${item.itemId}`);
+             errorPresent = true;
+             return null; // Return null to indicate error for this value
+        }
+        return num; // Return the valid, non-negative number
+    };
+
+    // Parse all sequence values
+    const parsed_inner1 = parseSequence(sequences.inner1);
+    const parsed_outer1 = parseSequence(sequences.outer1);
+    const parsed_inner2 = parseSequence(sequences.inner2);
+    const parsed_outer2 = parseSequence(sequences.outer2);
+
+    // If any invalid non-blank value was entered, calculation is invalid
+    if (errorPresent) {
+         console.log(`[calculateFootageForItem] Invalid input detected. Returning null.`);
+         return null;
+    }
+
+    // If no fields had any input, return null (no calculation needed/possible)
+    if (!anyInputEntered) {
+         console.log(`[calculateFootageForItem] No sequences entered. Returning null.`);
+         return null;
+    }
+
+    // Calculate difference for pair 1
+    const diff1 = Math.abs(parsed_outer1 - parsed_inner1);
+    console.log(`[calculateFootageForItem] Pair 1: inner=${parsed_inner1}, outer=${parsed_outer1}, diff1=${diff1}`);
+
+    // Calculate difference for pair 2 (only if two-way reel)
+    let diff2 = 0;
+    if (item.isTwoWayReel) {
+        diff2 = Math.abs(parsed_outer2 - parsed_inner2);
+        console.log(`[calculateFootageForItem] Pair 2 (Two-Way): inner=${parsed_inner2}, outer=${parsed_outer2}, diff2=${diff2}`);
+    } else {
+        console.log(`[calculateFootageForItem] Not a two-way reel, diff2=0.`);
+    }
+
+    // Calculate total quantity
+    const totalQty = diff1 + diff2;
+    console.log(`[calculateFootageForItem] Calculated Total Qty: ${totalQty}`);
+
+    // Return the calculated total quantity (which might be 0 if differences cancel out or inputs were 0)
+    return totalQty;
+
+}
+// --- End of calculateFootageForItem ---
 
 // Called by event handler on sequence input change
 /* async function updateSequences(itemId) {
@@ -2549,13 +2633,13 @@ function renderInventoryList() {
                     columns.sequences1.appendChild(totalFootageDisplay);
 
 
-                    const factorDisplayValue = (typeof item.footageFactor === 'number' && item.footageFactor > 0) ? item.footageFactor : null;
+                    /* const factorDisplayValue = (typeof item.footageFactor === 'number' && item.footageFactor > 0) ? item.footageFactor : null;
                     const factorDisplay = factorDisplayValue !== null ? `(@ ${factorDisplayValue})` : '(@ No Factor)';
                     const factorSpan = document.createElement('span');
                     factorSpan.className = 'footage-factor-display';
                     factorSpan.textContent = factorDisplay;
                     if (factorDisplayValue === null) factorSpan.style.color = 'var(--danger-color)';
-                    columns.sequences1.appendChild(factorSpan);
+                    columns.sequences1.appendChild(factorSpan); */
 
                 } else {
                     // Hide sequence columns if not a reel
