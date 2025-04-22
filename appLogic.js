@@ -371,7 +371,7 @@ function applyCurrentFiltersFromUI() {
 
 
 // --- Event Delegation Handlers ---
-function handleInventoryListClick(event) {
+/* function handleInventoryListClick(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
     if (!itemDiv) return;
@@ -449,7 +449,93 @@ function handleInventoryListClick(event) {
     } else {
         console.log("[handleInventoryListClick] No matching action button or span found for click target.");
     }
+} */
+
+    /*
+Added an internal helper function applyValueToInput to reduce repetition for finding an input, setting its value, and dispatching the change event.
+Modified the handler for data-action="apply-sequence" to use the new helper function.
+Added a new else if block to handle clicks on elements with data-action="apply-expected-qty".
+This new block retrieves the data-value and uses the applyValueToInput helper to target the main count input (input[data-type="count-input"]) and trigger its change event.
+    */
+   // --- Replace the existing handleInventoryListClick function in appLogic.js with this version ---
+function handleInventoryListClick(event) {
+    const target = event.target;
+    const itemDiv = target.closest('.inventory-item');
+    if (!itemDiv) return;
+    const itemId = itemDiv.dataset.itemId;
+
+    console.log("[handleInventoryListClick] Click detected on itemDiv, itemId:", itemId); // DEBUG LOG
+    console.log("[handleInventoryListClick] Clicked target element:", target); // DEBUG LOG
+
+    if (!itemId) {
+        console.error("Could not find itemId on inventory item div:", itemDiv);
+        return;
+    }
+
+    // Helper function to find and trigger change on an input
+    const applyValueToInput = (selector, value) => {
+        const inputElement = itemDiv.querySelector(selector);
+        if (inputElement && !inputElement.disabled) { // Allow populating readonly, but not disabled
+             console.log(`Applying value '${value}' to input '${selector}' for item ${itemId}`);
+             inputElement.value = value;
+             console.log(`Dispatching 'change' event for input '${selector}'`);
+             inputElement.dispatchEvent(new Event('change', { bubbles: true }));
+             return true;
+        } else if (!inputElement) {
+             console.error(`Could not find input element with selector '${selector}' in item ${itemId}`);
+             return false;
+        } else {
+             console.warn(`Input element '${selector}' is disabled. Cannot apply value.`);
+             return false;
+        }
+    };
+
+    if (target.matches('button[data-action="flag"]')) {
+        console.log("[handleInventoryListClick] 'Flag' button matched.");
+        flagUncounted(itemId);
+    } else if (target.matches('button[data-action="view-history"]')) {
+        console.log("[handleInventoryListClick] 'View History' button matched.");
+        findInventoryItemByItemId(itemId).then(item => {
+            const displaySku = item ? item.SKU : itemDiv.dataset.sku; // Use found item SKU first
+            const displayDesc = item ? item.Description : 'Unknown Description';
+            if (!itemId) {
+                 console.error("Cannot show history: Item ID is missing.");
+                 alert("Error: Could not identify the item to show history for.");
+                 return;
+            }
+            console.log(`[handleInventoryListClick] Calling showItemHistory with ItemID: ${itemId} (SKU: ${displaySku})`);
+            showItemHistory(itemId, displaySku, displayDesc);
+        }).catch(err => {
+            console.error(`Error finding item ${itemId} before showing history:`, err);
+             alert("Error retrieving item details. Cannot show history.");
+        });
+    } else if (target.matches('span[data-action="apply-sequence"]')) {
+        // ***** MODIFIED ***** Use helper function
+        console.log("[handleInventoryListClick] 'Apply Sequence' span matched.");
+        const sequenceType = target.dataset.sequenceType; // 'inner', 'outer', 'inner2', 'outer2'
+        const sequenceValue = target.dataset.sequenceValue;
+        if (sequenceType && sequenceValue !== undefined) {
+             applyValueToInput(`input[data-sequence="${sequenceType}"]`, sequenceValue);
+        } else {
+            console.error("Missing sequence type or value on clicked span:", target);
+        }
+    } else if (target.matches('span[data-action="apply-expected-qty"]')) {
+         // ***** ADDED ***** Handle click on expected quantity
+         console.log("[handleInventoryListClick] 'Apply Expected Qty' span matched.");
+         const expectedValue = target.dataset.value;
+         if (expectedValue !== undefined) {
+             applyValueToInput('input[data-type="count-input"]', expectedValue);
+         } else {
+              console.error("Missing expected quantity value on clicked span:", target);
+         }
+    } else if (target.matches('button[data-action="finalize-item"]')) {
+        console.log("[handleInventoryListClick] 'Finalize Item' button matched.");
+        wrapAction(() => finalizeSingleItem(itemId), `finalize item ${itemId}`)(); // Wrap the async function
+    } else {
+        // console.log("[handleInventoryListClick] No matching action button or span found for click target.");
+    }
 }
+// --- End of handleInventoryListClick ---
 
 async function finalizeSingleItem(itemId) {
     if (!itemId) {
@@ -951,7 +1037,7 @@ async function flagUncounted(itemId) {
 }
 
 // Called by event handler on main count input change
-async function updateCount(itemId, quantityStr) {
+/* async function updateCount(itemId, quantityStr) {
     const quantity = Number(quantityStr);
     if (isNaN(quantity) || quantity < 0) {
         alert("Invalid quantity entered. Please enter a non-negative number.");
@@ -972,7 +1058,54 @@ async function updateCount(itemId, quantityStr) {
         // Re-render to ensure UI consistency if update failed
          applyCurrentFilters();
     }
+} */
+
+    // --- Replace the existing updateCount function in appLogic.js with this version ---
+async function updateCount(itemId, quantityStr) {
+    const quantity = Number(quantityStr);
+    if (isNaN(quantity) || quantity < 0) {
+        alert("Invalid quantity entered. Please enter a non-negative number.");
+        // Find the input and reset it visually without a full re-render if possible
+        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+        const inputElement = itemDiv?.querySelector('input[data-type="count-input"]');
+        if (inputElement) {
+            // Try to reset to the last known valid value from the database
+            findInventoryItemByItemId(itemId).then(item => {
+                if (item) {
+                    inputElement.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
+                }
+            });
+        }
+        return;
+    }
+
+    /* Removed: The call to applyCurrentFilters(); has been removed to prevent the full UI refresh.
+Added: An explicit call to autoSave().catch(...) was added within the success condition to ensure the save is triggered after the update.
+Modified: Added logic to attempt resetting the input field's visual value directly using DOM manipulation if an invalid number is entered or if recordOrUpdateCount fails, avoiding a full re-render just for reset. */
+    // Use recordOrUpdateCount for logging/saving
+    const updatedItem = await recordOrUpdateCount(itemId, quantity, 'manual_count');
+
+    if (updatedItem) {
+        // applyCurrentFilters(); // ***** REMOVED ***** - Prevent full re-render
+        updateSummaryCards(); // Summary cards can still update
+        autoSave().catch(e => console.error("Autosave failed after updating count:", e)); // ***** ADDED ***** Ensure save is triggered
+        console.log(`Count updated for ${itemId} to ${quantity}, background save triggered.`);
+    } else {
+        // Handle case where recordCount failed (already logged error, or was prevented)
+        console.warn(`Update count for ${itemId} did not result in a saved change or was disallowed.`);
+         // Optionally reset input visually if update failed
+         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+         const inputElement = itemDiv?.querySelector('input[data-type="count-input"]');
+         if (inputElement) {
+            findInventoryItemByItemId(itemId).then(item => {
+                 if (item) {
+                     inputElement.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
+                 }
+            });
+         }
+    }
 }
+
 
 // Calculates footage based on sequences FOR A SPECIFIC ITEM OBJECT
 // Doesn't modify item state directly, just returns calculated value or null
@@ -1049,7 +1182,7 @@ function calculateFootageForItem(item, sequences) {
 
 
 // Called by event handler on sequence input change
-async function updateSequences(itemId) {
+/* async function updateSequences(itemId) {
     if (!itemId) { console.error("updateSequences: itemId missing"); return; }
     try {
         const item = await findInventoryItemByItemId(itemId);
@@ -1119,10 +1252,344 @@ async function updateSequences(itemId) {
         alert(`Failed to update sequences for ${item?.SKU || itemId}. See console.`);
         applyCurrentFilters(); // Re-render to reset UI state if needed
     }
+} */
+
+    /*
+Removed: The call to applyCurrentFilters(); has been removed.
+Added: Significant block of code for Direct DOM Manipulation. After calculating footage and updating the data model, this code finds the specific count input and footage display span within the currently edited itemDiv and updates their value, textContent, disabled, readOnly, style, and title properties directly, reflecting the new state without redrawing the whole card.
+Added: Explicit autoSave().catch(...) call at the end.
+Modified: Error handling now also attempts to reset the input fields and displays visually using DOM manipulation, based on the last known good state from the item object, instead of triggering a full re-render.
+Modified: Moved item variable declaration to the outer scope of the try...catch block so it can be accessed in the catch block for resetting UI elements.
+    */
+// --- Replace the existing updateSequences function in appLogic.js with this version ---
+async function updateSequences(itemId) {
+    if (!itemId) { console.error("updateSequences: itemId missing"); return; }
+    let item = null; // Define item variable in the outer scope
+
+    try {
+        item = await findInventoryItemByItemId(itemId); // Assign to outer scope variable
+        if (!item || !item.isActive || !item.isReel || !item.toCount) {
+            console.warn(`Cannot update sequences: Item ${itemId} not found, inactive, not a reel, or already finished.`);
+            // Reset inputs visually if needed, without full re-render
+             const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+             if (itemDiv && item) { // Check if item exists before accessing properties
+                 itemDiv.querySelector('input[data-sequence="inner"]').value = item.innerSequence ?? '';
+                 itemDiv.querySelector('input[data-sequence="outer"]').value = item.outerSequence ?? '';
+                 if(item.isTwoWayReel) {
+                     itemDiv.querySelector('input[data-sequence="inner2"]').value = item.innerSequence2 ?? '';
+                     itemDiv.querySelector('input[data-sequence="outer2"]').value = item.outerSequence2 ?? '';
+                 }
+             }
+            // applyCurrentFilters(); // ***** REMOVED *****
+            return;
+        }
+
+        // Find the specific item's div in the DOM to get input values AND to update later
+        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+        if (!itemDiv) {
+             console.error(`Could not find item div for itemId ${itemId} to read/update sequence inputs.`);
+             return; // Cannot proceed without the UI elements
+        }
+
+         // Get sequence values directly from the inputs within this item's div
+         const sequenceValues = {
+            inner1: itemDiv.querySelector('input[data-sequence="inner"]')?.value ?? '',
+            outer1: itemDiv.querySelector('input[data-sequence="outer"]')?.value ?? '',
+            inner2: itemDiv.querySelector('input[data-sequence="inner2"]')?.value ?? '',
+            outer2: itemDiv.querySelector('input[data-sequence="outer2"]')?.value ?? '',
+         };
+
+        // Store raw input values in the item model
+        item.innerSequence = sequenceValues.inner1;
+        item.outerSequence = sequenceValues.outer1;
+        if (item.isTwoWayReel) {
+            item.innerSequence2 = sequenceValues.inner2;
+            item.outerSequence2 = sequenceValues.outer2;
+        } else {
+            item.innerSequence2 = ''; item.outerSequence2 = ''; // Clear second pair if not two-way
+        }
+
+        // Calculate footage based on the *updated* sequences
+        const calculatedFootage = calculateFootageForItem(item, sequenceValues); // Pass item and sequences
+        const previousCalculatedFootage = item.calculatedFootage; // Store previous for comparison
+        item.calculatedFootage = calculatedFootage; // Update model regardless of validity for UI
+
+        let countUpdated = false;
+        // Update the main count only if calculation is valid
+        if (calculatedFootage !== null) {
+            const updatedItemResult = await recordOrUpdateCount(itemId, calculatedFootage, 'sequence_calc', {
+                 sequences: sequenceValues // Log the sequences used
+            });
+            if (updatedItemResult) {
+                countUpdated = true; // Mark that the count was successfully updated via recordOrUpdateCount
+                console.log(`Sequence calculation successful for ${itemId}, count updated to ${calculatedFootage}.`);
+            } else {
+                 console.warn(`Sequence calculation successful for ${itemId}, but count update failed or was disallowed (e.g., item finished).`);
+                 // Count wasn't updated, but sequences were. Ensure save happens.
+            }
+        } else {
+            // Calculation invalid or no sequences entered
+             console.log(`Sequences updated for ${itemId}, but calculation invalid or incomplete. Saving sequence data only.`);
+             // If calculation is invalid, should we clear the main 'counted' field or leave it?
+             // Leave the main 'counted' field as it was previously. The user must explicitly flag or enter 0.
+        }
+
+        // ***** ADDED: Direct DOM Manipulation *****
+        // Update the UI elements directly without a full re-render
+        const countInput = itemDiv.querySelector('input[data-type="count-input"]');
+        const totalFootageDisplay = itemDiv.querySelector('.calculated-footage-display.total-footage');
+
+        if (countInput && totalFootageDisplay) {
+            if (calculatedFootage !== null) {
+                // Update count input value and disable it
+                countInput.value = calculatedFootage;
+                countInput.disabled = true; // Disable manual count when calculated
+                countInput.readOnly = false; // Ensure not readonly if it became valid calc
+                countInput.title = "Quantity calculated from footage"; // Update tooltip
+
+                // Update footage display span
+                totalFootageDisplay.textContent = `Total: ${calculatedFootage.toFixed(2)} ft`;
+                totalFootageDisplay.style.color = ''; // Reset color
+                totalFootageDisplay.title = ''; // Clear title if it was invalid
+            } else {
+                // Calculation invalid or no valid sequences entered
+                // Re-enable count input if it was disabled *by calculation*
+                // But only if the item is active and toCount (i.e., editable)
+                const allowManualInput = item.isActive && item.toCount;
+                countInput.disabled = !allowManualInput; // Re-enable if appropriate
+                countInput.readOnly = !allowManualInput; // Make readonly if finished/inactive
+                countInput.title = allowManualInput ? "" : (item.isActive ? "Item finished for this cycle (view only)" : "Item is inactive");
+
+                 // Update footage display span to show invalid state
+                 const hasPartialSequenceInput = sequenceValues.inner1 || sequenceValues.outer1 || (item.isTwoWayReel && (sequenceValues.inner2 || sequenceValues.outer2));
+                 if (hasPartialSequenceInput) {
+                    totalFootageDisplay.textContent = 'Total: Invalid';
+                    totalFootageDisplay.style.color = 'var(--danger-color)';
+                    totalFootageDisplay.title = 'Incomplete or invalid sequence values entered.';
+                 } else {
+                      totalFootageDisplay.textContent = 'Total: ---';
+                      totalFootageDisplay.style.color = '';
+                      totalFootageDisplay.title = '';
+                 }
+
+                 // If calculation became invalid, reset item.calculatedFootage to null explicitly
+                 // This was already done above, but double-check
+                 if(item.calculatedFootage !== null) item.calculatedFootage = null;
+
+                 // Should we reset the countInput.value if calculation becomes invalid?
+                 // No, let's keep the last valid value (either manual or calculated).
+                 // The user needs to explicitly change it or flag it.
+            }
+        } else {
+             console.error(`Could not find count input or footage display for item ${itemId} during DOM update.`);
+        }
+        // ***** END: Direct DOM Manipulation *****
+
+
+        // Trigger autosave regardless of whether count was updated (saves sequence changes)
+        autoSave().catch(e => console.error("Autosave failed after updating sequences:", e));
+        console.log(`Sequences updated for ${itemId}, background save triggered.`);
+
+        // Re-render needed ONLY if count/status changed in a way that affects filters? No, avoid.
+        // applyCurrentFilters(); // ***** REMOVED *****
+        updateSummaryCards(); // Update summary cards as count might have changed
+
+    } catch (error) {
+        console.error(`Error updating sequences for itemId ${itemId}:`, error);
+        alert(`Failed to update sequences for ${item?.SKU || itemId}. See console.`);
+        // Attempt to reset sequence inputs visually on error without full re-render
+         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+         if (itemDiv && item) { // Use the item variable from the outer scope
+            itemDiv.querySelector('input[data-sequence="inner"]').value = item.innerSequence ?? '';
+            itemDiv.querySelector('input[data-sequence="outer"]').value = item.outerSequence ?? '';
+            if(item.isTwoWayReel) {
+                itemDiv.querySelector('input[data-sequence="inner2"]').value = item.innerSequence2 ?? '';
+                itemDiv.querySelector('input[data-sequence="outer2"]').value = item.outerSequence2 ?? '';
+            }
+            // Also reset calculated display and count input state
+             const countInput = itemDiv.querySelector('input[data-type="count-input"]');
+             const totalFootageDisplay = itemDiv.querySelector('.calculated-footage-display.total-footage');
+             if (countInput) {
+                 countInput.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
+                 countInput.disabled = !item.isActive || !item.toCount || (item.calculatedFootage !== null); // Reset based on last known good state
+                 countInput.readOnly = !item.isActive || !item.toCount;
+                 countInput.title = !item.isActive ? "Item is inactive" : !item.toCount ? "Item finished for cycle (view only)" : (item.calculatedFootage !== null ? "Quantity calculated from footage" : "");
+             }
+             if (totalFootageDisplay) {
+                 totalFootageDisplay.textContent = (item.calculatedFootage !== null) ? `Total: ${item.calculatedFootage.toFixed(2)} ft` : 'Total: ---';
+                 totalFootageDisplay.style.color = '';
+                 totalFootageDisplay.title = '';
+             }
+         }
+        // applyCurrentFilters(); // ***** REMOVED *****
+    }
 }
 
+/*
+Added Logging: Included more console.log statements to trace execution flow and values.
+DOM Update Fix: The core logic for updating countInput.value = calculatedFootage when calculatedFootage !== null was already present. The issue might have been subtle or related to timing/event propagation elsewhere. The key change here is the verification that this line is being executed and the surrounding logic for disabling/enabling the input is correct. Explicitly setting countInput.readOnly = false when calculated ensures it's not inadvertently left readonly. The addition of more logging helps confirm this section runs as expected.
+DOM Reset Logic: Improved the visual reset logic in the catch block and the initial check (!item || !item.isActive || !item.toCount) to correctly reflect the item.toCount state (blank inputs if true).
+*/
+// --- Replace the existing updateSequences function in appLogic.js with this version ---
+async function updateSequences(itemId) {
+    if (!itemId) { console.error("updateSequences: itemId missing"); return; }
+    console.log(`[updateSequences] Triggered for itemId: ${itemId}`); // Add entry log
+    let item = null; // Define item variable in the outer scope
+
+    try {
+        item = await findInventoryItemByItemId(itemId); // Assign to outer scope variable
+        if (!item || !item.isActive || !item.toCount) {
+             console.warn(`Cannot update sequences: Item ${itemId} not found, inactive, or already finished.`);
+             // Visually reset inputs if needed, without full re-render
+             const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+             if (itemDiv && item) {
+                 itemDiv.querySelector('input[data-sequence="inner"]').value = item.toCount ? '' : item.innerSequence ?? '';
+                 itemDiv.querySelector('input[data-sequence="outer"]').value = item.toCount ? '' : item.outerSequence ?? '';
+                 if (item.isTwoWayReel) {
+                     itemDiv.querySelector('input[data-sequence="inner2"]').value = item.toCount ? '' : item.innerSequence2 ?? '';
+                     itemDiv.querySelector('input[data-sequence="outer2"]').value = item.toCount ? '' : item.outerSequence2 ?? '';
+                 }
+             }
+            return;
+        }
+
+        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+        if (!itemDiv) {
+             console.error(`Could not find item div for itemId ${itemId} to read/update sequence inputs.`);
+             return;
+        }
+
+         // Get sequence values directly from the inputs
+         const sequenceValues = {
+            inner1: itemDiv.querySelector('input[data-sequence="inner"]')?.value ?? '',
+            outer1: itemDiv.querySelector('input[data-sequence="outer"]')?.value ?? '',
+            inner2: itemDiv.querySelector('input[data-sequence="inner2"]')?.value ?? '',
+            outer2: itemDiv.querySelector('input[data-sequence="outer2"]')?.value ?? '',
+         };
+         console.log(`[updateSequences] Read sequence values from inputs:`, sequenceValues);
+
+        // Store raw input values in the item model
+        item.innerSequence = sequenceValues.inner1;
+        item.outerSequence = sequenceValues.outer1;
+        if (item.isTwoWayReel) {
+            item.innerSequence2 = sequenceValues.inner2;
+            item.outerSequence2 = sequenceValues.outer2;
+        } else {
+            item.innerSequence2 = ''; item.outerSequence2 = '';
+        }
+
+        // Calculate footage based on the updated sequences
+        const calculatedFootage = calculateFootageForItem(item, sequenceValues);
+        item.calculatedFootage = calculatedFootage; // Update model's calculation result
+        console.log(`[updateSequences] Calculated footage: ${calculatedFootage}`);
+
+        let countUpdated = false;
+        // Update the main count only if calculation is valid
+        if (calculatedFootage !== null) {
+            console.log(`[updateSequences] Valid calculation. Calling recordOrUpdateCount with ${calculatedFootage}`);
+            const updatedItemResult = await recordOrUpdateCount(itemId, calculatedFootage, 'sequence_calc', {
+                 sequences: sequenceValues // Log the sequences used
+            });
+            if (updatedItemResult) {
+                countUpdated = true;
+                console.log(`[updateSequences] recordOrUpdateCount successful. Item count updated in model to ${calculatedFootage}.`);
+            } else {
+                 console.warn(`[updateSequences] Sequence calculation successful, but recordOrUpdateCount failed or was disallowed (e.g., item finished).`);
+            }
+        } else {
+            console.log(`[updateSequences] Calculation invalid or incomplete. Saving sequence data only.`);
+            // Leave main 'counted' field as is. User must explicitly flag or enter 0.
+        }
+
+        // ***** MODIFIED: Direct DOM Manipulation *****
+        const countInput = itemDiv.querySelector('input[data-type="count-input"]');
+        const totalFootageDisplay = itemDiv.querySelector('.calculated-footage-display.total-footage');
+
+        if (countInput && totalFootageDisplay) {
+            console.log(`[updateSequences] Updating DOM elements directly...`);
+            if (calculatedFootage !== null) {
+                // --- Update count input value and disable it ---
+                console.log(`[updateSequences] Setting countInput value to ${calculatedFootage} and disabling.`);
+                countInput.value = calculatedFootage; // ***** KEY FIX: Ensure this updates visually *****
+                countInput.disabled = true; // Disable manual count when calculated
+                countInput.readOnly = false; // Ensure not readonly if it became valid calc
+                countInput.title = "Quantity calculated from footage";
+
+                // --- Update footage display span ---
+                totalFootageDisplay.textContent = `Total: ${calculatedFootage.toFixed(2)} ft`;
+                totalFootageDisplay.style.color = '';
+                totalFootageDisplay.title = '';
+            } else {
+                // --- Calculation invalid or no valid sequences entered ---
+                // Re-enable count input if it was disabled *by calculation*
+                const allowManualInput = item.isActive && item.toCount;
+                console.log(`[updateSequences] Invalid calculation. Setting countInput disabled: ${!allowManualInput}`);
+                countInput.disabled = !allowManualInput;
+                countInput.readOnly = !allowManualInput; // Readonly if finished/inactive
+                countInput.title = allowManualInput ? "Enter current count" : (item.isActive ? "Item finished for this cycle (view only)" : "Item is inactive");
+
+                // --- Update footage display span to show invalid state ---
+                const hasPartialSequenceInput = sequenceValues.inner1 || sequenceValues.outer1 || (item.isTwoWayReel && (sequenceValues.inner2 || sequenceValues.outer2));
+                 if (hasPartialSequenceInput) {
+                    totalFootageDisplay.textContent = 'Total: Invalid';
+                    totalFootageDisplay.style.color = 'var(--danger-color)';
+                    totalFootageDisplay.title = 'Incomplete or invalid sequence values entered.';
+                 } else {
+                    totalFootageDisplay.textContent = 'Total: ---';
+                    totalFootageDisplay.style.color = '';
+                    totalFootageDisplay.title = '';
+                 }
+                 // Leave the countInput.value as it was (user must explicitly clear/flag)
+            }
+            console.log(`[updateSequences] DOM updates applied for count input and footage display.`);
+        } else {
+             console.error(`[updateSequences] Could not find count input or footage display for item ${itemId} during DOM update.`);
+        }
+        // ***** END: Direct DOM Manipulation *****
+
+        // Trigger autosave regardless (saves sequence changes even if count didn't update)
+        autoSave().catch(e => console.error("Autosave failed after updating sequences:", e));
+        console.log(`[updateSequences] Sequences updated for ${itemId}, background save triggered.`);
+
+        // No full re-render needed. Update summary cards as count might have changed.
+        updateSummaryCards();
+
+    } catch (error) {
+        console.error(`Error updating sequences for itemId ${itemId}:`, error);
+        alert(`Failed to update sequences for ${item?.SKU || itemId}. See console.`);
+        // Attempt to reset sequence inputs visually on error without full re-render
+         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+         if (itemDiv && item) {
+             itemDiv.querySelector('input[data-sequence="inner"]').value = item.toCount ? '' : item.innerSequence ?? '';
+             itemDiv.querySelector('input[data-sequence="outer"]').value = item.toCount ? '' : item.outerSequence ?? '';
+             if (item.isTwoWayReel) {
+                 itemDiv.querySelector('input[data-sequence="inner2"]').value = item.toCount ? '' : item.innerSequence2 ?? '';
+                 itemDiv.querySelector('input[data-sequence="outer2"]').value = item.toCount ? '' : item.outerSequence2 ?? '';
+             }
+            // Also reset calculated display and count input state based on last known *good* state (item object)
+             const countInput = itemDiv.querySelector('input[data-type="count-input"]');
+             const totalFootageDisplay = itemDiv.querySelector('.calculated-footage-display.total-footage');
+             if (countInput) {
+                  // Reset count input based on item's last known state
+                 countInput.value = item.toCount ? '' : (item.counted === null || item.counted === undefined) ? '' : item.counted;
+                 const isCalculated = item.isReel && item.footageFactor > 0 && item.calculatedFootage !== null;
+                 countInput.disabled = !item.isActive || isCalculated;
+                 countInput.readOnly = !item.isActive || !item.toCount;
+                 countInput.title = !item.isActive ? "Item is inactive" : isCalculated ? "Quantity calculated from footage" : !item.toCount ? "Item finished for cycle (view only)" : "Enter current count";
+             }
+             if (totalFootageDisplay) {
+                 totalFootageDisplay.textContent = (item.calculatedFootage !== null) ? `Total: ${item.calculatedFootage.toFixed(2)} ft` : 'Total: ---';
+                 totalFootageDisplay.style.color = '';
+                 totalFootageDisplay.title = '';
+             }
+         }
+    }
+}
+// --- End of updateSequences ---
+
+
 // Called by event handler on notes textarea input/change
-async function updateItemNotes(itemId, notes) {
+/* async function updateItemNotes(itemId, notes) {
     if (!itemId) { console.error("updateItemNotes: itemId missing"); return; }
     try {
         const item = await findInventoryItemByItemId(itemId);
@@ -1172,7 +1639,80 @@ async function updateItemNotes(itemId, notes) {
         console.error(`Error updating notes for itemId ${itemId}:`, error);
         // Maybe provide visual feedback of save failure?
     }
+} */
+
+    /*
+Removed: The call to applyCurrentFilters(); has been removed.
+Removed: Checks preventing notes updates on inactive or finished items (notes can be updated anytime).
+Added: Explicit autoSave().catch(...) call after notes are updated.
+Added: Logic to manually reset the textarea value if the item isn't found or an error occurs, avoiding a full re-render.
+    */
+async function updateItemNotes(itemId, notes) {
+    if (!itemId) { console.error("updateItemNotes: itemId missing"); return; }
+    try {
+        const item = await findInventoryItemByItemId(itemId);
+        // Allow updating notes even if inactive? Yes. But not if finished? Yes.
+        // Allow notes update even if finished for the cycle.
+        if (!item /*|| !item.isActive || !item.toCount*/) { // Removed checks preventing notes on finished/inactive items
+             console.warn(`Cannot update notes: Item ${itemId} not found.`);
+             // Re-render to reset textarea if needed? No, avoid re-render.
+             // applyCurrentFilters(); // ***** REMOVED *****
+             // Reset textarea manually if needed
+             const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+             const textarea = itemDiv?.querySelector('textarea[data-type="notes-input"]');
+             if(textarea && item) textarea.value = item.notes ?? ''; // Reset to DB value
+            return;
+        }
+
+        if (item.notes !== notes) {
+            const oldNotes = item.notes;
+            item.notes = notes;
+            const timestamp = new Date().toISOString();
+
+            // Log the note change
+            const logEntry = {
+                type: 'update_notes',
+                itemId: item.itemId,
+                SKU: item.SKU,
+                location: item.location,
+                user: getUserIdentifier(),
+                timestamp: timestamp,
+                details: {
+                    oldValue: oldNotes,
+                    newValue: notes
+                }
+            };
+            if (item.currentRecountBatchId) {
+                logEntry.type = 'recount_update_notes';
+                logEntry.details.recountBatchId = item.currentRecountBatchId;
+            }
+
+            try {
+                await logTransaction(logEntry); // Use unified logging
+                console.log(`Updated notes for ${itemId} (SKU: ${item.SKU}, Loc: ${item.location})`);
+            } catch (logError) {
+                 console.error(`Failed to log note update for ${itemId}:`, logError);
+            }
+
+            // Trigger autosave
+            autoSave().catch(e => console.error("Autosave failed after updating notes:", e)); // ***** ENSURE save is triggered *****
+            // No re-render needed just for notes if using event delegation correctly
+             console.log(`Notes updated for ${itemId}, background save triggered.`);
+        }
+    } catch (error) {
+        console.error(`Error updating notes for itemId ${itemId}:`, error);
+        // Maybe provide visual feedback of save failure?
+        // Manually reset textarea on error
+        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
+        const textarea = itemDiv?.querySelector('textarea[data-type="notes-input"]');
+        if(textarea) {
+             findInventoryItemByItemId(itemId).then(item => { // Fetch original value on error
+                 if(item) textarea.value = item.notes ?? '';
+             });
+        }
+    }
 }
+
 
 // ** NEW: Function to handle adding recount adjustments **
 // (Keep this function as is from previous versions, assuming it's correct)
@@ -1512,7 +2052,7 @@ async function addRecountAdjustment(itemId, adjustmentTxId, adjustmentQtyStr) {
    }
 } */
 
-   // --- Replace the existing renderInventoryList function in appLogic.js with this version ---
+   /* // --- Replace the existing renderInventoryList function in appLogic.js with this version ---
 function renderInventoryList() {
     const container = document.getElementById('inventoryList');
     if (!container) { console.error("Inventory list container not found."); return; }
@@ -1752,6 +2292,318 @@ function renderInventoryList() {
         }); // End currentInventory.forEach
 
         // Append the fragment containing all items (or error placeholders) to the container
+        container.appendChild(fragment);
+        console.log(`Rendered ${currentInventory.length} items matching filters:`, currentFilters);
+
+    } catch (error) { // Catch errors in the overall rendering process
+        console.error("Error rendering inventory list:", error);
+        container.innerHTML = `<p class="error-message">Error displaying inventory list. Check console.</p>`;
+   }
+}
+// --- End of renderInventoryList --- */
+
+/* Count Input: Now renders value="" if item.toCount is true.
+Captured Qty Span: Now wrapped in a span with clickable-value class, data-action="apply-expected-qty", and data-value attribute if item.capturedQuantity exists. Added (Expected: N/A) text otherwise.
+createSequenceDisplaySpan Helper: Adds the clickable-value class to the span if displayValue !== '---'. Retains data-action, data-sequence-type, and data-sequence-value.
+Sequence Inputs: Now created using a helper function createSequenceInput. This function explicitly sets value="" if item.toCount is true, otherwise uses the current item.innerSequence etc.
+Notes Textarea: Now renders value="" if item.toCount is true.
+Disabling Logic: Reviewed disabled/readonly logic for count, sequences, and notes to ensure consistency (generally disabled/readonly if inactive or finished, allowing notes on finished items). */
+// --- Replace the existing renderInventoryList function in appLogic.js with this version ---
+function renderInventoryList() {
+    const container = document.getElementById('inventoryList');
+    if (!container) { console.error("Inventory list container not found."); return; }
+
+    try { // Outer try block for the whole function
+        container.innerHTML = ''; // Clear previous list
+        const fragment = document.createDocumentFragment();
+
+        if (currentInventory.length === 0) {
+            // ... (Keep the improved 'no items' message logic) ...
+            let message = 'No items match the current criteria.';
+            const hasActiveFilters = currentFilters.location || currentFilters.searchTerm || currentFilters.status !== 'active' || currentFilters.filterByToCountStatus !== 'to_count';
+
+            if (database.inventory.length === 0) {
+                message = 'Inventory is empty. Import a CSV to begin.';
+            } else if (!hasActiveFilters && !database.inventory.some(item => item.isActive && item.toCount)) {
+                 message = 'No items currently marked "To Count". Start a new count cycle or use the Summary Card filters to view other items (e.g., "Counted", "Active", "Total").';
+            } else {
+                message = 'No items match: ';
+                let filterParts = [];
+                if (currentFilters.location) filterParts.push(`Location="${currentFilters.location}"`);
+                if (currentFilters.searchTerm) filterParts.push(`Search="${currentFilters.searchTerm}"`);
+                if (currentFilters.status !== 'all') filterParts.push(`Status="${currentFilters.status}"`);
+
+                switch (currentFilters.filterByToCountStatus) {
+                    case 'counted': filterParts.push("View='Finished Items'"); break;
+                    case 'to_count': filterParts.push("View='Items To Count'"); break;
+                    case 'all': filterParts.push("View='All Items'"); break;
+                    default: break; // Should not happen, but good practice
+                }
+                message += filterParts.join(', ');
+                 if (currentFilters.filterByToCountStatus === 'to_count') {
+                     message += ". Try the 'Counted' card to see finished items, or 'Active'/'Total' for broader views.";
+                 } else if (currentFilters.filterByToCountStatus === 'counted') {
+                      message += ". Try the 'Uncounted' card to see items still needing count, or 'Active'/'Total'.";
+                 } else if (currentFilters.filterByToCountStatus === 'all' && currentFilters.status === 'active') {
+                     message += ". Try the 'Total Items' card to include inactive items.";
+                 }
+            }
+            container.innerHTML = `<p>${message}</p>`;
+            return; // Exit function if no items to render
+        }
+
+        currentInventory.forEach(item => {
+            // Inner try...catch for rendering a single item
+            try {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'inventory-item';
+                itemDiv.dataset.sku = item.SKU;
+                itemDiv.dataset.itemId = item.itemId;
+
+                // --- Status classes ---
+                 if (!item.isActive) {
+                     itemDiv.classList.add('is-inactive');
+                 } else if (item.toCount) {
+                     itemDiv.classList.add('is-tocount');
+                     if (item.isUncounted) {
+                         itemDiv.classList.add('is-uncounted');
+                     }
+                 } else {
+                     itemDiv.classList.add('is-finished');
+                     if (!item.isUncounted && item.counted !== null) {
+                         itemDiv.classList.add('is-counted');
+                     }
+                 }
+                if (item.isReel) itemDiv.classList.add('is-reel');
+                if (item.isTwoWayReel) itemDiv.classList.add('is-two-way-reel');
+
+                // --- Create Columns ---
+                const columns = {};
+                columns.details = document.createElement('div');
+                columns.count = document.createElement('div');
+                columns.sequences1 = document.createElement('div');
+                columns.sequences2 = document.createElement('div');
+                columns.notes = document.createElement('div');
+                columns.actions = document.createElement('div');
+                columns.details.className = 'item-details';
+                columns.count.className = 'item-count';
+                columns.sequences1.className = 'item-sequences seq-pair-1';
+                columns.sequences2.className = 'item-sequences seq-pair-2';
+                columns.notes.className = 'item-notes';
+                columns.actions.className = 'item-actions';
+
+                // --- Populate Details Column ---
+                const reelInfo = item.isReel ? ` (Reel${item.reelNumber ? `: ${item.reelNumber}` : ''}${item.isTwoWayReel ? ', 2-Way' : ''})` : '';
+                const toCountIndicator = item.toCount ? `<span class="tocount-indicator" title="Marked for current count cycle">🎯</span>` : '';
+                const finishedIndicator = !item.toCount && item.isActive ? `<span class="finished-indicator" title="Finished for cycle (Count: ${item.counted ?? 'Uncounted'})">✔️</span>` : '';
+                const inactiveIndicator = !item.isActive ? '<span class="inactive-indicator" title="Inactive Item">🚫</span>' : '';
+
+                columns.details.innerHTML = `
+                    <div class="item-sku">
+                         ${inactiveIndicator} ${item.isActive ? (item.toCount ? toCountIndicator : finishedIndicator) : ''}
+                        ${item.SKU}${reelInfo}
+                    </div>
+                    <div class="item-desc">${item.Description || 'N/A'}</div>
+                    <div class="item-loc">Loc: ${item.location || 'N/A'}</div>
+                    <div class="item-id" style="font-size: 0.7em; color: grey;">ID: ${item.itemId}</div>
+                `;
+
+                // --- Populate Count Column ---
+                 const countInput = document.createElement('input');
+                 countInput.type = 'number';
+                 // ***** MODIFIED ***** Always start blank if item is 'toCount'
+                 countInput.value = item.toCount ? '' : (item.counted === null || item.counted === undefined) ? '' : item.counted;
+                 countInput.dataset.type = 'count-input';
+                 countInput.min = "0";
+                 // Disable if inactive, or if it's a reel with a valid calculation override
+                 const disableCountInput = !item.isActive || (item.isReel && item.footageFactor > 0 && item.calculatedFootage !== null);
+                 countInput.disabled = disableCountInput;
+                 const isFinished = !item.toCount && item.isActive;
+                 countInput.readOnly = isFinished; // Readonly if finished for the cycle
+
+                 // Tooltip logic
+                 if (!item.isActive) {
+                    countInput.title = "Item is inactive";
+                 } else if (item.isReel && item.footageFactor > 0 && item.calculatedFootage !== null) {
+                    countInput.title = "Quantity calculated from footage";
+                 } else if (isFinished) {
+                     countInput.title = "Item finished for this cycle (view only)";
+                 } else if (item.toCount) {
+                     countInput.title = "Enter current count"; // Default title for active/toCount items
+                 }
+
+                 // ***** MODIFIED ***** Make captured quantity clickable
+                 let capturedQtyHtml = '';
+                 if (item.capturedQuantity !== null && item.capturedQuantity !== undefined) {
+                     capturedQtyHtml = `<span class="captured-qty-display clickable-value"
+                                             data-action="apply-expected-qty"
+                                             data-value="${item.capturedQuantity}"
+                                             title="Click to apply ${item.capturedQuantity} to the input">(Expected: ${item.capturedQuantity})</span>`;
+                 } else {
+                     capturedQtyHtml = `<span class="captured-qty-display">(Expected: N/A)</span>`; // Or hide if null? Let's show N/A
+                 }
+
+                columns.count.innerHTML = `<span>Qty:${capturedQtyHtml}</span>`;
+                columns.count.appendChild(countInput);
+
+
+                // --- Populate Sequences Columns ---
+                if (item.isReel) {
+                    // ***** MODIFIED ***** Helper function for clickable sequence display
+                    const createSequenceDisplaySpan = (type, value) => {
+                        const displayValue = (value !== null && value !== undefined && String(value).trim() !== '') ? String(value).trim() : '---';
+                        const actualType = type; // 'Inner', 'Outer', 'Inner2', 'Outer2'
+                        const sequenceInputName = actualType.toLowerCase(); // 'inner', 'outer', 'inner2', 'outer2'
+
+                        if (displayValue === '---') {
+                            // Not clickable if no value captured
+                            return `<span class="captured-sequence-display is-empty">${actualType}: ${displayValue}</span>`;
+                        } else {
+                            // Create clickable span with data attributes, add clickable-value class
+                            return `<span class="captured-sequence-display clickable-value"
+                                          data-action="apply-sequence"
+                                          data-sequence-type="${sequenceInputName}"
+                                          data-sequence-value="${displayValue}"
+                                          title="Click to apply '${displayValue}' to the input below">${actualType}: ${displayValue}</span>`;
+                        }
+                    };
+                    // ***** END OF MODIFIED HELPER FUNCTION *****
+
+                    const disableSequenceInput = !item.isActive || !item.toCount; // Disable if inactive or finished
+
+                    // Function to create input, ensure blank if item.toCount
+                    const createSequenceInput = (sequenceType, currentValue) => {
+                        const input = document.createElement('input');
+                        input.type = 'number';
+                        input.dataset.sequence = sequenceType;
+                        // ***** MODIFIED ***** Render blank if item needs counting
+                        input.value = item.toCount ? '' : currentValue ?? '';
+                        input.placeholder = sequenceType.charAt(0).toUpperCase() + sequenceType.slice(1); // e.g., Inner
+                        input.min = "0";
+                        input.disabled = disableSequenceInput;
+                        input.readOnly = disableSequenceInput; // Match disabled state for clarity
+                         if (disableSequenceInput) {
+                            input.title = !item.isActive ? "Item is inactive" : "Item finished for cycle";
+                         }
+                        return input;
+                    };
+
+                    // Pair 1 - Use helper for display spans, create inputs ensuring blank if toCount
+                    const seq1Group = document.createElement('div');
+                    seq1Group.className = 'sequence-pair-container'; // Container for both groups + total/factor
+
+                    const group1Inner = document.createElement('div');
+                    group1Inner.className = 'sequence-group';
+                    group1Inner.innerHTML = createSequenceDisplaySpan('Inner', item.innerSequence);
+                    group1Inner.appendChild(createSequenceInput('inner', item.innerSequence));
+
+                    const group1Outer = document.createElement('div');
+                    group1Outer.className = 'sequence-group';
+                    group1Outer.innerHTML = createSequenceDisplaySpan('Outer', item.outerSequence);
+                    group1Outer.appendChild(createSequenceInput('outer', item.outerSequence));
+
+                    columns.sequences1.appendChild(group1Inner);
+                    columns.sequences1.appendChild(group1Outer);
+                    columns.sequences1.appendChild(document.createTextNode(' = ')); // Add equals sign
+
+
+                    // Pair 2 (Only if two-way) - Use helper for display spans
+                    if (item.isTwoWayReel) {
+                        const group2Inner = document.createElement('div');
+                        group2Inner.className = 'sequence-group';
+                        group2Inner.innerHTML = createSequenceDisplaySpan('Inner2', item.innerSequence2);
+                        group2Inner.appendChild(createSequenceInput('inner2', item.innerSequence2));
+
+                        const group2Outer = document.createElement('div');
+                        group2Outer.className = 'sequence-group';
+                        group2Outer.innerHTML = createSequenceDisplaySpan('Outer2', item.outerSequence2);
+                        group2Outer.appendChild(createSequenceInput('outer2', item.outerSequence2));
+
+                        columns.sequences2.appendChild(group2Inner);
+                        columns.sequences2.appendChild(group2Outer);
+                        columns.sequences2.appendChild(document.createTextNode(' = '));
+                        columns.sequences2.style.visibility = 'visible';
+                    } else {
+                        columns.sequences2.innerHTML = '';
+                        columns.sequences2.style.visibility = 'hidden';
+                    }
+
+                    // Append Total Calculated Footage and Factor (logic unchanged, append to seq1 column)
+                    const totalFootageDisplay = document.createElement('span');
+                    totalFootageDisplay.className = 'calculated-footage-display total-footage';
+                    const hasAnySequenceInput = item.innerSequence || item.outerSequence || item.innerSequence2 || item.outerSequence2;
+                    if (item.calculatedFootage !== null) {
+                        totalFootageDisplay.textContent = `Total: ${item.calculatedFootage.toFixed(2)} ft`;
+                        totalFootageDisplay.style.color = '';
+                        totalFootageDisplay.title = '';
+                    } else if (hasAnySequenceInput) {
+                         // Show invalid only if sequences *were* entered but calculation failed
+                         totalFootageDisplay.textContent = 'Total: Invalid';
+                         totalFootageDisplay.style.color = 'var(--danger-color)';
+                         totalFootageDisplay.title = 'Incomplete or invalid sequence values entered.';
+                    } else {
+                         totalFootageDisplay.textContent = 'Total: ---';
+                         totalFootageDisplay.style.color = '';
+                         totalFootageDisplay.title = '';
+                    }
+                    columns.sequences1.appendChild(totalFootageDisplay);
+
+
+                    const factorDisplayValue = (typeof item.footageFactor === 'number' && item.footageFactor > 0) ? item.footageFactor : null;
+                    const factorDisplay = factorDisplayValue !== null ? `(@ ${factorDisplayValue})` : '(@ No Factor)';
+                    const factorSpan = document.createElement('span');
+                    factorSpan.className = 'footage-factor-display';
+                    factorSpan.textContent = factorDisplay;
+                    if (factorDisplayValue === null) factorSpan.style.color = 'var(--danger-color)';
+                    columns.sequences1.appendChild(factorSpan);
+
+                } else {
+                    // Hide sequence columns if not a reel
+                    columns.sequences1.innerHTML = '';
+                    columns.sequences1.style.visibility = 'hidden';
+                    columns.sequences2.innerHTML = '';
+                    columns.sequences2.style.visibility = 'hidden';
+                }
+
+                // --- Populate Notes Column ---
+                const notesTextarea = document.createElement('textarea');
+                notesTextarea.dataset.type = 'notes-input';
+                // ***** MODIFIED ***** Render blank if item needs counting
+                notesTextarea.value = item.toCount ? '' : item.notes ?? '';
+                notesTextarea.placeholder = 'Add notes...';
+                notesTextarea.disabled = !item.isActive; // Allow notes even if finished, but not if inactive
+                notesTextarea.readOnly = !item.isActive; // Match disabled state
+                columns.notes.appendChild(notesTextarea);
+
+                // --- Populate Actions Column ---
+                const flagButtonDisabled = !item.isActive || !item.toCount; // Can only flag active items needing count
+                const finalizeButtonDisabled = !item.isActive || !item.toCount; // Can only finalize active items needing count
+                columns.actions.innerHTML = `
+                    <button data-action="flag" class="btn-warning" title="Flag item as uncounted (resets count to null)" ${flagButtonDisabled ? 'disabled' : ''}>Flag</button>
+                    <button data-action="view-history" class="btn-secondary" title="View history for this item">History</button>
+                    <button data-action="finalize-item" class="btn-success" title="Record count and finish this item for the cycle" ${finalizeButtonDisabled ? 'disabled' : ''}>Record & Finish</button>
+                `;
+
+                // --- Append columns ---
+                itemDiv.appendChild(columns.details);
+                itemDiv.appendChild(columns.count);
+                itemDiv.appendChild(columns.sequences1);
+                itemDiv.appendChild(columns.sequences2);
+                itemDiv.appendChild(columns.notes);
+                itemDiv.appendChild(columns.actions);
+
+                // Append the completed itemDiv to the fragment
+                fragment.appendChild(itemDiv);
+
+            } catch (itemError) { // Catch errors rendering a single item
+                 console.error(`Error rendering item ${item?.SKU || item?.itemId || '(Unknown Item)'}:`, itemError);
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'inventory-item error-item';
+                errorDiv.innerHTML = `<p class="error-message" style="margin:0;">Error rendering item ${item?.SKU || '(Unknown SKU)'}</p>`;
+                fragment.appendChild(errorDiv); // Append error placeholder to fragment
+            }
+        }); // End currentInventory.forEach
+
         container.appendChild(fragment);
         console.log(`Rendered ${currentInventory.length} items matching filters:`, currentFilters);
 

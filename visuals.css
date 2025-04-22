@@ -411,6 +411,47 @@ input[type="number"] {
     border-left-color: var(--warning-color) !important; /* Ensure warning color shows */
 }
 
+/* Style for any span intended to be clickable to populate an input */
+.clickable-value {
+    cursor: pointer;
+    color: var(--secondary-color); /* Blue color to indicate interactivity */
+    text-decoration: underline;
+    text-decoration-style: dashed; /* Dashed underline for subtle distinction */
+    transition: color 0.2s ease, background-color 0.2s ease;
+    padding: 1px 3px; /* Add slight padding for hover effect */
+    border-radius: 3px;
+    font-weight: 500; /* Slightly bolder */
+    margin: 0 2px; /* Add minimal horizontal spacing */
+}
+
+.clickable-value:hover {
+    color: var(--primary-color); /* Darker blue on hover */
+    background-color: #e0eaf1; /* Very light blue background on hover */
+    text-decoration-style: solid;
+}
+
+/* Apply clickable style specifically to the captured quantity display */
+.captured-qty-display.clickable-value {
+     /* Inherit base clickable styles */
+     font-style: normal; /* Override italic style when clickable */
+     font-size: 0.85em; /* Slightly larger if clickable? Optional */
+}
+
+/* Ensure sequence group layout adapts well */
+.sequence-group {
+    display: flex;
+    flex-wrap: wrap; /* Allow wrapping if needed */
+    align-items: baseline; /* Align text baselines */
+    gap: 5px; /* Space between label, span, input */
+    margin-bottom: 3px; /* Space between groups */
+}
+
+/* Ensure inputs don't overlap clickable spans */
+.sequence-group input[type="number"] {
+   /* width: 75px; - Keep existing width or adjust as needed */
+   flex-shrink: 0; /* Prevent input from shrinking too much */
+}
+
 /* Indicators */
 .tocount-indicator, .finished-indicator, .inactive-indicator {
     display: inline-block;
