@@ -247,8 +247,13 @@
     <script src="jspdf.plugin.autotable.min.js"></script>
 
     <!-- {/* Application Logic */} -->
+    <!-- *(Note: The order matters. `stateManager` provides globals used by others. `uiRenderer` and `dataLogic` provide functions used by `eventHandlers` and `importExport`.)* -->
     <script src="offlineDB.js"></script>
-    <script src="appLogic.js"></script>
+    <script src="stateManager.js"></script>
+    <script src="uiRenderer.js"></script>
+    <script src="dataLogic.js"></script>
+    <script src="importExport.js"></script>
+    <script src="eventHandlers.js"></script>
     
     <footer class="p-4 text-sm text-left mt-4">
         <div>Version: 3.2.0 (04/17/2025)</div>
