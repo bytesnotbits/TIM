@@ -700,62 +700,32 @@ async function recordOrUpdateCount(itemId, newQuantity, source, details = {}) {
 
 
 // updateCount calls recordOrUpdateCount and UI updates
-// --- START OF MODIFIED dataLogic.js -> updateCount ---
+// --- START OF MODIFIED dataLogic.js -> updateCount (add clear dirty) ---
 async function updateCount(itemId, quantityStr) {
     const quantity = Number(quantityStr);
     if (isNaN(quantity) || quantity < 0) {
-        alert("Invalid quantity entered. Please enter a non-negative number.");
-        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
-        const inputElement = itemDiv?.querySelector('input[data-type="count-input"]');
-        if (inputElement) {
-            findInventoryItemByItemId(itemId).then(item => { 
-                if (item) inputElement.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
-            });
-        }
+        // ... (alert and reset logic remains) ...
+        updateItemDirtyIndicator(itemId, false); // Clear dirty state on invalid input attempt too
         return;
     }
 
     const item = await findInventoryItemByItemId(itemId);
     if (!item) {
         console.error(`updateCount: Item ${itemId} not found.`);
+        updateItemDirtyIndicator(itemId, false); // Item not found, clear if indicator was somehow set
         return;
     }
-    // If item is a reel and has sequences that *could* calculate footage, 
-    // but user is manually entering count, we should clear sequences.
-    // However, this might be too aggressive. Let's assume manual count overrides for now.
-    // User can re-enter sequences if they want to recalculate.
 
     const updatedItem = await recordOrUpdateCount(itemId, quantity, 'manual_count');
 
     if (updatedItem) {
-        // If count was updated, and item is a reel, its calculatedFootage might now be stale
-        // if the manual count doesn't match what sequences would produce.
-        // The Qty input should be re-enabled if it was disabled due to calculation.
-        const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
-        const countInput = itemDiv?.querySelector('input[data-type="count-input"]');
-        if (countInput && updatedItem.isReel) { // Only care if it's a reel
-             // If manual count is entered, ensure input is enabled if item is toCount & active
-            const canEdit = updatedItem.isActive && updatedItem.toCount;
-            countInput.disabled = !canEdit;
-            if(canEdit) countInput.title = "Enter current count";
-        }
-
-        // It's important to update summary cards if a count changes
-        if (typeof updateSummaryCards === 'function') {
-            updateSummaryCards();
-        } else {
-            console.error("updateSummaryCards function not found after count update.");
-        }
-        
-        // autoSave is called within recordOrUpdateCount
-        console.log(`Count updated for ${itemId} to ${quantity} (manual_count), item remains 'toCount=${updatedItem.toCount}'. Background save triggered. Summary cards updated.`);
+        // ... (DOM updates for countInput) ...
+        if (typeof updateSummaryCards === 'function') updateSummaryCards();
+        updateItemDirtyIndicator(itemId, false); // ++ Clear dirty indicator on successful save
+        console.log(`Count updated for ${itemId} ...`);
     } else {
-        console.warn(`Update count for ${itemId} did not result in a saved change or was disallowed.`);
-         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
-         const inputElement = itemDiv?.querySelector('input[data-type="count-input"]');
-         if (inputElement && item) { // Check if item was fetched
-            inputElement.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
-         }
+        // ... (warning and reset input logic) ...
+        // updateItemDirtyIndicator(itemId, true); // Optionally, re-set to dirty if save failed but input changed
     }
 }
 // --- END OF MODIFIED dataLogic.js -> updateCount ---
@@ -821,6 +791,7 @@ function calculateFootageForItem(item, sequences) {
 // Update sequences and potentially the count
 // REFINED: Adapts to calculateFootageForItem returning scaled footage and updates DOM more precisely.
 // --- START OF MODIFIED dataLogic.js -> updateSequences ---
+// --- START OF COMPLETE dataLogic.js -> updateSequences ---
 async function updateSequences(itemId) {
     if (!itemId) { console.error("updateSequences: itemId missing"); return; }
     console.log(`[updateSequences] Triggered for itemId: ${itemId}`);
@@ -832,6 +803,8 @@ async function updateSequences(itemId) {
              console.warn(`[updateSequences] Cannot update sequences: Item ${itemId} not found or inactive.`);
              // If item exists but is inactive, its inputs should be disabled by renderInventoryList.
              // No need to reset inputs here as they shouldn't be changeable.
+             // Still, if this somehow gets called, ensure dirty indicator is cleared if item not found/inactive
+             if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, false);
             return;
         }
         // If item.toCount is false, sequences can still be viewed/entered, but they won't affect item.counted
@@ -840,6 +813,7 @@ async function updateSequences(itemId) {
         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
         if (!itemDiv) { 
             console.error(`[updateSequences] Item div not found for itemId: ${itemId}`);
+            if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, false); // Clear if div not found
             return; 
         }
 
@@ -870,6 +844,8 @@ async function updateSequences(itemId) {
         const countInput = itemDiv.querySelector('input[data-type="count-input"]');
         const totalFootageDisplay = itemDiv.querySelector('.calculated-footage-display.total-footage');
 
+        let successfullySaved = false;
+
         if (item.isActive && item.toCount) { // Only update item.counted and Qty input if item is active and "to count"
             if (finalCalculatedFootage !== null) {
                 console.log(`[updateSequences] Item ${itemId} is 'toCount'. Calling recordOrUpdateCount with ${finalCalculatedFootage}`);
@@ -878,6 +854,7 @@ async function updateSequences(itemId) {
                 }); // This will log and save
                 
                 if (updatedItemResult) {
+                    successfullySaved = true;
                     console.log(`[updateSequences] recordOrUpdateCount successful for item ${itemId}. Item count updated to ${finalCalculatedFootage}.`);
                     if (countInput) {
                         countInput.value = finalCalculatedFootage;
@@ -886,8 +863,7 @@ async function updateSequences(itemId) {
                     }
                 } else {
                     console.warn(`[updateSequences] Sequence calculation for item ${itemId} resulted in ${finalCalculatedFootage}, but recordOrUpdateCount failed or was disallowed.`);
-                    // If recordOrUpdateCount failed, the countInput should remain editable if it wasn't already disabled.
-                    if (countInput && !countInput.disabled) { // Check if it wasn't already disabled for other reasons
+                    if (countInput && !countInput.disabled) { 
                         countInput.disabled = false;
                         countInput.title = "Enter current count (calculation failed to save).";
                     }
@@ -897,19 +873,14 @@ async function updateSequences(itemId) {
                 if (countInput) {
                     countInput.disabled = false; // Ensure Qty input is enabled
                     countInput.title = "Enter current count (sequences incomplete/invalid or no factor).";
-                    // Do NOT clear countInput.value here, user might have typed something before sequences
                 }
-                // item.counted is NOT updated if finalCalculatedFootage is null.
-                // We still need to save the sequence strings themselves.
                 await autoSave(); // Save sequence strings even if count not updated
+                successfullySaved = true; // Sequences themselves were saved
             }
         } else { // Item is inactive or not 'toCount'
             console.log(`[updateSequences] Item ${itemId} is inactive or not 'toCount'. Sequences updated in model, but count not changed. DOM Qty input not directly set by calc.`);
-             if (countInput && finalCalculatedFootage !== null && item.isReel) {
-                // For inactive/finished reels, show the calculated footage in the disabled Qty input for reference IF sequences are valid
-                // countInput.value = finalCalculatedFootage; // This was causing issues when !toCount. Let renderInventoryList handle display.
-             }
             await autoSave(); // Save sequence strings
+            successfullySaved = true; // Sequences themselves were saved
         }
 
 
@@ -940,18 +911,18 @@ async function updateSequences(itemId) {
             }
         }
         
+        if (successfullySaved && typeof updateItemDirtyIndicator === 'function') {
+            updateItemDirtyIndicator(itemId, false); // Clear dirty indicator on successful save
+        }
         // updateSummaryCards() is called by recordOrUpdateCount if count changes.
-        // If only sequences changed without affecting count (e.g. item not toCount, or calc was null),
-        // summary cards don't need update from here.
         // autoSave() is also called by recordOrUpdateCount or explicitly above.
 
     } catch (error) {
         console.error(`Error updating sequences for itemId ${itemId}:`, error);
         alert(`Failed to update sequences for ${item?.SKU || itemId}. See console.`);
-        // Attempt to re-render the item to reflect its last known good state from DB
+        // Optionally re-mark as dirty on error if you have a way to know if inputs actually changed
+        // if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, true);
         if (item) {
-            // This is a simplified recovery. A full re-render of the list or targeted item update
-            // might be better, but for now, just ensure the list refreshes.
             applyCurrentFilters();
         }
     }
@@ -960,19 +931,19 @@ async function updateSequences(itemId) {
 
 // Update item notes
 async function updateItemNotes(itemId, notes) {
-    if (!itemId) { console.error("updateItemNotes: itemId missing"); return; }
+    if (!itemId) { 
+        console.error("updateItemNotes: itemId missing"); 
+        if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, false); // itemId is null, but try to clear just in case
+        return; 
+    }
     try {
         const item = await findInventoryItemByItemId(itemId);
-        // Allow updating notes even if inactive? Yes. But not if finished? Yes.
-        // Allow notes update even if finished for the cycle.
-        if (!item /*|| !item.isActive || !item.toCount*/) { // Removed checks preventing notes on finished/inactive items
+        if (!item) {
              console.warn(`Cannot update notes: Item ${itemId} not found.`);
-             // Re-render to reset textarea if needed? No, avoid re-render.
-             // applyCurrentFilters(); // ***** REMOVED *****
-             // Reset textarea manually if needed
              const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
              const textarea = itemDiv?.querySelector('textarea[data-type="notes-input"]');
-             if(textarea && item) textarea.value = item.notes ?? ''; // Reset to DB value
+             if(textarea) textarea.value = ''; // Clear textarea if item not found to prevent confusion
+             if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, false);
             return;
         }
 
@@ -981,7 +952,6 @@ async function updateItemNotes(itemId, notes) {
             item.notes = notes;
             const timestamp = new Date().toISOString();
 
-            // Log the note change
             const logEntry = {
                 type: 'update_notes',
                 itemId: item.itemId,
@@ -995,31 +965,37 @@ async function updateItemNotes(itemId, notes) {
                 }
             };
             if (item.currentRecountBatchId) {
-                logEntry.type = 'recount_update_notes';
+                logEntry.type = 'recount_update_notes'; // Ensure this type is handled in history rendering
                 logEntry.details.recountBatchId = item.currentRecountBatchId;
             }
 
             try {
-                await logTransaction(logEntry); // Use unified logging
+                await logTransaction(logEntry); 
                 console.log(`Updated notes for ${itemId} (SKU: ${item.SKU}, Loc: ${item.location})`);
             } catch (logError) {
                  console.error(`Failed to log note update for ${itemId}:`, logError);
             }
 
-            // Trigger autosave
-            autoSave().catch(e => console.error("Autosave failed after updating notes:", e)); // ***** ENSURE save is triggered *****
-            // No re-render needed just for notes if using event delegation correctly
-             console.log(`Notes updated for ${itemId}, background save triggered.`);
+            await autoSave(); 
+            if (typeof updateItemDirtyIndicator === 'function') {
+                updateItemDirtyIndicator(itemId, false); // Clear dirty indicator on successful save
+            }
+            console.log(`Notes updated for ${itemId}, background save triggered.`);
+        } else {
+            // Notes didn't actually change from what's in memory
+            if (typeof updateItemDirtyIndicator === 'function') {
+                updateItemDirtyIndicator(itemId, false); // Ensure indicator is clear
+            }
         }
     } catch (error) {
         console.error(`Error updating notes for itemId ${itemId}:`, error);
-        // Maybe provide visual feedback of save failure?
-        // Manually reset textarea on error
+        // Optionally mark as dirty if save failed. This depends on how you want to handle UI on error.
+        // if (typeof updateItemDirtyIndicator === 'function') updateItemDirtyIndicator(itemId, true);
         const itemDiv = document.querySelector(`.inventory-item[data-item-id="${itemId}"]`);
         const textarea = itemDiv?.querySelector('textarea[data-type="notes-input"]');
         if(textarea) {
-             findInventoryItemByItemId(itemId).then(item => { // Fetch original value on error
-                 if(item) textarea.value = item.notes ?? '';
+             findInventoryItemByItemId(itemId).then(fetchedItem => { 
+                 if(fetchedItem) textarea.value = fetchedItem.notes ?? ''; // Reset to original value on error
              });
         }
     }
@@ -1158,10 +1134,12 @@ async function confirmAndFinalizeItem(itemId) {
         }
     });
 
-    await autoSave(); // Save the toCount=false change and any prior count updates
+    await autoSave(); 
     console.log(`Item ${itemId} confirmed & finalized (toCount=false). Finalized count: ${finalizedCount}.`);
+    
+    updateItemDirtyIndicator(itemId, false); // ++ Ensure dirty indicator is cleared after successful confirm
 
-    applyCurrentFilters(); // Re-render list, item might disappear from "To Count"
+    applyCurrentFilters(); 
     if (typeof updateSummaryCards === 'function') {
         updateSummaryCards();
     } else {

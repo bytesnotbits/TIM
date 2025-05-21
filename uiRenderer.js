@@ -20,6 +20,22 @@ function displayError(message, containerElement) {
     }
 }  // End of displayError
 
+function updateItemDirtyIndicator(itemId, isDirty) {
+    const itemSkuDiv = document.querySelector(`.item-sku[data-item-id-sku="${itemId}"]`);
+    if (itemSkuDiv) {
+        const indicator = itemSkuDiv.querySelector('.dirty-indicator');
+        if (indicator) {
+            indicator.style.display = isDirty ? 'inline' : 'none';
+        }
+        itemSkuDiv.dataset.dirty = isDirty ? 'true' : 'false';
+        // console.log(`[updateItemDirtyIndicator] Item ${itemId} dirty indicator set to ${isDirty}`);
+    } else {
+        // This might happen if the item is not currently rendered due to filters
+        // console.warn(`[updateItemDirtyIndicator] SKU div for item ${itemId} not found.`);
+    }
+}
+// --- END OF updateItemDirtyIndicator ---
+
 /* 
 // --- Inventory List Rendering ---
 function renderInventoryList() {
@@ -371,10 +387,12 @@ function renderInventoryList() {
                 const inactiveIndicator = !item.isActive ? '<span class="inactive-indicator" title="Inactive Item">🚫</span>' : '';
                 const recountBatchIndicator = item.currentRecountBatchId ? `<div class="item-recount-batch" style="font-size: 0.8em; color: var(--warning-color); font-weight: bold;">Recount Batch: ${item.currentRecountBatchId}</div>` : '';
 
+                // ++ Add a span for the dirty indicator, initially hidden ++
+                // ++ Add data-dirty attribute to item-sku div ++
                 columns.details.innerHTML = `
-                    <div class="item-sku">
+                    <div class="item-sku" data-item-id-sku="${item.itemId}" data-dirty="false"> 
                          ${inactiveIndicator} ${item.isActive ? (item.toCount ? toCountIndicator : finishedIndicator) : ''}
-                        ${item.SKU}${reelInfo}
+                        <span class="sku-text">${item.SKU}</span><span class="dirty-indicator" style="color: var(--danger-color); margin-left: 3px; display: none;">*</span>${reelInfo}
                     </div>
                     <div class="item-desc">${item.Description || 'N/A'}</div>
                     <div class="item-loc">Loc: ${item.location || 'N/A'}</div>

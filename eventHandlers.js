@@ -477,10 +477,56 @@ function handleInventoryListChange(event) {
 
 // handleInventoryListInput is no longer needed for notes if using 'change' event
 function handleInventoryListInput(event) {
-    // Potentially handle other 'input' events here if needed in the future
-    // For now, it can be empty or removed if only notes were using it.
-    // console.log("Input event triggered:", event.target);
+    const target = event.target;
+    const itemDiv = target.closest('.inventory-item');
+    if (!itemDiv) return;
+    const itemId = itemDiv.dataset.itemId;
+
+    if (!itemId) {
+        console.error("[handleInventoryListInput] Could not find itemId on inventory item div:", itemDiv);
+        return;
+    }
+
+    findInventoryItemByItemId(itemId).then(itemInMemory => {
+        if (!itemInMemory) return;
+
+        let isFieldDirty = false;
+        if (target.matches('input[data-type="count-input"]:not(:disabled)')) {
+            const currentValInInput = target.value.trim();
+            const valInMemory = (itemInMemory.counted === null || itemInMemory.counted === undefined) ? '' : String(itemInMemory.counted);
+            isFieldDirty = currentValInInput !== valInMemory;
+        } else if (target.matches('input[data-sequence]:not(:disabled)')) {
+            const seqType = target.dataset.sequence; // "inner", "outer", "inner2", "outer2"
+            const currentValInInput = target.value.trim();
+            let valInMemory = '';
+            switch(seqType) {
+                case 'inner': valInMemory = itemInMemory.innerSequence; break;
+                case 'outer': valInMemory = itemInMemory.outerSequence; break;
+                case 'inner2': valInMemory = itemInMemory.innerSequence2; break;
+                case 'outer2': valInMemory = itemInMemory.outerSequence2; break;
+            }
+            valInMemory = valInMemory ?? '';
+            isFieldDirty = currentValInInput !== valInMemory;
+        } else if (target.matches('textarea[data-type="notes-input"]:not(:disabled)')) {
+            const currentValInInput = target.value; // Don't trim notes for comparison yet
+            const valInMemory = itemInMemory.notes ?? '';
+            isFieldDirty = currentValInInput !== valInMemory;
+        }
+        
+        // Now, check overall dirty state for the item card
+        // This is a simplified check. A more robust one would iterate all relevant inputs.
+        // For now, if *any* listened-to input event marks it dirty, we show the indicator.
+        // The 'change' event handlers (which save data) will be responsible for clearing it.
+        if(isFieldDirty) {
+            updateItemDirtyIndicator(itemId, true);
+        }
+        // If not isFieldDirty for *this specific input*, we don't automatically set global dirty to false,
+        // as another field on the same card might still be dirty.
+        // The clearing of the dirty flag will happen upon successful save (blur/change event).
+    });
 }
+// --- END OF handleInventoryListInput ---
+
 
 // ++ NEW: Functions to manage Add New Item Modal UI (could also go in uiRenderer.js) ++
 function openAddNewItemModal() {
