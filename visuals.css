@@ -683,5 +683,84 @@ input[type="number"] {
     font-size: 0.9em;
 }
 
+/* Add New Item Modal Specifics */
+#addNewItemModal .modal-content {
+    max-width: 600px; /* Adjust as needed */
+}
+
+#addNewItemModal .modal-body {
+    padding-top: 0; /* Remove default modal body padding if form has its own */
+}
+
+#addNewItemForm .form-group {
+    margin-bottom: 1rem;
+}
+
+#addNewItemForm label {
+    display: block;
+    margin-bottom: 0.3rem;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+#addNewItemForm input[type="text"],
+#addNewItemForm input[type="number"],
+#addNewItemForm select {
+    width: 100%;
+    padding: 0.6rem;
+    border: 1px solid var(--medium-gray);
+    border-radius: 4px;
+    box-sizing: border-box; /* Important for width: 100% */
+}
+
+#addNewItemForm .form-text {
+    font-size: 0.8em;
+    margin-top: 0.2rem;
+}
+#skuCheckMessage.text-success, #reelCheckMessage.text-success { color: var(--success-color); }
+#skuCheckMessage.text-danger, #reelCheckMessage.text-danger { color: var(--danger-color); }
+#skuCheckMessage.text-info { color: var(--secondary-color); }
+
+
+#addNewItemForm .mandatory {
+    color: var(--danger-color);
+    font-weight: bold;
+}
+
+#addNewItemModal .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--medium-gray);
+}
+
+#existingSkuDetails p {
+    margin: 0.3rem 0;
+    font-size: 0.9em;
+}
+#existingSkuDetails span {
+    font-weight: normal;
+    color: var(--dark-gray);
+}
+
+/* New Count Confirmation Modal Specific Styles */
+#newCountConfirmationModal .modal-body ul {
+    padding-left: 20px; /* Standard padding for lists */
+    margin-top: 0.5rem;
+    margin-bottom: 1rem;
+}
+#newCountConfirmationModal .modal-body li {
+    margin-bottom: 0.3rem;
+    font-size: 0.9em;
+}
+#newCountConfirmationModal .modal-footer {
+    display: flex; /* Use flex for button alignment */
+    justify-content: flex-end; /* Align buttons to the right */
+    gap: 0.5rem; /* Space between buttons */
+    padding-top: 1rem; /* Space above the footer */
+    border-top: 1px solid var(--medium-gray); /* Separator line */
+}
+
 
 /* --- END OF FILE visuals.css --- */

@@ -1,7 +1,3 @@
-/* It's definitely easier and safer for me to do the merge to avoid any potential copy/paste errors on your end.
-
-Here is the merged offlineDB.js file, incorporating the Phase 1.1 changes into your original code structure. */
-
 // --- START OF FILE offlineDB.js ---
 // Handles IndexedDB interactions
 
@@ -30,16 +26,15 @@ const DB = {
                 const transaction = event.target.transaction; // Use transaction from event
                 console.log(`Upgrading database from version ${event.oldVersion} to ${event.newVersion}`);
 
-                // --- Inventory Store (Logic from your original file - unchanged) ---
+                // --- Inventory Store ---
                 let invStore;
-                // Note: Your original logic correctly handled keyPath change from pre-v5
                 if (event.oldVersion < 5 && db.objectStoreNames.contains(DB.stores.inventory)) {
-                    console.log("Recreating 'inventory' store for keyPath change...");
+                    console.log("Recreating 'inventory' store for keyPath change from SKU to itemId...");
                     db.deleteObjectStore(DB.stores.inventory);
                 }
                 if (!db.objectStoreNames.contains(DB.stores.inventory)) {
-                    console.log("Creating 'inventory' object store...");
-                    invStore = db.createObjectStore(DB.stores.inventory, { keyPath: 'itemId' }); // Uses itemId as keyPath
+                    console.log("Creating 'inventory' object store with keyPath: 'itemId'...");
+                    invStore = db.createObjectStore(DB.stores.inventory, { keyPath: 'itemId' });
                     invStore.createIndex('SKU_idx', 'SKU', { unique: false });
                     invStore.createIndex('location_idx', 'location', { unique: false });
                     invStore.createIndex('isActive_idx', 'isActive', { unique: false });
@@ -48,7 +43,14 @@ const DB = {
                     invStore.createIndex('reelNumber_idx', 'reelNumber', { unique: false });
                     console.log("Created indexes on new 'inventory' store.");
                 } else {
-                    invStore = transaction.objectStore(DB.stores.inventory); // Get reference via transaction
+                    invStore = transaction.objectStore(DB.stores.inventory);
+                    if (invStore.keyPath !== 'itemId') { // Should not happen if oldVersion < 5 was handled
+                        console.error("CRITICAL: Inventory store exists but keyPath is not itemId. This should have been handled by store recreation.");
+                        // This state is problematic. Forcing recreation if this somehow occurs.
+                        db.deleteObjectStore(DB.stores.inventory);
+                        invStore = db.createObjectStore(DB.stores.inventory, { keyPath: 'itemId' });
+                        console.log("Re-created 'inventory' object store due to incorrect keyPath.");
+                    }
                     if (!invStore.indexNames.contains('SKU_idx')) invStore.createIndex('SKU_idx', 'SKU', { unique: false });
                     if (!invStore.indexNames.contains('location_idx')) invStore.createIndex('location_idx', 'location', { unique: false });
                     if (!invStore.indexNames.contains('isActive_idx')) invStore.createIndex('isActive_idx', 'isActive', { unique: false });
@@ -56,7 +58,7 @@ const DB = {
                     if (!invStore.indexNames.contains('recountBatchId_idx')) invStore.createIndex('recountBatchId_idx', 'currentRecountBatchId', { unique: false });
                     if (!invStore.indexNames.contains('reelNumber_idx')) invStore.createIndex('reelNumber_idx', 'reelNumber', { unique: false });
                     console.log("Verified/Created indexes on 'inventory' store.");
-                } // end inventory
+                }
 
                 // --- Transaction History Store (Logic from your original file - unchanged) ---
                 let historyStore;
@@ -75,10 +77,10 @@ const DB = {
                     if (!historyStore.indexNames.contains('itemId_idx')) historyStore.createIndex('itemId_idx', 'itemId', { unique: false });
                     if (!historyStore.indexNames.contains('location_idx')) historyStore.createIndex('location_idx', 'location', { unique: false });
                     console.log("Verified/Created indexes on 'transactionHistory' store.");
-                } // end transactionHistory
+                }
 
                 // --- Recount Adjustments Store (Existing store from your original file - unchanged) ---
-                let adjustmentStore; // Renamed var locally to avoid conflict, refers to your original store
+                let adjustmentStore; 
                  if (!db.objectStoreNames.contains(DB.stores.recountAdjustments)) {
                     console.log("Creating 'recountAdjustments' object store...");
                     adjustmentStore = db.createObjectStore(DB.stores.recountAdjustments, { keyPath: 'adjustmentId', autoIncrement: true });
@@ -87,12 +89,12 @@ const DB = {
                     adjustmentStore.createIndex('adjustmentTransactionId_idx', 'adjustmentTransactionId', { unique: false });
                      console.log("Created indexes on new 'recountAdjustments' store.");
                 } else {
-                     adjustmentStore = transaction.objectStore(DB.stores.recountAdjustments); // Get reference via transaction
+                     adjustmentStore = transaction.objectStore(DB.stores.recountAdjustments); 
                     if (!adjustmentStore.indexNames.contains('itemId_idx')) adjustmentStore.createIndex('itemId_idx', 'itemId', { unique: false });
                     if (!adjustmentStore.indexNames.contains('recordedDuringRecountBatchId_idx')) adjustmentStore.createIndex('recordedDuringRecountBatchId_idx', 'recordedDuringRecountBatchId', { unique: false });
                     if (!adjustmentStore.indexNames.contains('adjustmentTransactionId_idx')) adjustmentStore.createIndex('adjustmentTransactionId_idx', 'adjustmentTransactionId', { unique: false });
                     console.log("Verified/Created indexes on 'recountAdjustments' store.");
-                } // end recountAdjustments
+                } 
 
                 // --- Recount Batches Store (Logic from your original, MODIFIED to add index) ---
                 let batchStore;
@@ -101,60 +103,56 @@ const DB = {
                     batchStore = db.createObjectStore(DB.stores.recountBatches, { keyPath: 'recountBatchId' });
                     batchStore.createIndex('status_idx', 'status', { unique: false });
                     batchStore.createIndex('createdAt_idx', 'createdAt', { unique: false });
-                    // *** ADDED new index during creation ***
                     batchStore.createIndex('by_parentCycleId', 'parentCycleId', { unique: false });
                     console.log("Created indexes (including by_parentCycleId) on new 'recountBatches' store.");
                 } else {
-                    batchStore = transaction.objectStore(DB.stores.recountBatches); // Get reference via transaction
+                    batchStore = transaction.objectStore(DB.stores.recountBatches); 
                     if (!batchStore.indexNames.contains('status_idx')) batchStore.createIndex('status_idx', 'status', { unique: false });
                     if (!batchStore.indexNames.contains('createdAt_idx')) batchStore.createIndex('createdAt_idx', 'createdAt', { unique: false });
-                    // *** ADDED new index if store already exists ***
                     if (!batchStore.indexNames.contains('by_parentCycleId')) {
                         batchStore.createIndex('by_parentCycleId', 'parentCycleId', { unique: false });
                         console.log("Created index 'by_parentCycleId' on existing 'recountBatches' store.");
                     }
                     console.log("Verified/Created indexes on 'recountBatches' store.");
-                } // end recountBatches
+                } 
 
-                // --- *** NEW: Count Cycles Store *** ---
+                // --- Count Cycles Store ---
                 if (!db.objectStoreNames.contains(DB.stores.countCycles)) {
                     console.log(`Creating '${DB.stores.countCycles}' object store...`);
                     const cycleStore = db.createObjectStore(DB.stores.countCycles, { keyPath: 'cycleId' });
-                    // Fields: cycleId, cutOffDate, startDate, status ('open', 'finalized'), finalizedTimestamp, createdBy
-                    cycleStore.createIndex('by_status', 'status', { unique: false }); // Index as requested
+                    cycleStore.createIndex('by_status', 'status', { unique: false }); 
                     console.log(`Created object store: ${DB.stores.countCycles} with index 'by_status'`);
                 }
 
-                // --- *** NEW: Inventory Adjustments Store (User-added) *** ---
+                // --- Inventory Adjustments Store (User-added) ---
                  if (!db.objectStoreNames.contains(DB.stores.inventoryAdjustments)) {
                     console.log(`Creating '${DB.stores.inventoryAdjustments}' object store...`);
                     const invAdjustmentStore = db.createObjectStore(DB.stores.inventoryAdjustments, { keyPath: 'adjustmentId', autoIncrement: true });
-                    // Fields: adjustmentId, SKU, label, quantity, timestamp, user, addedDuringCycleId, addedDuringRecountId (nullable)
-                    invAdjustmentStore.createIndex('by_sku', 'SKU', { unique: false }); // Index as requested
-                    invAdjustmentStore.createIndex('by_addedDuringCycleId', 'addedDuringCycleId', { unique: false }); // Index as requested
-                    invAdjustmentStore.createIndex('by_addedDuringRecountId', 'addedDuringRecountId', { unique: false }); // Index as requested
+                    invAdjustmentStore.createIndex('by_sku', 'SKU', { unique: false }); 
+                    invAdjustmentStore.createIndex('by_addedDuringCycleId', 'addedDuringCycleId', { unique: false }); 
+                    invAdjustmentStore.createIndex('by_addedDuringRecountId', 'addedDuringRecountId', { unique: false }); 
                     console.log(`Created object store: ${DB.stores.inventoryAdjustments} with indexes 'by_sku', 'by_addedDuringCycleId', 'by_addedDuringRecountId'`);
                  }
 
                 console.log(`Database upgrade/schema check complete for version ${DB.version}.`);
-            }; // end onupgradeneeded
+            }; 
 
             request.onsuccess = (event) => { DB.connection = event.target.result; DB.connection.onerror = (e) => { console.error("DB Error:", e.target.errorCode);}; console.log("DB connection successful."); resolve(DB.connection); };
             request.onerror = (event) => { console.error("DB Init Error:", request.error); reject(request.error); };
             request.onblocked = () => { console.warn("DB connection blocked."); alert("DB update blocked. Close other tabs & refresh."); reject(new Error("DB connection blocked")); };
         });
-    }, // end init
+    }, 
 
-    // --- Inventory Functions (Unchanged from your original) ---
+    // --- Inventory Functions ---
     loadInventory: () => DB._readAll(DB.stores.inventory, 'inventory items'),
-    saveInventory: (data) => DB._clearAndWrite(DB.stores.inventory, data, ['itemId', 'SKU', 'location']), // Kept your required fields
+    saveInventory: (data) => DB._clearAndWrite(DB.stores.inventory, data, ['itemId', 'SKU', 'location']), 
 
-    // --- Transaction History Functions (Unchanged from your original) ---
+    // --- Transaction History Functions ---
     loadTransactionHistory: () => DB._readAll(DB.stores.transactionHistory, 'history records', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
     saveTransactionHistory: (data) => {
         console.log(`[DB.saveTransactionHistory] Received history data array with length: ${data?.length ?? 'undefined'}`);
-        return DB._clearAndWrite(DB.stores.transactionHistory, data, ['timestamp', 'type']); // Kept your required fields
-    }, // end saveTransactionHistory
+        return DB._clearAndWrite(DB.stores.transactionHistory, data, ['timestamp', 'type']); 
+    }, 
     addTransaction: (data) => {
         console.log(`[DB.addTransaction] Attempting to add history record:`, data);
         const summaryLogTypes = ['import_csv', 'new_count_started_import', 'recount_items_imported', 'inventory_finalized'];
@@ -164,16 +162,16 @@ const DB = {
         }
         const baseRequiredFields = ['timestamp', 'type'];
         return DB._addOne(DB.stores.transactionHistory, data, baseRequiredFields);
-    }, // end addTransaction
+    }, 
 
-    // --- Recount Adjustment Functions (Existing store, unchanged from your original) ---
+    // --- Recount Adjustment Functions ---
     addRecountAdjustment: (data) => DB._addOne(DB.stores.recountAdjustments, data, ['itemId', 'recordedDuringRecountBatchId', 'adjustmentTransactionId', 'adjustmentQuantity', 'timestamp', 'user']),
     getRecountAdjustmentsByItemId: (itemId) => DB._getAllByIndex(DB.stores.recountAdjustments, 'itemId_idx', itemId, 'adjustments', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
 
-    // --- Recount Batch Functions (Unchanged from your original) ---
+    // --- Recount Batch Functions ---
     createRecountBatch: (batchData) => {
         return DB._addOne(DB.stores.recountBatches, batchData, ['recountBatchId', 'cutOffDate', 'status', 'createdAt']);
-    }, // end createRecountBatch
+    }, 
     getRecountBatchDetails: (recountBatchId) => {
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
@@ -186,10 +184,10 @@ const DB = {
                 transaction.onerror = (event) => { reject(new Error(`Tx error getting batch: ${event.target.error}`)); };
             } catch (error) { reject(error); }
         });
-    }, // end getRecountBatchDetails
+    }, 
     getActiveRecountBatches: () => {
         return DB._getAllByIndex(DB.stores.recountBatches, 'status_idx', 'open', 'active batches', (a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    }, // end getActiveRecountBatches
+    }, 
     closeRecountBatch: (recountBatchId) => {
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
@@ -211,19 +209,97 @@ const DB = {
                 transaction.onerror = (event) => { reject(new Error(`Tx error closing batch: ${event.target.error}`)); };
             } catch (error) { reject(error); }
         });
-    }, // end closeRecountBatch
+    }, 
 
-    // --- History Query Functions (Unchanged from your original) ---
+    // --- History Query Functions ---
     getTransactionHistoryBySKU: (sku) => DB._getAllByIndex(DB.stores.transactionHistory, 'sku_idx', sku, 'SKU history', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
     getTransactionHistoryByItemId: (itemId) => DB._getAllByIndex(DB.stores.transactionHistory, 'itemId_idx', itemId, 'itemId history', (a, b) => new Date(b.timestamp) - new Date(a.timestamp)),
 
-    // --- *** NEW DB Functions for Phase 1 (Cycles, User Adjustments, Recount Query) *** ---
+    // --- NEW Search Functions for itemId Refactor ---
+    /**
+     * Finds all inventory items matching a given SKU.
+     * @param {string} sku - The SKU to search for.
+     * @returns {Promise<Array<object>>} A promise that resolves with an array of matching items.
+     */
+    findItemsBySku: (sku) => {
+        return DB._getAllByIndex(DB.stores.inventory, 'SKU_idx', sku, `items for SKU ${sku}`);
+    },
 
     /**
-     * Saves or updates a count cycle record.
-     * @param {object} cycleData - The cycle data object (must include cycleId).
-     * @returns {Promise<string>} Resolves with the cycleId on success.
+     * Finds a specific inventory item by SKU and Reel Number.
+     * Assumes SKU + Reel Number is a unique combination for reels.
+     * @param {string} sku - The SKU of the reel.
+     * @param {string} reelNumber - The Reel Number of the reel.
+     * @returns {Promise<object|null>} A promise that resolves with the matching item or null if not found.
      */
+    findItemBySkuAndReelNumber: (sku, reelNumber) => {
+        return new Promise(async (resolve, reject) => {
+            if (!DB.connection) return reject(new Error("DB not initialized."));
+            if (!sku || !reelNumber) return reject(new Error("SKU and ReelNumber are required."));
+
+            try {
+                const transaction = DB.connection.transaction([DB.stores.inventory], 'readonly');
+                const store = transaction.objectStore(DB.stores.inventory);
+                const skuIndex = store.index('SKU_idx');
+                const request = skuIndex.getAll(IDBKeyRange.only(sku));
+
+                request.onsuccess = () => {
+                    const itemsWithSku = request.result || [];
+                    const foundItem = itemsWithSku.find(item => item.isReel && item.reelNumber === reelNumber);
+                    resolve(foundItem || null);
+                };
+                request.onerror = (event) => {
+                    console.error(`Error finding item by SKU ${sku} and Reel ${reelNumber}:`, event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error("Error initiating findItemBySkuAndReelNumber:", error);
+                reject(error);
+            }
+        });
+    },
+
+    /**
+     * Finds a specific non-reel inventory item by SKU and Location.
+     * Assumes SKU + Location is a unique combination for non-reel items.
+     * @param {string} sku - The SKU of the item.
+     * @param {string} location - The Location of the item.
+     * @returns {Promise<object|null>} A promise that resolves with the matching item or null if not found.
+     */
+    findItemBySkuAndLocation: (sku, location) => {
+         return new Promise(async (resolve, reject) => {
+            if (!DB.connection) return reject(new Error("DB not initialized."));
+            if (!sku || !location) return reject(new Error("SKU and Location are required."));
+            const searchLocationLower = String(location).trim().toLowerCase();
+
+            try {
+                const transaction = DB.connection.transaction([DB.stores.inventory], 'readonly');
+                const store = transaction.objectStore(DB.stores.inventory);
+                const skuIndex = store.index('SKU_idx');
+                const request = skuIndex.getAll(IDBKeyRange.only(sku));
+
+                request.onsuccess = () => {
+                    const itemsWithSku = request.result || [];
+                    const foundItem = itemsWithSku.find(item =>
+                        !item.isReel &&
+                        String(item.location).trim().toLowerCase() === searchLocationLower
+                    );
+                    resolve(foundItem || null);
+                };
+                request.onerror = (event) => {
+                    console.error(`Error finding item by SKU ${sku} and Location ${location}:`, event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error("Error initiating findItemBySkuAndLocation:", error);
+                reject(error);
+            }
+        });
+    },
+    // --- END NEW Search Functions ---
+
+
+    // --- Cycle, User Adjustments, Recount Query Functions ---
     saveCycle: function(cycleData) {
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not initialized."));
@@ -231,9 +307,9 @@ const DB = {
 
             const transaction = DB.connection.transaction([DB.stores.countCycles], 'readwrite');
             const store = transaction.objectStore(DB.stores.countCycles);
-            const request = store.put(cycleData); // Use put for save/update
+            const request = store.put(cycleData); 
 
-            request.onsuccess = (event) => resolve(event.target.result); // Returns the key (cycleId)
+            request.onsuccess = (event) => resolve(event.target.result); 
             request.onerror = (event) => {
                 console.error(`Error saving cycle (ID: ${cycleData.cycleId}):`, event.target.error);
                 reject(event.target.error);
@@ -242,19 +318,14 @@ const DB = {
             transaction.onerror = (event) => console.error("Transaction error saving cycle:", event.target.error);
         });
     },
-
-    /**
-     * Retrieves the first open count cycle found.
-     * @returns {Promise<object|null>} Resolves with the cycle object or null if no open cycle found.
-     */
     getOpenCycle: function() {
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not initialized."));
 
             const transaction = DB.connection.transaction([DB.stores.countCycles], 'readonly');
             const store = transaction.objectStore(DB.stores.countCycles);
-            const index = store.index('by_status'); // Use the index defined in onupgradeneeded
-            const request = index.get('open'); // Get the first record matching 'open'
+            const index = store.index('by_status'); 
+            const request = index.get('open'); 
 
             request.onsuccess = (event) => {
                 resolve(event.target.result ? event.target.result : null);
@@ -265,19 +336,13 @@ const DB = {
             };
         });
     },
-
-     /**
-      * Retrieves a specific count cycle by its ID.
-      * @param {string} cycleId - The ID of the cycle to retrieve.
-      * @returns {Promise<object|null>} Resolves with the cycle object or null if not found.
-      */
      getCycleById: function(cycleId) {
          return new Promise((resolve, reject) => {
              if (!DB.connection) return reject(new Error("DB not initialized."));
 
              const transaction = DB.connection.transaction([DB.stores.countCycles], 'readonly');
              const store = transaction.objectStore(DB.stores.countCycles);
-             const request = store.get(cycleId); // Get by keyPath
+             const request = store.get(cycleId); 
 
              request.onsuccess = (event) => {
                  resolve(event.target.result ? event.target.result : null);
@@ -288,39 +353,19 @@ const DB = {
              };
          });
      },
-
-     /**
-      * Retrieves all recount batches associated with a specific parent cycle ID.
-      * @param {string} parentCycleId - The ID of the parent count cycle.
-      * @returns {Promise<Array<object>>} Resolves with an array of recount batch objects.
-      */
      getRecountsForCycle: function(parentCycleId) {
-         // Uses the new 'by_parentCycleId' index added in onupgradeneeded
-         return DB._getAllByIndex(DB.stores.recountBatches, 'by_parentCycleId', parentCycleId, 'recounts for cycle', (a, b) => new Date(a.createdAt) - new Date(b.createdAt)); // Sort ascending? Or by batch ID? Ascending for now.
+         return DB._getAllByIndex(DB.stores.recountBatches, 'by_parentCycleId', parentCycleId, 'recounts for cycle', (a, b) => new Date(a.createdAt) - new Date(b.createdAt)); 
      },
-
-    /**
-     * Adds a new USER-ENTERED inventory adjustment record to the dedicated store.
-     * @param {object} adjustmentData - The adjustment data (SKU, label, quantity, etc.). adjustmentId is auto-generated.
-     * @returns {Promise<number>} Resolves with the auto-generated adjustmentId on success.
-     */
     addAdjustment: function(adjustmentData) {
-        // Use the new 'inventoryAdjustments' store
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not initialized."));
-            // Basic validation (can be enhanced)
             if (!adjustmentData || !adjustmentData.SKU || adjustmentData.quantity === undefined || adjustmentData.label === undefined) {
                 return reject(new Error("Adjustment data requires at least SKU, label, and quantity."));
             }
-            // Required fields for adding to this specific store
-            const required = ['SKU', 'label', 'quantity', 'user', 'addedDuringCycleId']; // addedDuringRecountId is optional/nullable
-
-             // Add timestamp if not provided by caller
+            const required = ['SKU', 'label', 'quantity', 'user', 'addedDuringCycleId']; 
              if (!adjustmentData.timestamp) {
                 adjustmentData.timestamp = new Date().toISOString();
             }
-
-            // Use _addOne helper, specifying the correct store name and required fields
             return DB._addOne(DB.stores.inventoryAdjustments, adjustmentData, required)
                 .then(newId => {
                     console.log(`Transaction completed: Added user adjustment (ID: ${newId}, SKU: ${adjustmentData.SKU})`);
@@ -328,13 +373,13 @@ const DB = {
                 })
                 .catch(error => {
                      console.error(`Error adding user adjustment for SKU (${adjustmentData.SKU}):`, error);
-                     reject(error); // Reject the promise if _addOne fails
+                     reject(error); 
                 });
         });
     },
 
 
-    // --- Internal Helper Functions (Unchanged from your original, using DB.stores where applicable) ---
+    // --- Internal Helper Functions ---
     _readAll: (storeName, logName = 'items', sortFn = null) => {
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
@@ -352,8 +397,8 @@ const DB = {
                 transaction.onerror = (event) => { console.error(`Read tx error loading ${logName}:`, event.target.error); reject(event.target.error); };
             } catch (error) { console.error(`Error init tx load ${logName}:`, error); reject(error); }
         });
-    }, // end _readAll
-    _clearAndWrite: (storeName, data, requiredFields = []) => { // Your implementation using put after clear
+    }, 
+    _clearAndWrite: (storeName, data, requiredFields = []) => { 
         return new Promise(async (resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
             if (!Array.isArray(data)) { console.error(`[DB._clearAndWrite:${storeName}] Error: Received non-array data:`, data); return reject(new Error("Invalid data: Expected array")); }
@@ -366,18 +411,23 @@ const DB = {
                 clearRequest.onerror = (event) => { console.error(`[DB._clearAndWrite:${storeName}] Error clearing store:`, event.target.error); };
                 clearRequest.onsuccess = () => {
                     console.log(`[DB._clearAndWrite:${storeName}] Store cleared. Starting write...`);
-                    if (data.length === 0) { console.log(`[DB._clearAndWrite:${storeName}] Data array is empty, nothing to write.`); return; }
+                    if (data.length === 0) { console.log(`[DB._clearAndWrite:${storeName}] Data array is empty, nothing to write.`); resolve({ successCount, errorCount, skippedCount }); return; } // Resolve if nothing to write
+                    
                     const writePromises = data.map(item => {
-                        return new Promise((resolveItem) => {
+                        return new Promise((resolveItem, rejectItem) => { // Add rejectItem
                             try {
-                                const request = store.put(item); // Always use PUT after clearing
+                                const request = store.put(item); 
                                 request.onsuccess = () => { successCount++; resolveItem({ status: 'success' }); };
-                                request.onerror = (event) => { console.error(`[DB._clearAndWrite:${storeName}] Error writing item (PUT):`, event.target.error, item); errorCount++; resolveItem({ status: 'error' }); };
-                            } catch (writeError) { console.error(`[DB._clearAndWrite:${storeName}] Sync error during PUT:`, writeError, item); errorCount++; resolveItem({ status: 'error' }); }
+                                request.onerror = (event) => { console.error(`[DB._clearAndWrite:${storeName}] Error writing item (PUT):`, event.target.error, item); errorCount++; rejectItem(event.target.error); }; // Reject item promise
+                            } catch (writeError) { console.error(`[DB._clearAndWrite:${storeName}] Sync error during PUT:`, writeError, item); errorCount++; rejectItem(writeError); } // Reject item promise
                         });
                     });
-                    Promise.allSettled(writePromises).then(() => { console.log(`[DB._clearAndWrite:${storeName}] Write operations processed.`); });
-                }; // end clearRequest.onsuccess
+                     // Wait for all writes to settle
+                    Promise.allSettled(writePromises).then(() => { 
+                        console.log(`[DB._clearAndWrite:${storeName}] All write operations processed.`);
+                        // Transaction oncomplete will handle final resolve/reject
+                    });
+                }; 
                 transaction.oncomplete = () => {
                      console.log(`[DB._clearAndWrite:${storeName}] Transaction completed. S:${successCount}, F:${errorCount}, K:${skippedCount}. Items processed: ${data.length}`);
                      (errorCount === 0) ? resolve({ successCount, errorCount, skippedCount }) : reject(new Error(`${storeName} write tx completed with ${errorCount} errors.`));
@@ -385,8 +435,8 @@ const DB = {
                 transaction.onerror = (event) => { console.error(`[DB._clearAndWrite:${storeName}] Transaction error:`, event.target.error); reject(new Error(`Tx failed writing ${storeName}: ${event.target.error}`)); };
             } catch (error) { console.error(`[DB._clearAndWrite:${storeName}] Error initiating transaction:`, error); reject(error); }
         });
-    }, // end _clearAndWrite
-     _addOne: (storeName, data, requiredFields = []) => { // Your implementation with logs
+    }, 
+     _addOne: (storeName, data, requiredFields = []) => { 
         return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
             const missingField = requiredFields.find(field => data[field] === undefined || data[field] === null || (typeof data[field] === 'string' && data[field].trim() === ''));
@@ -401,11 +451,15 @@ const DB = {
                 transaction.onerror = (event) => { console.error(`[DB._addOne: ${storeName}] Transaction error adding item:`, event.target.error); };
             } catch (error) { console.error(`[DB._addOne: ${storeName}] Sync error initiating transaction/add:`, error); reject(error); }
         });
-    }, // end _addOne
-    _getAllByIndex: (storeName, indexName, key, logName = 'items', sortFn = null) => { // Your implementation
+    }, 
+    _getAllByIndex: (storeName, indexName, key, logName = 'items', sortFn = null) => { 
          return new Promise((resolve, reject) => {
             if (!DB.connection) return reject(new Error("DB not init"));
-            if (key === undefined || key === null) return reject(new Error("Index key required"));
+            if (key === undefined || key === null) { // Allow empty string for key if searching for blank values
+                console.warn(`_getAllByIndex called with undefined or null key for index ${indexName} on ${storeName}.`);
+                 // Depending on use case, you might want to allow this to search for items where the indexed property is null/undefined/empty.
+                 // For now, treating it as potentially unintended, but proceeding.
+            }
             try {
                 const transaction = DB.connection.transaction([storeName], 'readonly');
                 const store = transaction.objectStore(storeName);
@@ -422,54 +476,14 @@ const DB = {
                 transaction.onerror = (event) => { console.error(`Read tx error fetching ${logName} by index:`, event.target.error); reject(event.target.error); };
             } catch (error) { console.error(`Error init tx fetch ${logName} by index:`, error); reject(error); }
         });
-    }, // end _getAllByIndex
+    }, 
 
-    // --- Utility (Unchanged from your original) ---
+    // --- Utility ---
     generateSimpleId: () => {
         const randomPart = Math.random().toString(36).substring(2, 11);
         const timePart = Date.now().toString(36);
         return `${timePart}-${randomPart}`;
-    }, // Generates a simple ID based on time and random string
+    }, 
 
-}; // End DB object
-
-// export default DB; // Uncomment if using ES modules
-
+}; 
 // --- END OF FILE offlineDB.js ---
-
-
-/* Summary of Merged Changes:
-
-DB.version: Updated to 8.
-
-DB.stores Object: Added near the top for clarity. References to store names later in the code were updated to use DB.stores.storeName where appropriate (mostly within the new functions and onupgradeneeded).
-
-onupgradeneeded:
-
-Kept your original logic for inventory, transactionHistory, and recountAdjustments stores and their indexes.
-
-Modified the recountBatches store logic to add the new by_parentCycleId index, ensuring it's added whether the store is being created new or already exists.
-
-Added the creation logic for the new countCycles store and its by_status index.
-
-Added the creation logic for the new inventoryAdjustments store and its by_sku, by_addedDuringCycleId, and by_addedDuringRecountId indexes.
-
-Existing Functions: All your original helper functions (loadInventory, saveInventory, addRecountAdjustment, createRecountBatch, etc.) and internal helpers (_readAll, _clearAndWrite, _addOne, etc.) have been preserved exactly as they were in the file you provided.
-
-New Functions: The five new functions (saveCycle, getOpenCycle, getCycleById, getRecountsForCycle, addAdjustment) have been added with their complete implementations. Note that addAdjustment uses the new inventoryAdjustments store, distinct from your existing addRecountAdjustment which uses the recountAdjustments store.
-
-Verification of No Regression:
-
-Existing Stores: The schema definitions in onupgradeneeded for inventory, transactionHistory, and recountAdjustments are identical to your original file. recountBatches only had an index added, preserving its original structure and indexes (status_idx, createdAt_idx).
-
-Existing Functions: I manually compared the function signatures and bodies of all the helper functions present in your original file against the merged version. They remain unchanged. This ensures that any code currently calling loadInventory, saveInventory, addRecountAdjustment, createRecountBatch, addTransaction, etc., will behave exactly as before.
-
-Internal Helpers: The logic within _readAll, _clearAndWrite, _addOne, and _getAllByIndex is identical to your original file.
-
-Database Name: Kept as TelecomInventoryDB.
-
-Version Increment: The version is correctly incremented to 8, ensuring onupgradeneeded will run once to apply the schema changes.
-
-Therefore, based on the provided original file, this merged version correctly implements the required database changes for Step 1.1 while preserving all previously existing database functionality.
-
-You can now replace your local offlineDB.js with this merged code. We are now correctly set up to proceed with Roadmap Phase 1.2: Cycle Count Logic. Please let me know when you're ready. */
