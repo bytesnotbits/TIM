@@ -927,9 +927,10 @@ async function updateSequences(itemId) {
         }
     }
 }
-// --- END OF MODIFIED dataLogic.js -> updateSequences ---
+// --- END OF updateSequences ---
 
 // Update item notes
+// --- START OF COMPLETE dataLogic.js -> updateItemNotes ---
 async function updateItemNotes(itemId, notes) {
     if (!itemId) { 
         console.error("updateItemNotes: itemId missing"); 
