@@ -1,3 +1,5 @@
+// --- START OF FILE dataLogic.js ---
+
 // --- Filter UI Update ---
 // --- Helper to update UI filter controls ---
 function updateFilterControlsUI() {
@@ -118,73 +120,6 @@ async function findInventoryItemByItemId(itemId) {
 
 // ++ NEW: Logic for Add New Item Modal ++
 
-/* async function handleSkuCheckInModal(enteredSku) {
-    const sku = enteredSku.trim().toUpperCase(); // Standardize SKU input
-    document.getElementById('newItemSku').value = sku; // Update input with standardized value
-
-    const messageEl = document.getElementById('skuCheckMessage');
-    const existingDetailsEl = document.getElementById('existingSkuDetails');
-    const revealNewSkuBtn = document.getElementById('revealNewSkuDetailsBtn');
-    const newSkuSection = document.getElementById('newSkuDetailsSection');
-    const reelNumberGroup = document.getElementById('newItemReelNumberGroup');
-    const reelNumberInput = document.getElementById('newItemReelNumber');
-    const reelNumberMandatorySpan = document.getElementById('reelNumberMandatory');
-    const submitBtn = document.getElementById('submitAddItemBtn');
-
-    // Reset parts of the UI before new check
-    messageEl.textContent = '';
-    messageEl.className = 'form-text';
-    existingDetailsEl.style.display = 'none';
-    revealNewSkuBtn.style.display = 'none';
-    newSkuSection.style.display = 'none'; // Keep hidden until explicitly revealed
-    reelNumberGroup.style.display = 'none';
-    reelNumberInput.required = false;
-    reelNumberMandatorySpan.style.display = 'none';
-    submitBtn.disabled = false; // Enable by default, validation will handle later
-
-    if (!sku) {
-        messageEl.textContent = 'SKU is required.';
-        messageEl.classList.add('text-danger');
-        submitBtn.disabled = true;
-        return;
-    }
-
-    try {
-        const existingItems = await DB.findItemsBySku(sku); // Uses new DB function
-
-        if (existingItems && existingItems.length > 0) {
-            const firstExisting = existingItems[0]; // Use details from the first match
-            messageEl.textContent = `SKU '${sku}' already exists. You can add it to a new location/reel.`;
-            messageEl.classList.add('text-info');
-
-            document.getElementById('existingSkuDesc').textContent = firstExisting.Description || 'N/A';
-            document.getElementById('existingSkuType').textContent = firstExisting.isReel ? (firstExisting.isTwoWayReel ? 'Two-Way Reel' : 'Reel') : 'Standard';
-            existingDetailsEl.style.display = 'block';
-            
-            // If the existing SKU is a reel, show Reel Number input and make it mandatory
-            if (firstExisting.isReel) {
-                reelNumberGroup.style.display = 'block';
-                reelNumberInput.required = true;
-                reelNumberMandatorySpan.style.display = 'inline';
-            }
-            // "Create New SKU Details" button remains hidden
-            // "Add Item to Location/Reel" (the main submit) is enabled by default, validation will check reel# if needed
-        } else {
-            messageEl.textContent = `SKU '${sku}' not found. You can define its details.`;
-            messageEl.classList.add('text-success');
-            revealNewSkuBtn.style.display = 'inline-block'; // Show button to define new SKU
-            // Main submit button might be disabled until new SKU details are filled or SKU is corrected.
-            // For now, let form validation handle this. If revealNewSkuBtn is clicked, newSkuSection becomes active.
-            // If user proceeds without clicking reveal, ItemType defaults to Standard.
-        }
-    } catch (error) {
-        console.error("Error checking SKU in modal:", error);
-        messageEl.textContent = 'Error checking SKU. Please try again.';
-        messageEl.classList.add('text-danger');
-        submitBtn.disabled = true;
-    }
-} */
-
 // --- START OF MODIFIED dataLogic.js -> handleSkuCheckInModal ---
 async function handleSkuCheckInModal(enteredSku) {
     const sku = enteredSku.trim().toUpperCase(); // Standardize SKU input
@@ -257,12 +192,7 @@ async function handleSkuCheckInModal(enteredSku) {
     }
 }
 // --- END OF MODIFIED dataLogic.js -> handleSkuCheckInModal ---
-/*
-Explanation of Changes in handleSkuCheckInModal:
-const newItemDescriptionInput = document.getElementById('newItemDescription');: Added to get a reference to the description input field in the modal.
-if (newItemDescriptionInput) { newItemDescriptionInput.value = firstExisting.Description || ''; }: When an existing SKU is found, this line now sets the value of the actual description input field to the description of the firstExisting item.
-if (newItemDescriptionInput) { newItemDescriptionInput.value = ''; }: When a SKU is not found (i.e., it's a new SKU), this ensures the description field is cleared, allowing the user to type a new description. I've removed the commented-out line that cleared it unconditionally at the start, as we only want to clear it if it's a truly new SKU or explicitly reset it.
-*/
+
 
 async function checkReelDuplicateInModal(sku, reelNumber, location) {
     const reelCheckMsgEl = document.getElementById('reelCheckMessage');
@@ -730,29 +660,22 @@ async function updateCount(itemId, quantityStr) {
 }
 // --- END OF MODIFIED dataLogic.js -> updateCount ---
 
-// Calculate footage
-// REFINED: Now includes footageFactor logic and returns scaled footage or null.
+// --- START OF MODIFIED calculateFootageForItem ---
 function calculateFootageForItem(item, sequences) {
-    // sequences = { inner1, outer1, inner2, outer2 }
-    // console.log(`[calculateFootageForItem] Called for itemId: ${item?.itemId}, sequences:`, sequences);
-
     if (!item || !item.isReel) {
-        // console.log(`[calculateFootageForItem] Not a reel or item missing.`);
-        return null; 
+        // console.log(`[calculateFootageForItem] Not a reel or item missing for item ID: ${item?.itemId}`);
+        return null;
     }
 
-    let pairCalculationAttempted = false; // Track if any pair had input
+    let pairCalculationAttempted = false; 
 
-    // Helper to parse, treating blank or invalid as 0 per spec.
     const parseSequenceValue = (valueStr) => {
         const trimmedStr = String(valueStr || '').trim();
-        if (trimmedStr === '') return 0; // Treat blank as 0
+        if (trimmedStr === '') return 0; 
 
-        pairCalculationAttempted = true; // Indicate an attempt was made with this pair
+        pairCalculationAttempted = true; 
 
         const num = Number(trimmedStr);
-        // Per spec: "Treat any resulting NaN or the original empty string as 0"
-        // And negative numbers are usually not valid sequence markers either.
         if (isNaN(num) || num < 0) {
              // console.warn(`[calculateFootageForItem] Invalid sequence value '${trimmedStr}' treated as 0 for item ${item.itemId}`);
              return 0; 
@@ -763,34 +686,39 @@ function calculateFootageForItem(item, sequences) {
     const parsed_inner1 = parseSequenceValue(sequences.inner1);
     const parsed_outer1 = parseSequenceValue(sequences.outer1);
     const diff1 = Math.abs(parsed_outer1 - parsed_inner1);
-    // console.log(`[calculateFootageForItem] Pair 1: inner=${parsed_inner1}, outer=${parsed_outer1}, diff1=${diff1}`);
 
     let diff2 = 0;
     if (item.isTwoWayReel) {
         const parsed_inner2 = parseSequenceValue(sequences.inner2);
         const parsed_outer2 = parseSequenceValue(sequences.outer2);
         diff2 = Math.abs(parsed_outer2 - parsed_inner2);
-        // console.log(`[calculateFootageForItem] Pair 2 (Two-Way): inner=${parsed_inner2}, outer=${parsed_outer2}, diff2=${diff2}`);
     }
 
     const totalDifference = diff1 + diff2;
-    // console.log(`[calculateFootageForItem] Total Unscaled Difference: ${totalDifference}`);
 
-    // Final Calculation:
-    // Only return a valid number if a pair calculation was attempted AND footageFactor is valid.
-    if (pairCalculationAttempted && typeof item.footageFactor === 'number' && item.footageFactor > 0) {
-        const finalFootage = totalDifference * item.footageFactor;
-        // console.log(`[calculateFootageForItem] Valid factor ${item.footageFactor}. Final Scaled Footage: ${finalFootage}`);
+    let effectiveFactor = item.footageFactor;
+    // For reels, if footageFactor is not a positive number, default to 1.
+    if (typeof effectiveFactor !== 'number' || effectiveFactor <= 0) {
+        // console.warn(`[calculateFootageForItem] Reel item ${item.itemId} (SKU: ${item.SKU}) has invalid or missing footageFactor (${item.footageFactor}). Assuming factor of 1.`);
+        effectiveFactor = 1;
+    }
+
+    // Only return a calculation if at least one sequence pair was attempted.
+    // Otherwise, return null to indicate no calculation was performed due to lack of input.
+    if (pairCalculationAttempted) {
+        const finalFootage = totalDifference * effectiveFactor;
+        // console.log(`[calculateFootageForItem] Item ${item.itemId}, TotalDiff: ${totalDifference}, Factor: ${effectiveFactor}, Final: ${finalFootage}`);
         return finalFootage;
     } else {
-        // console.log(`[calculateFootageForItem] No pair calculation attempted or invalid/missing footageFactor (${item.footageFactor}). Returning null.`);
-        return null; // No valid pairs entered, or footageFactor is invalid/missing/zero
+        // console.log(`[calculateFootageForItem] No sequence pair calculation attempted for item ${item.itemId}. Returning null.`);
+        return null; 
     }
-}  // end of calculateFootageForItem
+}
+// --- END OF MODIFIED calculateFootageForItem ---
+
 
 // Update sequences and potentially the count
 // REFINED: Adapts to calculateFootageForItem returning scaled footage and updates DOM more precisely.
-// --- START OF MODIFIED dataLogic.js -> updateSequences ---
 // --- START OF COMPLETE dataLogic.js -> updateSequences ---
 async function updateSequences(itemId) {
     if (!itemId) { console.error("updateSequences: itemId missing"); return; }
@@ -904,10 +832,16 @@ async function updateSequences(itemId) {
                         totalFootageDisplay.title = 'Enter sequences to calculate.';
                     }
                 }
-            } else {
-                totalFootageDisplay.textContent = 'Total: N/A (No Factor)';
+            } else { // This path should be less common now with the default factor of 1
+                totalFootageDisplay.textContent = 'Total: N/A (Factor Error)'; // Should reflect the assumed factor=1 if it was used.
                 totalFootageDisplay.style.color = 'var(--dark-gray)';
-                totalFootageDisplay.title = 'Footage factor missing, zero, or invalid.';
+                totalFootageDisplay.title = `Factor issue (effective: ${item.footageFactor ?? 1}). Check data if calculation unexpected.`;
+                 // More precise feedback for when default factor is used
+                 if (finalCalculatedFootage !== null && (item.footageFactor === null || typeof item.footageFactor !== 'number' || item.footageFactor <= 0)) {
+                     totalFootageDisplay.textContent = `Total: ${finalCalculatedFootage.toFixed(2)} ft`;
+                     totalFootageDisplay.style.color = '';
+                     totalFootageDisplay.title = `Calculated assuming factor: 1 (original factor missing/invalid: ${item.footageFactor})`;
+                 }
             }
         }
         
@@ -1062,7 +996,10 @@ async function confirmAndFinalizeItem(itemId) {
         // 3. Save "dirty" count (if not calculated by sequences)
         const countInput = itemDiv.querySelector('input[data-type="count-input"]');
         const hasValidFactorForCalc = item.isReel && typeof item.footageFactor === 'number' && item.footageFactor > 0;
-        const isCalculatedFromFootage = hasValidFactorForCalc && item.calculatedFootage !== null;
+         // With the fix, footageFactor defaults to 1 if missing/invalid, so this condition will usually be true for reels.
+         // We rely on `item.calculatedFootage` being non-null if calculation occurred.
+        const isCalculatedFromFootage = item.isReel && item.calculatedFootage !== null;
+
 
         if (countInput && !isCalculatedFromFootage) { // Only consider manual count if not calculated
             const domCountValueStr = countInput.value;
@@ -1447,3 +1384,4 @@ async function finalizeInventory() {
         console.log("Inventory finalization cancelled by user.");
     }
 } // end of finalizeInventory
+// --- END OF FILE dataLogic.js ---
