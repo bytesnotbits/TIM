@@ -36,8 +36,6 @@ function updateItemDirtyIndicator(itemId, isDirty) {
 }
 // --- END OF updateItemDirtyIndicator ---
 
-/* 
-// --- Inventory List Rendering ---
 function renderInventoryList() {
     const container = document.getElementById('inventoryList');
     if (!container) { console.error("Inventory list container not found."); return; }
@@ -73,11 +71,16 @@ function renderInventoryList() {
 
                 // --- Status classes ---
                  if (!item.isActive) itemDiv.classList.add('is-inactive');
-                 else if (item.toCount) {
-                     itemDiv.classList.add('is-tocount');
-                     if (item.isUncounted) itemDiv.classList.add('is-uncounted');
-                 } else {
-                     itemDiv.classList.add('is-finished');
+                 else if (item.toCount) { // Item is active AND toCount
+                     itemDiv.classList.add('is-tocount'); // Blue border
+                     if (item.isUncounted) { // Active, toCount, AND uncounted
+                         itemDiv.classList.add('is-uncounted'); // Yellow background
+                     } else { // Active, toCount, but has a count (isUncounted is false)
+                         itemDiv.classList.add('is-counted'); // Retains blue border, no yellow bg
+                     }
+                 } else { // Item is active but NOT toCount (i.e., finished)
+                     itemDiv.classList.add('is-finished'); // Green border
+                     // is-counted is also applicable if it has a count
                      if (!item.isUncounted && item.counted !== null) itemDiv.classList.add('is-counted');
                  }
                 if (item.isReel) itemDiv.classList.add('is-reel');
@@ -105,290 +108,6 @@ function renderInventoryList() {
                 const inactiveIndicator = !item.isActive ? '<span class="inactive-indicator" title="Inactive Item">🚫</span>' : '';
                 const recountBatchIndicator = item.currentRecountBatchId ? `<div class="item-recount-batch" style="font-size: 0.8em; color: var(--warning-color); font-weight: bold;">Recount Batch: ${item.currentRecountBatchId}</div>` : '';
 
-                columns.details.innerHTML = `
-                    <div class="item-sku">
-                         ${inactiveIndicator} ${item.isActive ? (item.toCount ? toCountIndicator : finishedIndicator) : ''}
-                        ${item.SKU}${reelInfo}
-                    </div>
-                    <div class="item-desc">${item.Description || 'N/A'}</div>
-                    <div class="item-loc">Loc: ${item.location || 'N/A'}</div>
-                    <div class="item-id" style="font-size: 0.7em; color: grey;">ID: ${item.itemId}</div>
-                    ${recountBatchIndicator}
-                `;
-
-
-                // --- Populate Count Column ---
-                 const countInput = document.createElement('input');
-                 countInput.type = 'number';
-                 countInput.value = (item.counted === null || item.counted === undefined) ? '' : item.counted; // Always show current count, editability depends on toCount
-                 countInput.dataset.type = 'count-input';
-                 countInput.min = "0";
-                 
-                 const hasValidFactorForCalc = item.isReel && typeof item.footageFactor === 'number' && item.footageFactor > 0;
-                 const isCalculatedFromFootage = hasValidFactorForCalc && item.calculatedFootage !== null;
-                 const disableCountInput = !item.isActive || !item.toCount || isCalculatedFromFootage; // Disabled if inactive, OR not toCount, OR calculated
-                 
-                 countInput.disabled = disableCountInput;
-                 countInput.readOnly = !item.toCount || !item.isActive; // ReadOnly if not toCount or inactive
-
-                 if (!item.isActive) {
-                    countInput.title = "Item is inactive";
-                 } else if (isCalculatedFromFootage) {
-                    countInput.title = "Quantity calculated from footage";
-                 } else if (!item.toCount) {
-                     countInput.title = "Item finished for this cycle (view only)";
-                 } else { //  item.isActive && item.toCount && !isCalculatedFromFootage
-                     countInput.title = "Enter current count";
-                 }
-
-
-                 let capturedQtyHtml = '';
-                 if (item.capturedQuantity !== null && item.capturedQuantity !== undefined) {
-                     capturedQtyHtml = `<span class="captured-qty-display clickable-value"
-                                             data-action="apply-expected-qty"
-                                             data-value="${item.capturedQuantity}"
-                                             title="Click to apply ${item.capturedQuantity} to the input">(Expected: ${item.capturedQuantity})</span>`;
-                 } else {
-                     capturedQtyHtml = `<span class="captured-qty-display">(Expected: N/A)</span>`;
-                 }
-
-                columns.count.innerHTML = `<span>Qty:${capturedQtyHtml}</span>`;
-                columns.count.appendChild(countInput);
-
-                // --- Populate Sequences Columns (Visibility controlled by item.isReel) ---
-                if (item.isReel) { // Condition based ONLY on item.isReel
-                    columns.sequences1.style.visibility = 'visible';
-                    
-                    const createSequenceDisplaySpan = (type, value) => {
-                        const span = document.createElement('span');
-                        span.className = 'clickable-value sequence-value-display';
-                        span.textContent = value || '---';
-                        span.title = `Click to use ${value} for ${type}`;
-                        span.dataset.action = 'apply-sequence';
-                        span.dataset.sequenceType = type.toLowerCase().replace(' ', ''); // e.g. "inner1"
-                        span.dataset.sequenceValue = value;
-                        return span;
-                    };
-                    const createSequenceInput = (sequenceType, currentValue) => {
-                        const input = document.createElement('input');
-                        input.type = 'number';
-                        input.min = '0';
-                        input.dataset.sequence = sequenceType.toLowerCase(); // "inner", "outer", "inner2", "outer2"
-                        input.value = currentValue || '';
-                        input.placeholder = sequenceType;
-                        input.disabled = !item.isActive || !item.toCount;
-                        input.readOnly = !item.toCount;
-                        input.title = item.isActive && item.toCount ? `Enter ${sequenceType} sequence` : "Cannot edit sequences";
-                        return input;
-                    };
-                    
-                    const disableSequenceInput = !item.isActive || !item.toCount;
-
-                    // Pair 1
-                    const group1Inner = document.createElement('div'); 
-                    group1Inner.className = 'sequence-group';
-                    group1Inner.appendChild(document.createTextNode('I1:'));
-                    group1Inner.appendChild(createSequenceInput('inner', item.innerSequence));
-
-                    const group1Outer = document.createElement('div'); 
-                    group1Outer.className = 'sequence-group';
-                    group1Outer.appendChild(document.createTextNode('O1:'));
-                    group1Outer.appendChild(createSequenceInput('outer', item.outerSequence));
-                    
-                    columns.sequences1.appendChild(group1Inner);
-                    columns.sequences1.appendChild(group1Outer);
-                   
-
-                    if (item.isTwoWayReel) {
-                        columns.sequences2.style.visibility = 'visible';
-                        const group2Inner = document.createElement('div');
-                        group2Inner.className = 'sequence-group';
-                        group2Inner.appendChild(document.createTextNode('I2:'));
-                        group2Inner.appendChild(createSequenceInput('inner2', item.innerSequence2));
-
-                        const group2Outer = document.createElement('div');
-                        group2Outer.className = 'sequence-group';
-                        group2Outer.appendChild(document.createTextNode('O2:'));
-                        group2Outer.appendChild(createSequenceInput('outer2', item.outerSequence2));
-                        
-                        columns.sequences2.appendChild(group2Inner);
-                        columns.sequences2.appendChild(group2Outer);
-                    } else {
-                        columns.sequences2.innerHTML = ''; 
-                        columns.sequences2.style.visibility = 'hidden';
-                    }
-
-                    const totalFootageDisplay = document.createElement('span');
-                    totalFootageDisplay.className = 'calculated-footage-display total-footage';
-                    
-                    const hasValidFactor = typeof item.footageFactor === 'number' && item.footageFactor > 0;
-
-                    if (hasValidFactor) {
-                        if (item.calculatedFootage !== null) { // item.calculatedFootage is now scaled or null
-                            totalFootageDisplay.textContent = `Total: ${item.calculatedFootage.toFixed(2)} ft`;
-                            totalFootageDisplay.style.color = ''; // Default color
-                            totalFootageDisplay.title = `Calculated with factor: ${item.footageFactor}`;
-                        } else {
-                            // Factor is valid, but sequences were incomplete/invalid to produce a calculation
-                            const hasAnySeqInput = item.innerSequence || item.outerSequence || (item.isTwoWayReel && (item.innerSequence2 || item.outerSequence2));
-                            if (hasAnySeqInput) {
-                                totalFootageDisplay.textContent = 'Total: Invalid Input';
-                                totalFootageDisplay.style.color = 'var(--danger-color)';
-                                totalFootageDisplay.title = 'Incomplete or invalid sequence values entered.';
-                            } else {
-                                totalFootageDisplay.textContent = 'Total: ---';
-                                totalFootageDisplay.style.color = '';
-                                totalFootageDisplay.title = 'Enter sequences to calculate.';
-                            }
-                        }
-                    } else { // footageFactor is missing or invalid
-                        totalFootageDisplay.textContent = 'Total: N/A (No Factor)';
-                        totalFootageDisplay.style.color = 'var(--dark-gray)'; 
-                        totalFootageDisplay.title = 'Footage factor missing, zero, or invalid. Cannot calculate footage.';
-                    }
-                    // Append to sequences1 as it's the primary sequence display area
-                    const equalsSpan = document.createElement('span');
-                    equalsSpan.textContent = " = ";
-                    equalsSpan.className = "sequence-equals";
-                    columns.sequences1.appendChild(equalsSpan);
-                    columns.sequences1.appendChild(totalFootageDisplay);
-
-
-                } else { // Not a reel
-                    columns.sequences1.innerHTML = '';
-                    columns.sequences1.style.visibility = 'hidden';
-                    columns.sequences2.innerHTML = '';
-                    columns.sequences2.style.visibility = 'hidden';
-                }
-
-
-                // --- Populate Notes Column ---
-                const notesTextarea = document.createElement('textarea');
-                notesTextarea.dataset.type = 'notes-input';
-                notesTextarea.value = item.notes ?? ''; // Show notes regardless of toCount
-                notesTextarea.placeholder = 'Add notes...';
-                // Notes editable if active, regardless of toCount status
-                notesTextarea.disabled = !item.isActive; 
-                notesTextarea.readOnly = !item.isActive; 
-                columns.notes.appendChild(notesTextarea);
-
-
-                // --- Populate Actions Column ---
-                // Visibility of "Flag as Uncounted":
-                // - Item must be active (isActive: true)
-                // - Item must be part of the current count (toCount: true)
-                // - Item must NOT already be flagged as uncounted (isUncounted: false)
-                const showFlagButton = item.isActive && item.toCount && !item.isUncounted;
-                const finalizeButtonDisabled = !item.isActive || !item.toCount; 
-
-                let flagButtonHtml = ''; 
-                if (showFlagButton) {
-                    flagButtonHtml = `<button data-action="flag-as-uncounted" class="btn-warning" title="Reset item count and mark as uncounted (will set toCount=true)">Flag as Uncounted</button>`;
-                }
-
-
-                columns.actions.innerHTML = `
-                    ${flagButtonHtml}
-                    <button data-action="view-history" class="btn-secondary" title="View history for this item">History</button>
-                    <button data-action="finalize-item" class="btn-success" title="Record count and finish this item for the cycle" ${finalizeButtonDisabled ? 'disabled' : ''}>Record & Finish</button>
-                `;
-
-
-                itemDiv.appendChild(columns.details);
-                itemDiv.appendChild(columns.count);
-                itemDiv.appendChild(columns.sequences1);
-                itemDiv.appendChild(columns.sequences2);
-                itemDiv.appendChild(columns.notes);
-                itemDiv.appendChild(columns.actions);
-                fragment.appendChild(itemDiv);
-
-            } catch (itemError) { 
-                 console.error(`Error rendering item ${item?.SKU || item?.itemId || '(Unknown Item)'}:`, itemError);
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'inventory-item error-item';
-                errorDiv.innerHTML = `<p class="error-message" style="margin:0;">Error rendering item ${item?.SKU || '(Unknown SKU)'}</p>`;
-                fragment.appendChild(errorDiv); 
-            }
-        }); 
-
-        container.appendChild(fragment);
-
-    } catch (error) { 
-        console.error("Error rendering inventory list:", error);
-        container.innerHTML = `<p class="error-message">Error displaying inventory list. Check console.</p>`;
-   }
-}  // End renderInventoryList
-  */
-
-function renderInventoryList() {
-    const container = document.getElementById('inventoryList');
-    if (!container) { console.error("Inventory list container not found."); return; }
-
-    try { 
-        container.innerHTML = ''; 
-        const fragment = document.createDocumentFragment();
-
-        if (!currentInventory || currentInventory.length === 0) {
-            let message = 'No items match the current criteria.';
-            if (currentFilters.location || currentFilters.searchTerm || currentFilters.status !== 'active' || currentFilters.filterByToCountStatus !== 'to_count') {
-                message += ' Try adjusting or clearing the filters.';
-            } else if (database.inventory.length === 0) {
-                message = 'Inventory is empty. Import data to get started.';
-            } else {
-                message = 'No items are currently marked "To Count" and "Active". Check filters or start a new count cycle.';
-            }
-            container.innerHTML = `<p>${message}</p>`;
-            return; 
-        }
-
-        currentInventory.forEach(item => {
-            try {
-                if (!item || !item.itemId) { 
-                    console.warn("Skipping rendering of invalid item object:", item);
-                    throw new Error("Invalid item data encountered during render.");
-                }
-
-                const itemDiv = document.createElement('div');
-                itemDiv.className = 'inventory-item';
-                itemDiv.dataset.sku = item.SKU;
-                itemDiv.dataset.itemId = item.itemId;
-
-                // --- Status classes ---
-                 if (!item.isActive) itemDiv.classList.add('is-inactive');
-                 else if (item.toCount) {
-                     itemDiv.classList.add('is-tocount');
-                     if (item.isUncounted) itemDiv.classList.add('is-uncounted');
-                 } else {
-                     itemDiv.classList.add('is-finished');
-                     if (!item.isUncounted && item.counted !== null) itemDiv.classList.add('is-counted');
-                 }
-                if (item.isReel) itemDiv.classList.add('is-reel');
-                if (item.isTwoWayReel) itemDiv.classList.add('is-two-way-reel');
-
-
-                const columns = {};
-                columns.details = document.createElement('div');
-                columns.count = document.createElement('div');
-                columns.sequences1 = document.createElement('div');
-                columns.sequences2 = document.createElement('div');
-                columns.notes = document.createElement('div');
-                columns.actions = document.createElement('div');
-                columns.details.className = 'item-details';
-                columns.count.className = 'item-count';
-                columns.sequences1.className = 'item-sequences seq-pair-1';
-                columns.sequences2.className = 'item-sequences seq-pair-2';
-                columns.notes.className = 'item-notes';
-                columns.actions.className = 'item-actions';
-
-                // --- Populate Details Column ---
-                const reelInfo = item.isReel ? ` (Reel${item.reelNumber ? `: ${item.reelNumber}` : ''}${item.isTwoWayReel ? ', 2-Way' : ''})` : '';
-                const toCountIndicator = item.toCount ? `<span class="tocount-indicator" title="Marked for current count cycle">🎯</span>` : '';
-                const finishedIndicator = !item.toCount && item.isActive ? `<span class="finished-indicator" title="Finished for cycle (Count: ${item.counted ?? 'Uncounted'})">✔️</span>` : '';
-                const inactiveIndicator = !item.isActive ? '<span class="inactive-indicator" title="Inactive Item">🚫</span>' : '';
-                const recountBatchIndicator = item.currentRecountBatchId ? `<div class="item-recount-batch" style="font-size: 0.8em; color: var(--warning-color); font-weight: bold;">Recount Batch: ${item.currentRecountBatchId}</div>` : '';
-
-                // ++ Add a span for the dirty indicator, initially hidden ++
-                // ++ Add data-dirty attribute to item-sku div ++
                 columns.details.innerHTML = `
                     <div class="item-sku" data-item-id-sku="${item.itemId}" data-dirty="false"> 
                          ${inactiveIndicator} ${item.isActive ? (item.toCount ? toCountIndicator : finishedIndicator) : ''}
@@ -404,16 +123,16 @@ function renderInventoryList() {
                 // --- Populate Count Column ---
                  const countInput = document.createElement('input');
                  countInput.type = 'number';
-                 countInput.value = (item.counted === null || item.counted === undefined) ? '' : item.counted; // Always show current count, editability depends on toCount
+                 countInput.value = (item.counted === null || item.counted === undefined) ? '' : item.counted;
                  countInput.dataset.type = 'count-input';
                  countInput.min = "0";
                  
                  const hasValidFactorForCalc = item.isReel && typeof item.footageFactor === 'number' && item.footageFactor > 0;
                  const isCalculatedFromFootage = hasValidFactorForCalc && item.calculatedFootage !== null;
-                 const disableCountInput = !item.isActive || !item.toCount || isCalculatedFromFootage; // Disabled if inactive, OR not toCount, OR calculated
+                 const disableCountInput = !item.isActive || !item.toCount || isCalculatedFromFootage;
                  
                  countInput.disabled = disableCountInput;
-                 countInput.readOnly = !item.toCount || !item.isActive; // ReadOnly if not toCount or inactive
+                 countInput.readOnly = !item.toCount || !item.isActive; 
 
                  if (!item.isActive) {
                     countInput.title = "Item is inactive";
@@ -421,8 +140,8 @@ function renderInventoryList() {
                     countInput.title = "Quantity calculated from footage";
                  } else if (!item.toCount) {
                      countInput.title = "Item finished for this cycle (view only)";
-                 } else { //  item.isActive && item.toCount && !isCalculatedFromFootage
-                     countInput.title = "Enter current count";
+                 } else {
+                     countInput.title = "Enter current count. Press Enter to confirm item.";
                  }
 
 
@@ -439,36 +158,23 @@ function renderInventoryList() {
                 columns.count.innerHTML = `<span>Qty:${capturedQtyHtml}</span>`;
                 columns.count.appendChild(countInput);
 
-                // --- Populate Sequences Columns (Visibility controlled by item.isReel) ---
-                if (item.isReel) { // Condition based ONLY on item.isReel
+                // --- Populate Sequences Columns ---
+                if (item.isReel) {
                     columns.sequences1.style.visibility = 'visible';
                     
-                    const createSequenceDisplaySpan = (type, value) => {
-                        const span = document.createElement('span');
-                        span.className = 'clickable-value sequence-value-display';
-                        span.textContent = value || '---';
-                        span.title = `Click to use ${value} for ${type}`;
-                        span.dataset.action = 'apply-sequence';
-                        span.dataset.sequenceType = type.toLowerCase().replace(' ', ''); // e.g. "inner1"
-                        span.dataset.sequenceValue = value;
-                        return span;
-                    };
                     const createSequenceInput = (sequenceType, currentValue) => {
                         const input = document.createElement('input');
                         input.type = 'number';
                         input.min = '0';
-                        input.dataset.sequence = sequenceType.toLowerCase(); // "inner", "outer", "inner2", "outer2"
+                        input.dataset.sequence = sequenceType.toLowerCase();
                         input.value = currentValue || '';
                         input.placeholder = sequenceType;
                         input.disabled = !item.isActive || !item.toCount;
                         input.readOnly = !item.toCount;
-                        input.title = item.isActive && item.toCount ? `Enter ${sequenceType} sequence` : "Cannot edit sequences";
+                        input.title = item.isActive && item.toCount ? `Enter ${sequenceType} sequence. Press Enter to confirm item.` : "Cannot edit sequences";
                         return input;
                     };
                     
-                    const disableSequenceInput = !item.isActive || !item.toCount;
-
-                    // Pair 1
                     const group1Inner = document.createElement('div'); 
                     group1Inner.className = 'sequence-group';
                     group1Inner.appendChild(document.createTextNode('I1:'));
@@ -482,7 +188,6 @@ function renderInventoryList() {
                     columns.sequences1.appendChild(group1Inner);
                     columns.sequences1.appendChild(group1Outer);
                    
-
                     if (item.isTwoWayReel) {
                         columns.sequences2.style.visibility = 'visible';
                         const group2Inner = document.createElement('div');
@@ -508,12 +213,11 @@ function renderInventoryList() {
                     const hasValidFactor = typeof item.footageFactor === 'number' && item.footageFactor > 0;
 
                     if (hasValidFactor) {
-                        if (item.calculatedFootage !== null) { // item.calculatedFootage is now scaled or null
+                        if (item.calculatedFootage !== null) {
                             totalFootageDisplay.textContent = `Total: ${item.calculatedFootage.toFixed(2)} ft`;
-                            totalFootageDisplay.style.color = ''; // Default color
+                            totalFootageDisplay.style.color = '';
                             totalFootageDisplay.title = `Calculated with factor: ${item.footageFactor}`;
                         } else {
-                            // Factor is valid, but sequences were incomplete/invalid to produce a calculation
                             const hasAnySeqInput = item.innerSequence || item.outerSequence || (item.isTwoWayReel && (item.innerSequence2 || item.outerSequence2));
                             if (hasAnySeqInput) {
                                 totalFootageDisplay.textContent = 'Total: Invalid Input';
@@ -525,63 +229,54 @@ function renderInventoryList() {
                                 totalFootageDisplay.title = 'Enter sequences to calculate.';
                             }
                         }
-                    } else { // footageFactor is missing or invalid
+                    } else {
                         totalFootageDisplay.textContent = 'Total: N/A (No Factor)';
                         totalFootageDisplay.style.color = 'var(--dark-gray)'; 
                         totalFootageDisplay.title = 'Footage factor missing, zero, or invalid. Cannot calculate footage.';
                     }
-                    // Append to sequences1 as it's the primary sequence display area
                     const equalsSpan = document.createElement('span');
                     equalsSpan.textContent = " = ";
                     equalsSpan.className = "sequence-equals";
                     columns.sequences1.appendChild(equalsSpan);
                     columns.sequences1.appendChild(totalFootageDisplay);
 
-
-                } else { // Not a reel
+                } else {
                     columns.sequences1.innerHTML = '';
                     columns.sequences1.style.visibility = 'hidden';
                     columns.sequences2.innerHTML = '';
                     columns.sequences2.style.visibility = 'hidden';
                 }
 
-
                  // --- Populate Notes Column ---
                 const notesTextarea = document.createElement('textarea');
                 notesTextarea.dataset.type = 'notes-input';
-                notesTextarea.value = item.notes ?? ''; // Show notes regardless of toCount
+                notesTextarea.value = item.notes ?? '';
                 notesTextarea.placeholder = 'Add notes...';
-                // Notes editable if active, regardless of toCount status
                 notesTextarea.disabled = !item.isActive; 
                 notesTextarea.readOnly = !item.isActive; 
+                // ++ ADD TITLE FOR SHIFT+ENTER HINT ++
+                if (item.isActive && item.toCount) {
+                    notesTextarea.title = "Enter notes for this item. Press Shift+Enter to confirm and finalize the item.";
+                } else if (item.isActive && !item.toCount) {
+                    notesTextarea.title = "Notes (item finished for cycle - view only)";
+                } else {
+                    notesTextarea.title = "Notes (item inactive)";
+                }
                 columns.notes.appendChild(notesTextarea);
-
 
                 // --- Populate Actions Column ---
                 let actionButtonsHtml = '';
-                const confirmButtonDisabled = !item.isActive || !item.toCount; // Used for the "Confirm" button
+                const confirmButtonDisabled = !item.isActive || !item.toCount;
 
                 if (item.isActive && item.toCount) {
-                    // Item is active and part of the current count cycle
-                    
-                    // Visibility of "Flag Uncounted":
-                    // - Item must be active (isActive: true)
-                    // - Item must be part of the current count (toCount: true)
-                    // - Item must NOT already be flagged as uncounted (isUncounted: false)
-                    //   (e.g., if it has a count 0 or other value, but user wants to explicitly mark it uncounted/null)
                     const showFlagUncountedButton = !item.isUncounted; 
                     if (showFlagUncountedButton) {
                         actionButtonsHtml += `<button data-action="flag-as-uncounted" class="btn-warning" title="Reset item to uncounted (clears current quantity, sequences, and calculated footage if reel)">Flag Uncounted</button>`;
                     }
-                    
                     actionButtonsHtml += `<button data-action="confirm-item" class="btn-success" title="Confirm count and finish this item for the cycle" ${confirmButtonDisabled ? 'disabled' : ''}>Confirm</button>`;
-
                 } else if (item.isActive && !item.toCount) {
-                    // Item is active but ALREADY FINISHED for this cycle
                     actionButtonsHtml += `<button data-action="edit-item" class="btn-secondary" title="Re-open this item for counting in the current cycle">Edit Count</button>`;
                 }
-                // For inactive items, only history is typically shown by default.
-                // The "View History" button is added universally below.
 
                 columns.actions.innerHTML = `
                     ${actionButtonsHtml}
@@ -611,58 +306,27 @@ function renderInventoryList() {
         console.error("Error rendering inventory list:", error);
         container.innerHTML = `<p class="error-message">Error displaying inventory list. Check console.</p>`;
    }
-}  // End renderInventoryList
-/*
-Explanation of Changes in renderInventoryList (Actions Column Snippet):
-const showFlagButton = item.isActive && item.toCount && !item.isUncounted;: This logic is correct for showing the "Flag as Uncounted" button. It appears if the item is active, part of the current count, and not already in an isUncounted state (meaning item.counted is not null). This allows users to clear a manually entered count (even 0) and revert it to a truly uncounted state.
-<button data-action="confirm-item" ...>Confirm</button>: Changed the data-action to "confirm-item" and the button text to "Confirm" as per our agreement. The disabled logic (confirmButtonDisabled) remains correct for now (disables if not active or not toCount).
-*/
-
+}
 
 // --- Summary Card Rendering ---
 function updateSummaryCards() {
     try {
-        console.log("[updateSummaryCards] Called. Current database.inventory length:", database.inventory.length);
+        // console.log("[updateSummaryCards] Called. Current database.inventory length:", database.inventory.length);
         
         const totalItems = database.inventory.length;
-        const activeItems = database.inventory.filter(item => item.isActive === true); // Explicitly check for true
+        const activeItems = database.inventory.filter(item => item.isActive === true);
         const activeCount = activeItems.length;
-
-        // Log samples of active items
-        if (activeItems.length > 0) {
-            console.log(`[updateSummaryCards] Found ${activeItems.length} active items. Samples:`);
-            activeItems.slice(0, Math.min(5, activeItems.length)).forEach(item => {
-                console.log(`  SKU: ${item.SKU}, itemId: ${item.itemId}, isActive: ${item.isActive}, toCount: ${item.toCount}, isUncounted: ${item.isUncounted}, counted: ${item.counted}`);
-            });
-        } else {
-            console.log("[updateSummaryCards] No active items found in database.inventory.");
-        }
         
-        // Items that are active, finished for this cycle (!toCount), AND have a count (!isUncounted)
         const countedFinishedActive = activeItems.filter(item => item.toCount === false && item.isUncounted === false).length;
-        
-        // Items that are active AND are part of the current count cycle (toCount: true)
         const uncountedToDoActive = activeItems.filter(item => item.toCount === true).length;
 
-        console.log("[updateSummaryCards] Calculated values:", { 
-            totalItems, 
-            activeCount, 
-            countedFinishedActive, 
-            uncountedToDoActive 
-        });
+        // console.log("[updateSummaryCards] Calculated values:", { totalItems, activeCount, countedFinishedActive, uncountedToDoActive });
 
         const updateCardText = (cardId, value) => {
             const card = document.getElementById(cardId);
             if (card) {
                 const p = card.querySelector('p');
-                if (p) {
-                    p.textContent = value;
-                    console.log(`[updateSummaryCards] Updated card '${cardId}' to '${value}'`);
-                } else {
-                    console.warn(`[updateSummaryCards] Paragraph element not found in card '${cardId}'.`);
-                }
-            } else {
-                console.warn(`[updateSummaryCards] Summary card with ID '${cardId}' not found.`);
+                if (p) p.textContent = value;
             }
         };
 
@@ -671,12 +335,12 @@ function updateSummaryCards() {
         updateCardText('counted-items', countedFinishedActive); 
         updateCardText('uncounted-items', uncountedToDoActive); 
 
-        console.log("[updateSummaryCards] Finished updating card texts.");
+        // console.log("[updateSummaryCards] Finished updating card texts.");
 
     } catch (error) {
         console.error("Error updating summary cards:", error);
     }
-};  // End of updateSummaryCards
+};
 
 // --- History View Rendering ---
 function renderHistoryView() {
@@ -690,7 +354,7 @@ function renderHistoryView() {
             return;
         }
         const fragment = document.createDocumentFragment();
-        database.transactionHistory.forEach(entry => { // Assumes history is already sorted
+        database.transactionHistory.forEach(entry => {
              try {
                 const div = document.createElement('div');
                 div.className = 'history-entry';
@@ -704,7 +368,7 @@ function renderHistoryView() {
                         detailsHtml = `Updated count for <strong>${entry.SKU}</strong> (${entry.location || 'N/A'}) from ${fromVal} to <strong>${entry.details.newValue}</strong> via ${entry.details.source || 'manual'}.`;
                          if (entry.details.notes) detailsHtml += ` <i>Note: ${entry.details.notes}</i>`;
                         break;
-                    case 'item_reset_to_uncounted': // Updated from flag_uncounted
+                    case 'item_reset_to_uncounted':
                          detailsHtml = `Flagged <strong>${entry.SKU}</strong> (${entry.location || 'N/A'}) as uncounted. (Previous count: ${entry.details.previousCount ?? 'N/A'}, Was toCount: ${entry.details.wasPreviouslyToCount})`;
                         break;
                     case 'update_notes':
@@ -713,7 +377,7 @@ function renderHistoryView() {
                     case 'create_item':
                         detailsHtml = `Created new item <strong>${entry.SKU}</strong> at ${entry.location || 'N/A'}. Type: ${entry.details?.itemType || 'Standard'}${entry.details?.reelNumber ? `, Reel#: ${entry.details.reelNumber}` : ''}. Marked 'To Count'.`;
                         break;
-                    case 'description_change': // Should be less common with itemId, might be part of 'create_item' or specific update
+                    case 'description_change':
                          detailsHtml = `Description change for <strong>${entry.SKU}</strong> from "${entry.details.oldDescription}" to "${entry.details.newDescription}" (e.g. during import or item edit).`;
                          break;
                     case 'status_change': 
@@ -741,7 +405,7 @@ function renderHistoryView() {
                           const adjSource = entry.details.source === 'recount_adjustment' ? `adjustment (Tx: ${entry.details.adjustmentTxId})` : 'physical count';
                           detailsHtml = `Recount [${entry.details.recountBatchId}] Update for <strong>${entry.SKU}</strong> (${entry.location || 'N/A'}) from ${fromAdjVal} to <strong>${entry.details.newValue}</strong> via ${adjSource}.`;
                           break;
-                     case 'recount_item_reset_to_uncounted': // Updated from recount_flag_uncounted
+                     case 'recount_item_reset_to_uncounted':
                           detailsHtml = `Recount [${entry.details.recountBatchId}] Flagged <strong>${entry.SKU}</strong> (${entry.location || 'N/A'}) as uncounted. (Previous count: ${entry.details.previousCount ?? 'N/A'}, Was toCount: ${entry.details.wasPreviouslyToCount})`;
                           break;
                      case 'recount_update_notes': 
@@ -776,7 +440,7 @@ function renderHistoryView() {
         console.error("Error rendering history view:", error);
         container.innerHTML = `<p class="error-message">Error displaying history. Check console.</p>`;
     }
-} // End renderHistoryView
+}
 
 
 function toggleHistoryView(show) {
@@ -797,12 +461,10 @@ function toggleHistoryView(show) {
     } catch (error) { 
         console.error("Error toggling history view:", error); 
     }
-} // End toggleHistoryView
+}
 
 
-// --- Item Specific History Modal ---
 async function showItemHistory(itemId, sku, description) {
-    console.log(`[showItemHistory] Function called with ItemID: ${itemId}, SKU: ${sku}, Desc: ${description}`);
     const modal = document.getElementById('itemHistoryModal');
     const title = document.getElementById('itemHistoryModalTitle');
     const body = document.getElementById('itemHistoryModalBody');
@@ -818,24 +480,18 @@ async function showItemHistory(itemId, sku, description) {
     title.textContent = `History for Item: ${displaySku}`;
     title.title = `ItemID: ${itemId}\nDescription: ${displayDesc}`; 
 
-    console.log(`[showItemHistory] Set modal title to: ${title.textContent}`);
-
     body.innerHTML = '<p>Loading history...</p>';
     modal.style.display = 'block'; 
 
     try {
-        console.log(`[showItemHistory] Querying history from DB for ItemID: '${itemId}'`);
         const itemHistory = await DB.getTransactionHistoryByItemId(itemId);
-        console.log(`[showItemHistory] History records received from DB for ItemID ${itemId}:`, itemHistory);
-
         body.innerHTML = ''; 
 
         if (!Array.isArray(itemHistory) || itemHistory.length === 0) {
              body.innerHTML = `<p>No specific transaction history found for this item (ID: ${itemId}).</p>`;
-             console.log(`[showItemHistory] Displaying 'No history' message for ItemID ${itemId}.`);
         } else {
             const fragment = document.createDocumentFragment();
-            itemHistory.forEach(entry => { // Assumes already sorted descending
+            itemHistory.forEach(entry => {
                 try {
                     const div = document.createElement('div');
                     div.className = 'history-entry';
@@ -908,14 +564,13 @@ async function showItemHistory(itemId, sku, description) {
                 }
             });
             body.appendChild(fragment);
-            console.log(`[showItemHistory] Rendered ${itemHistory.length} history entries for ItemID ${itemId}.`);
         }
 
     } catch (error) {
         console.error(`[showItemHistory] Error loading or rendering history for ItemID ${itemId}:`, error);
         body.innerHTML = `<p class="error-message">Error loading history for this item. Check console.</p>`;
     }
-} // End showItemHistory
+}
 
 
 function closeItemHistoryModal() {
@@ -923,9 +578,8 @@ function closeItemHistoryModal() {
     if (modal) {
         modal.style.display = 'none';
     }
-} // End closeItemHistoryModal
+}
 
-// --- New Count Confirmation Modal ---
 function openNewCountConfirmationModal(cycleId, cutOffDateStr) {
     const modal = document.getElementById('newCountConfirmationModal');
     const cycleIdSpan = document.getElementById('confirmCycleId');
@@ -945,13 +599,12 @@ function openNewCountConfirmationModal(cycleId, cutOffDateStr) {
         proceedButton.dataset.cycleId = cycleId;
         proceedButton.dataset.cutOffDate = cutOffDateStr;
     } else {
-        console.error("Proceed button in new count confirmation modal not found.");
+        // Fallback if button ID changes or is missing, store on modal itself
         modal.dataset.cycleId = cycleId;
         modal.dataset.cutOffDate = cutOffDateStr;
     }
 
     modal.style.display = 'block';
-    console.log(`New Count Confirmation modal opened for Cycle ID: ${cycleId}, Cut-off: ${cutOffDateStr}`);
 }
 
 function closeNewCountConfirmationModal() {
@@ -966,7 +619,6 @@ function closeNewCountConfirmationModal() {
             delete modal.dataset.cycleId;
             delete modal.dataset.cutOffDate;
         }
-        console.log("New Count Confirmation modal closed.");
     }
 }
 // --- END OF FILE uiRenderer.js ---

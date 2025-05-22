@@ -1,3 +1,5 @@
+// --- START OF MODIFIED eventHandlers.js ---
+
 // --- Event Listener Setup ---
 // Needs access to wrapAction/wrapHandler (stateManager.js)
 // Needs access to action functions (dataLogic.js, importExport.js)
@@ -75,17 +77,18 @@ function setupEventListeners() {
             }
         });
 
-        // Event Delegation for Inventory List (Assuming this was intended to be here, from original file)
+        // Event Delegation for Inventory List
         const inventoryListContainer = document.getElementById('inventoryList');
         if (inventoryListContainer) {
             inventoryListContainer.addEventListener('click', wrapHandler(handleInventoryListClick, 'inventory list click'));
             inventoryListContainer.addEventListener('change', wrapHandler(handleInventoryListChange, 'inventory list change'));
             inventoryListContainer.addEventListener('input', wrapHandler(handleInventoryListInput, 'inventory list input'));
+            inventoryListContainer.addEventListener('keydown', wrapHandler(handleInventoryListKeyDown, 'inventory list keydown')); // ++ NEW LISTENER ++
         } else {
             console.error("Inventory list container #inventoryList not found for delegation.");
         }
 
-        // Event Delegation for Summary Cards (Assuming this was intended to be here, from original file)
+        // Event Delegation for Summary Cards
         const summaryCardsContainer = document.querySelector('.summary-cards');
         if (summaryCardsContainer) {
             summaryCardsContainer.addEventListener('click', wrapHandler(handleSummaryCardClick, 'summary card click'));
@@ -93,7 +96,6 @@ function setupEventListeners() {
             console.error("Summary cards container .summary-cards not found for delegation.");
         }
 
-        // Item Modal Listeners
         // New Count Confirmation Modal Listeners
         const newCountModal = document.getElementById('newCountConfirmationModal');
         if (newCountModal) {
@@ -118,12 +120,10 @@ function setupEventListeners() {
                         return;
                     }
 
-                    closeNewCountConfirmationModal(); // Close this modal first
+                    closeNewCountConfirmationModal(); 
 
-                    // Now call showImportDialog, which handles the file input click
                     if (typeof showImportDialog === 'function') {
                         console.log(`Calling showImportDialog from modal. Context: 'new_count', CycleID: ${cycleId}, CutOffDate: ${cutOffDateStr}`);
-                        // showImportDialog itself is async and will handle its own errors
                         showImportDialog('new_count', cycleId, cutOffDateStr);
                     } else {
                         console.error("showImportDialog function not found! Cannot proceed with import.");
@@ -132,8 +132,8 @@ function setupEventListeners() {
                 }, 'proceed to select CSV for new count'));
             }
         }
-        // End New Count Confirmation Modal Listeners
 
+        // Add New Item Modal Listeners
         const addNewItemModal = document.getElementById('addNewItemModal');
         if (addNewItemModal) {
             document.getElementById('addNewItemModalClose')?.addEventListener('click', wrapHandler(closeAddNewItemModal, 'close add new item modal by X'));
@@ -147,10 +147,10 @@ function setupEventListeners() {
 
             const newItemSkuInput = document.getElementById('newItemSku');
             if (newItemSkuInput) {
-                newItemSkuInput.addEventListener('blur', wrapHandler(async () => { // Async because DB.findItemsBySku is async
+                newItemSkuInput.addEventListener('blur', wrapHandler(async () => {
                     const sku = newItemSkuInput.value.trim();
-                    if (sku) { // Only check if SKU is not empty
-                        await handleSkuCheckInModal(sku); // In dataLogic.js
+                    if (sku) {
+                        await handleSkuCheckInModal(sku);
                     } else {
                         resetSkuCheckUIState(); 
                     }
@@ -175,7 +175,6 @@ function setupEventListeners() {
                 }
             }, 'Reel Number input blur for add new item'));
 
-
             document.getElementById('revealNewSkuDetailsBtn')?.addEventListener('click', wrapHandler(() => {
                 document.getElementById('newSkuDetailsSection').style.display = 'block';
                 document.getElementById('revealNewSkuDetailsBtn').style.display = 'none'; 
@@ -189,29 +188,27 @@ function setupEventListeners() {
                 event.preventDefault();
                 await processAddItemForm(); 
             }, 'submit add new item form'));
-        } // End of if (addNewItemModal)
+        }
 
-        console.log("Event listeners successfully set up."); // This should be the last line inside the try block
-    } catch (error) { // ++ THIS CATCH BLOCK WAS MISSING ++
+        console.log("Event listeners successfully set up.");
+    } catch (error) {
         console.error("Error setting up event listeners:", error);
         alert("An error occurred while setting up UI interactions. Some buttons or actions might not work.");
-    } // End of catch block
-} // End of setupEventListeners function
+    }
+}
 
 // --- Event Handler Functions ---
-// Needs applyCurrentFilters, updateFilterControlsUI (dataLogic.js)
+
 function handleSummaryCardClick(event) {
     const clickedCard = event.target.closest('.card');
-    if (!clickedCard) return; // Click wasn't on a card or its descendant
+    if (!clickedCard) return;
 
     const cardId = clickedCard.id;
     console.log(`Summary card clicked: ${cardId}`);
 
-    // Reset manual filters when using quick filters
     currentFilters.location = null;
     currentFilters.searchTerm = '';
 
-    // Set filters based on card ID
     switch (cardId) {
         case 'total-items':
             currentFilters.status = 'all';
@@ -221,106 +218,23 @@ function handleSummaryCardClick(event) {
             currentFilters.status = 'active';
             currentFilters.filterByToCountStatus = 'all';
             break;
-        case 'counted-items': // Shows 'finished' items for this cycle
+        case 'counted-items':
             currentFilters.status = 'active';
-            currentFilters.filterByToCountStatus = 'counted'; // Items with toCount: false
+            currentFilters.filterByToCountStatus = 'counted';
             break;
-        case 'uncounted-items': // Shows items 'to count' (default view)
+        case 'uncounted-items':
             currentFilters.status = 'active';
-            currentFilters.filterByToCountStatus = 'to_count'; // Items with toCount: true
+            currentFilters.filterByToCountStatus = 'to_count';
             break;
         default:
             console.warn(`Unknown summary card ID clicked: ${cardId}`);
-            return; // Do nothing if ID is unrecognized
+            return;
     }
 
-    // Update the UI filter controls to match the quick filter state
     updateFilterControlsUI();
-
-    // Apply the filters and re-render
     applyCurrentFilters();
 }
 
-// Needs flagUncounted, findInventoryItemByItemId, finalizeSingleItem (dataLogic.js)
-// Needs showItemHistory (uiRenderer.js)
-// Needs wrapAction (stateManager.js)
-/* function handleInventoryListClick(event) {
-    const target = event.target;
-    const itemDiv = target.closest('.inventory-item');
-    if (!itemDiv) return;
-    const itemId = itemDiv.dataset.itemId;
-
-    console.log("[handleInventoryListClick] Click detected on itemDiv, itemId:", itemId); 
-    console.log("[handleInventoryListClick] Clicked target element:", target); 
-
-    if (!itemId) {
-        console.error("Could not find itemId on inventory item div:", itemDiv);
-        return;
-    }
-
-    const applyValueToInput = (selector, value) => {
-        // ... (this helper remains the same)
-        const inputElement = itemDiv.querySelector(selector);
-        if (inputElement && !inputElement.disabled) {
-             console.log(`Applying value '${value}' to input '${selector}' for item ${itemId}`);
-             inputElement.value = value;
-             console.log(`Dispatching 'change' event for input '${selector}'`);
-             inputElement.dispatchEvent(new Event('change', { bubbles: true }));
-             return true;
-        } else if (!inputElement) { console.error(`Cannot find input '${selector}' in item ${itemId}`); return false; }
-          else { console.warn(`Input '${selector}' is disabled.`); return false; }
-    };
-
-    // ----- THIS IS THE PART TO UPDATE -----
-    if (target.matches('button[data-action="flag-as-uncounted"]')) { // Match the latest button action
-        console.log("[handleInventoryListClick] 'Flag as Uncounted' button matched.");
-        if (typeof flagItemAsUncounted === 'function') { // Call the latest function name
-            flagItemAsUncounted(itemId);
-        } else {
-            console.error("flagItemAsUncounted function not found.");
-        }
-    // ----- END OF UPDATE -----
-    } else if (target.matches('button[data-action="view-history"]')) {
-        console.log("[handleInventoryListClick] 'View History' button matched.");
-        findInventoryItemByItemId(itemId).then(item => {
-            const displaySku = item ? item.SKU : itemDiv.dataset.sku;
-            const displayDesc = item ? item.Description : 'Unknown Description';
-            if (!itemId) {
-                 console.error("Cannot show history: Item ID is missing.");
-                 alert("Error: Could not identify the item to show history for.");
-                 return;
-            }
-            console.log(`[handleInventoryListClick] Calling showItemHistory with ItemID: ${itemId} (SKU: ${displaySku})`);
-            showItemHistory(itemId, displaySku, displayDesc);
-        }).catch(err => {
-            console.error(`Error finding item ${itemId} before showing history:`, err);
-             alert("Error retrieving item details. Cannot show history.");
-        });
-    } else if (target.matches('span[data-action="apply-sequence"]')) {
-        console.log("[handleInventoryListClick] 'Apply Sequence' span matched.");
-        const sequenceType = target.dataset.sequenceType;
-        const sequenceValue = target.dataset.sequenceValue;
-        if (sequenceType && sequenceValue !== undefined) {
-             applyValueToInput(`input[data-sequence="${sequenceType}"]`, sequenceValue);
-        } else {
-            console.error("Missing sequence type or value on clicked span:", target);
-        }
-    } else if (target.matches('span[data-action="apply-expected-qty"]')) {
-         console.log("[handleInventoryListClick] 'Apply Expected Qty' span matched.");
-         const expectedValue = target.dataset.value;
-         if (expectedValue !== undefined) {
-             applyValueToInput('input[data-type="count-input"]', expectedValue);
-         } else {
-              console.error("Missing expected quantity value on clicked span:", target);
-         }
-    } else if (target.matches('button[data-action="finalize-item"]')) {
-        console.log("[handleInventoryListClick] 'Finalize Item' button matched.");
-        wrapAction(() => finalizeSingleItem(itemId), `finalize item ${itemId}`)();
-    }
-} // end of handleInventoryListClick
- */
-
-// --- START OF MODIFIED eventHandlers.js -> handleInventoryListClick ---
 function handleInventoryListClick(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
@@ -335,55 +249,10 @@ function handleInventoryListClick(event) {
         return;
     }
     
-    if (target.matches('button[data-action="flag-as-uncounted"]')) { 
-        console.log("[handleInventoryListClick] 'Flag as Uncounted' button matched.");
-        if (typeof flagItemAsUncounted === 'function') { 
-            wrapAction(() => flagItemAsUncounted(itemId), `flag item ${itemId} as uncounted`)(); // Added wrapAction
-        } else {
-            console.error("flagItemAsUncounted function not found.");
-        }
-    } else if (target.matches('button[data-action="view-history"]')) {
-        // ... (view-history logic remains the same) ...
-    } else if (target.matches('span[data-action="apply-sequence"]')) {
-        // ... (apply-sequence logic remains the same) ...
-    } else if (target.matches('span[data-action="apply-expected-qty"]')) {
-        // ... (apply-expected-qty logic remains the same) ...
-    } else if (target.matches('button[data-action="confirm-item"]')) { 
-        console.log("[handleInventoryListClick] 'Confirm Item' button matched.");
-        if (typeof confirmAndFinalizeItem === 'function') { 
-            wrapAction(() => confirmAndFinalizeItem(itemId), `confirm item ${itemId}`)();
-        } else {
-            console.error("confirmAndFinalizeItem function not found.");
-            // Fallback for safety, though confirmAndFinalizeItem should exist
-            if (typeof finalizeSingleItem === 'function') {
-                 console.warn("confirmAndFinalizeItem not found, using old finalizeSingleItem.");
-                 wrapAction(() => finalizeSingleItem(itemId), `fallback finalize item ${itemId}`)();
-            }
-        }
-    } else if (target.matches('button[data-action="edit-item"]')) { // ++ NEW HANDLER
-        console.log("[handleInventoryListClick] 'Edit Item' button matched.");
-        // "Editing" a finished item means re-opening it, which is what flagItemAsUncounted does.
-        if (typeof flagItemAsUncounted === 'function') {
-            wrapAction(() => flagItemAsUncounted(itemId), `edit (re-open) item ${itemId}`)();
-        } else {
-            console.error("flagItemAsUncounted function (for edit-item) not found.");
-        }
-    }
-} 
-// --- END OF MODIFIED eventHandlers.js -> handleInventoryListClick ---
-
-    /*
-    if (!itemId) {
-        console.error("Could not find itemId on inventory item div:", itemDiv);
-        return;
-    }
-
     const applyValueToInput = (selector, value) => {
         const inputElement = itemDiv.querySelector(selector);
         if (inputElement && !inputElement.disabled) {
-             console.log(`Applying value '${value}' to input '${selector}' for item ${itemId}`);
              inputElement.value = value;
-             console.log(`Dispatching 'change' event for input '${selector}'`);
              inputElement.dispatchEvent(new Event('change', { bubbles: true }));
              return true;
         } else if (!inputElement) { console.error(`Cannot find input '${selector}' in item ${itemId}`); return false; }
@@ -393,7 +262,7 @@ function handleInventoryListClick(event) {
     if (target.matches('button[data-action="flag-as-uncounted"]')) { 
         console.log("[handleInventoryListClick] 'Flag as Uncounted' button matched.");
         if (typeof flagItemAsUncounted === 'function') { 
-            flagItemAsUncounted(itemId);
+            wrapAction(() => flagItemAsUncounted(itemId), `flag item ${itemId} as uncounted`)();
         } else {
             console.error("flagItemAsUncounted function not found.");
         }
@@ -430,52 +299,43 @@ function handleInventoryListClick(event) {
          } else {
               console.error("Missing expected quantity value on clicked span:", target);
          }
-    } else if (target.matches('button[data-action="confirm-item"]')) { // ++ UPDATED data-action
+    } else if (target.matches('button[data-action="confirm-item"]')) { 
         console.log("[handleInventoryListClick] 'Confirm Item' button matched.");
-        // The actual logic for confirm will be in a new/modified function in dataLogic.js
-        // For now, let's assume finalizeSingleItem (or a new function) handles the "Confirm" action
-        if (typeof confirmAndFinalizeItem === 'function') { // We'll create/rename this function later
+        if (typeof confirmAndFinalizeItem === 'function') { 
             wrapAction(() => confirmAndFinalizeItem(itemId), `confirm item ${itemId}`)();
-        } else if (typeof finalizeSingleItem === 'function') { // Fallback if we haven't renamed yet
-             console.warn("confirmAndFinalizeItem not found, using finalizeSingleItem as placeholder for confirm action.");
-            wrapAction(() => finalizeSingleItem(itemId), `finalize item ${itemId} (acting as confirm)`)();
         } else {
-            console.error("No function found to handle 'confirm-item' action.");
+            console.error("confirmAndFinalizeItem function not found.");
+        }
+    } else if (target.matches('button[data-action="edit-item"]')) {
+        console.log("[handleInventoryListClick] 'Edit Item' button matched.");
+        if (typeof flagItemAsUncounted === 'function') {
+            wrapAction(() => flagItemAsUncounted(itemId), `edit (re-open) item ${itemId}`)();
+        } else {
+            console.error("flagItemAsUncounted function (for edit-item) not found.");
         }
     }
 } 
-// --- END OF MODIFIED eventHandlers.js -> handleInventoryListClick ---
-*/
-/*
-Event Handler Update for "Confirm" Button:
-Updated the event handler in eventHandlers.js to match the new data-action="confirm-item".
 
-*/
-
-
-// Needs updateCount, updateSequences, updateItemNotes (dataLogic.js)
 function handleInventoryListChange(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
     if (!itemDiv) return;
-    const itemId = itemDiv.dataset.itemId; // <-- GET itemId
+    const itemId = itemDiv.dataset.itemId;
 
-    // Add a check to ensure itemId was found
     if (!itemId) {
         console.error("Could not find itemId on inventory item div:", itemDiv);
         return;
     }
 
     if (target.matches('input[data-type="count-input"]:not(:disabled):not([readonly])')) {
-        updateCount(itemId, target.value); // <-- PASS itemId
-    } else if (target.matches('input[data-sequence]:not(:disabled)')) { // Matches inner, outer, inner2, outer2
-        updateSequences(itemId); // <-- PASS itemId
-    } else if (target.matches('textarea[data-type="notes-input"]:not(:disabled)')) { // <-- Use 'change' for notes
-        updateItemNotes(itemId, target.value); // <-- PASS itemId
+        updateCount(itemId, target.value);
+    } else if (target.matches('input[data-sequence]:not(:disabled)')) {
+        updateSequences(itemId);
+    } else if (target.matches('textarea[data-type="notes-input"]:not(:disabled)')) {
+        updateItemNotes(itemId, target.value);
     }
 }
 
-// handleInventoryListInput is no longer needed for notes if using 'change' event
 function handleInventoryListInput(event) {
     const target = event.target;
     const itemDiv = target.closest('.inventory-item');
@@ -496,7 +356,7 @@ function handleInventoryListInput(event) {
             const valInMemory = (itemInMemory.counted === null || itemInMemory.counted === undefined) ? '' : String(itemInMemory.counted);
             isFieldDirty = currentValInInput !== valInMemory;
         } else if (target.matches('input[data-sequence]:not(:disabled)')) {
-            const seqType = target.dataset.sequence; // "inner", "outer", "inner2", "outer2"
+            const seqType = target.dataset.sequence;
             const currentValInInput = target.value.trim();
             let valInMemory = '';
             switch(seqType) {
@@ -508,32 +368,82 @@ function handleInventoryListInput(event) {
             valInMemory = valInMemory ?? '';
             isFieldDirty = currentValInInput !== valInMemory;
         } else if (target.matches('textarea[data-type="notes-input"]:not(:disabled)')) {
-            const currentValInInput = target.value; // Don't trim notes for comparison yet
+            const currentValInInput = target.value;
             const valInMemory = itemInMemory.notes ?? '';
             isFieldDirty = currentValInInput !== valInMemory;
         }
         
-        // Now, check overall dirty state for the item card
-        // This is a simplified check. A more robust one would iterate all relevant inputs.
-        // For now, if *any* listened-to input event marks it dirty, we show the indicator.
-        // The 'change' event handlers (which save data) will be responsible for clearing it.
         if(isFieldDirty) {
             updateItemDirtyIndicator(itemId, true);
         }
-        // If not isFieldDirty for *this specific input*, we don't automatically set global dirty to false,
-        // as another field on the same card might still be dirty.
-        // The clearing of the dirty flag will happen upon successful save (blur/change event).
     });
 }
-// --- END OF handleInventoryListInput ---
 
+// ++ NEW EVENT HANDLER for KeyDown events on inventory items ++
+async function handleInventoryListKeyDown(event) {
+    const target = event.target;
+    const itemDiv = target.closest('.inventory-item');
+    if (!itemDiv) return;
 
-// ++ NEW: Functions to manage Add New Item Modal UI (could also go in uiRenderer.js) ++
+    const itemId = itemDiv.dataset.itemId;
+    if (!itemId) {
+        console.error("[handleInventoryListKeyDown] Could not find itemId on inventory item div:", itemDiv);
+        return;
+    }
+
+    // Check if the item is active and toCount, otherwise "Enter to confirm" shouldn't apply
+    const itemData = await findInventoryItemByItemId(itemId);
+    if (!itemData || !itemData.isActive || !itemData.toCount) {
+        // console.log(`[handleInventoryListKeyDown] Item ${itemId} is not active or not 'toCount'. Enter/Shift+Enter to confirm is disabled.`);
+        return;
+    }
+
+    const isQuantityInput = target.matches('input[data-type="count-input"]');
+    const isSequenceInput = target.matches('input[data-sequence]');
+    const isNotesTextarea = target.matches('textarea[data-type="notes-input"]');
+
+    if (event.key === 'Enter') {
+        if (!event.shiftKey && (isQuantityInput || isSequenceInput)) {
+            // Standard Enter key for quantity or sequence inputs
+            event.preventDefault();
+            console.log(`[handleInventoryListKeyDown] Enter pressed on Qty/Seq for item ${itemId}. Confirming.`);
+            if (typeof confirmAndFinalizeItem === 'function') {
+                // Using wrapAction here is appropriate if confirmAndFinalizeItem doesn't inherently handle its own top-level errors for UI feedback
+                // However, since confirmAndFinalizeItem is a major data logic function, it likely does.
+                // For simplicity, we call it directly as it's an intended user action pathway.
+                // The wrapHandler on the keydown listener itself provides basic error catching.
+                confirmAndFinalizeItem(itemId);
+            } else {
+                console.error("confirmAndFinalizeItem function not found.");
+            }
+        } else if (event.shiftKey && isNotesTextarea) {
+            // Shift+Enter for notes textarea
+            event.preventDefault();
+            console.log(`[handleInventoryListKeyDown] Shift+Enter pressed on Notes for item ${itemId}. Saving notes and confirming.`);
+            
+            if (typeof updateItemNotes === 'function') {
+                await updateItemNotes(itemId, target.value); // Ensure notes are saved first
+            } else {
+                console.error("updateItemNotes function not found. Cannot save notes before confirming.");
+                // Potentially alert user or skip confirmation if notes save is critical
+            }
+
+            if (typeof confirmAndFinalizeItem === 'function') {
+                confirmAndFinalizeItem(itemId);
+            } else {
+                console.error("confirmAndFinalizeItem function not found.");
+            }
+        }
+        // If it's just "Enter" in notes textarea and not Shift+Enter, default behavior (newline) occurs.
+    }
+}
+// --- END OF NEW EVENT HANDLER ---
+
 function openAddNewItemModal() {
     const modal = document.getElementById('addNewItemModal');
     if (modal) {
-        document.getElementById('addNewItemForm').reset(); // Clear previous entries
-        resetSkuCheckUIState(); // Reset all dynamic parts of the modal to initial state
+        document.getElementById('addNewItemForm').reset();
+        resetSkuCheckUIState();
         modal.style.display = 'block';
         document.getElementById('newItemSku').focus();
         console.log("Add New Item Modal opened.");
@@ -558,39 +468,33 @@ function updateModalFieldsBasedOnItemType() {
     const isReelType = itemType === 'Reel' || itemType === 'Two-Way Reel';
 
     reelNumberGroup.style.display = isReelType ? 'block' : 'none';
-    reelNumberInput.required = isReelType && (document.getElementById('newSkuDetailsSection').style.display === 'block' || document.getElementById('existingSkuDetails').style.display !== 'none'); // Mandatory if reel type and either creating new or adding existing reel
+    reelNumberInput.required = isReelType && (document.getElementById('newSkuDetailsSection').style.display === 'block' || document.getElementById('existingSkuDetails').style.display !== 'none');
     reelNumberMandatorySpan.style.display = reelNumberInput.required ? 'inline' : 'none';
 
-
-    // Footage Factor is only relevant when defining *new* SKU details
     if (document.getElementById('newSkuDetailsSection').style.display === 'block') {
         footageFactorGroup.style.display = isReelType ? 'block' : 'none';
-        document.getElementById('newItemFootageFactor').required = false; // Footage factor not strictly mandatory for creation
+        document.getElementById('newItemFootageFactor').required = false;
     } else {
-        footageFactorGroup.style.display = 'none'; // Hide if not creating new SKU details
+        footageFactorGroup.style.display = 'none';
     }
 }
 
-
-// Function to reset all dynamic parts of the modal UI
 function resetSkuCheckUIState() {
     document.getElementById('skuCheckMessage').textContent = '';
     document.getElementById('skuCheckMessage').className = 'form-text';
     document.getElementById('existingSkuDetails').style.display = 'none';
     document.getElementById('revealNewSkuDetailsBtn').style.display = 'none';
     document.getElementById('newSkuDetailsSection').style.display = 'none';
-    document.getElementById('newItemType').required = false; // Not required if not defining new SKU
+    document.getElementById('newItemType').required = false;
     
     document.getElementById('newItemReelNumberGroup').style.display = 'none';
     document.getElementById('newItemReelNumber').required = false;
     document.getElementById('reelNumberMandatory').style.display = 'none';
     document.getElementById('reelCheckMessage').textContent = '';
 
-
     document.getElementById('newItemFootageFactorGroup').style.display = 'none';
-    document.getElementById('submitAddItemBtn').disabled = false; // Re-enable submit by default, validation will catch issues
-    // Clear specific fields that might have been populated
+    document.getElementById('submitAddItemBtn').disabled = false;
     document.getElementById('existingSkuDesc').textContent = '';
     document.getElementById('existingSkuType').textContent = '';
-    // Do not reset SKU, Location, Description inputs as user might be editing them
 }
+// --- END OF MODIFIED eventHandlers.js ---
