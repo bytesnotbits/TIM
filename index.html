@@ -252,7 +252,7 @@ The goal is to evolve this tool based on reality, not assumptions.
   </style>
 </head>
 <body>
-  <h1>TIM — Receiving + Inventory + Product Catalog v1.25</h1>
+  <h1>TIM — Receiving + Inventory + Product Catalog v1.26</h1>
   <div class="small">Local browser tool for Calix, Tarana, and other serialized devices. It creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>.<br><b>Safety rule:</b> Product mappings must use Odoo external IDs captured from the Product Variant view. Odoo will not accept IDs captured from the Product Template view.</div>
 
   <nav class="tab-nav">
@@ -760,14 +760,14 @@ The goal is to evolve this tool based on reality, not assumptions.
           <tr><td>10-year event ceiling</td><td>~162,000 records / ~49 MB</td><td>Check master JSON file size after 2–3 years</td></tr>
         </table>
 
-        <h3>Master JSON Schema (v1.25)</h3>
+        <h3>Master JSON Schema (v1.26)</h3>
         <p>All data lives in <code>Calix_Odoo_Converter_source_data.json</code>. Top-level keys:</p>
         <table>
           <tr><th>Key</th><th>Contents</th><th>Notes</th></tr>
           <tr><td>product_map</td><td>Product catalog keyed by Vendor Part # (or NISC Item # when no vendor part exists)</td><td>Each entry includes <code>hctc</code> (NISC Item #) and <code>tracking_type</code></td></tr>
           <tr><td>history.records</td><td>Receiving history (Calix/RMA imports)</td><td>Existing structure — unchanged</td></tr>
-          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.25; one record per finalized session</td></tr>
-          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.25; each event carries its sessionId</td></tr>
+          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.26; one record per finalized session</td></tr>
+          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.26; each event carries its sessionId</td></tr>
         </table>
 
         <h3>Tracking Types</h3>
