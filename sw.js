@@ -20,16 +20,33 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      if (cached) return cached;
-      return fetch(e.request).then(res => {
-        if (res.ok && res.status < 400) {
+  const url = new URL(e.request.url);
+  const isHtml = url.pathname.endsWith('.html') || url.pathname.endsWith('/');
+
+  if (isHtml) {
+    // Network-first for HTML — always get the latest version; fall back to cache offline
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok) {
           const clone = res.clone();
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
         return res;
-      }).catch(() => cached); // offline and nothing cached — let browser show its own error
-    })
-  );
+      }).catch(() => caches.match(e.request))
+    );
+  } else {
+    // Cache-first for CDN assets and other static files
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(res => {
+          if (res.ok && res.status < 400) {
+            const clone = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, clone));
+          }
+          return res;
+        }).catch(() => cached);
+      })
+    );
+  }
 });
