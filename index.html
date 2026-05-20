@@ -61,22 +61,110 @@ The goal is to evolve this tool based on reality, not assumptions.
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js"></script>
   <style>
+    /* ── Base ── */
     :root { font-family: Arial, sans-serif; color: #1f2937; background: #f8fafc; }
-    body { margin: 0; padding: 24px; }
+    body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
     h1 { margin: 0 0 8px; }
     h2 { margin-top: 28px; }
+
+    /* ── App Shell ── */
+    .app-shell { display: flex; height: 100vh; }
+
+    /* ── Sidebar ── */
+    .sidebar { width: 300px; min-width: 300px; height: 100vh; background: #0f172a; display: flex; flex-direction: column; overflow: hidden; transition: width .22s ease, min-width .22s ease; flex-shrink: 0; }
+    .sidebar.collapsed { width: 52px; min-width: 52px; }
+    .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 10px; border-bottom: 1px solid #1e293b; flex-shrink: 0; min-height: 48px; box-sizing: border-box; }
+    .sidebar-logo { font-size: 18px; font-weight: 800; color: white; letter-spacing: .04em; white-space: nowrap; overflow: hidden; transition: opacity .15s; }
+    .sidebar.collapsed .sidebar-logo { opacity: 0; pointer-events: none; width: 0; }
+    .sidebar-toggle { background: none; border: none; color: #64748b; cursor: pointer; padding: 4px; border-radius: 6px; margin: 0; display: flex; align-items: center; flex-shrink: 0; transition: color .15s, background .15s; }
+    .sidebar-toggle:hover { color: white; background: #1e293b; }
+    .sidebar-toggle svg { transition: transform .22s; }
+    .sidebar.collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+    .sidebar-nav { padding: 8px 8px 0; flex-shrink: 0; }
+    .sidebar-nav-btn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; background: none; border: none; color: #94a3b8; font-size: 14px; font-weight: 600; cursor: pointer; margin: 1px 0; text-align: left; white-space: nowrap; overflow: hidden; transition: background .12s, color .12s; }
+    .sidebar-nav-btn:hover { background: #1e293b; color: #e2e8f0; }
+    .sidebar-nav-btn.active { background: #1d4ed8; color: white; }
+    .sidebar-nav-icon { flex-shrink: 0; display: flex; align-items: center; width: 20px; justify-content: center; }
+    .sidebar-nav-label { transition: opacity .15s; white-space: nowrap; overflow: hidden; }
+    .sidebar.collapsed .sidebar-nav-label { opacity: 0; width: 0; overflow: hidden; }
+    .sidebar.collapsed .sidebar-nav-btn { justify-content: center; padding: 9px 0; }
+    .sidebar-section-divider { padding: 14px 18px 4px; font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; white-space: nowrap; overflow: hidden; flex-shrink: 0; }
+    .sidebar.collapsed .sidebar-section-divider { padding: 14px 0 4px; text-align: center; font-size: 8px; }
+    .sidebar-setup-scroll { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+    .sidebar-setup-scroll::-webkit-scrollbar { width: 4px; }
+    .sidebar-setup-scroll::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    .sidebar-setup-item { margin-bottom: 6px; }
+    .sidebar-setup-icon-area { display: none; flex-direction: column; align-items: center; padding: 8px 0 6px; gap: 3px; }
+    .sidebar.collapsed .sidebar-setup-icon-area { display: flex; }
+    .sidebar-setup-svg { color: #64748b; display: flex; align-items: center; justify-content: center; }
+    .sidebar-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #334155; }
+    .sidebar-status-dot.loaded { background: #22c55e; }
+    .sidebar-status-count { font-size: 10px; font-weight: 700; color: #475569; font-family: monospace; line-height: 1; }
+    .sidebar-status-count.loaded { color: #4ade80; }
+    .sidebar-setup-content { background: #1e293b; border-radius: 10px; padding: 10px 12px 12px; }
+    .sidebar.collapsed .sidebar-setup-content { display: none; }
+    .sidebar-setup-title { font-size: 12px; font-weight: 700; color: #e2e8f0; margin-bottom: 4px; }
+    .sidebar-p { color: #94a3b8; font-size: 12px; margin: 0 0 8px; line-height: 1.4; }
+    .sidebar-p code { background: #0f172a; padding: 1px 4px; border-radius: 3px; font-size: 11px; color: #7dd3fc; }
+    .sidebar .drop { border-color: rgba(245,158,11,.4); background: rgba(245,158,11,.06); }
+    .sidebar .drop.ready { background: rgba(245,158,11,.06); border-color: rgba(245,158,11,.5); }
+    .sidebar .drop.loaded { background: rgba(22,163,74,.08); border-color: rgba(22,163,74,.5); }
+    .sidebar .drop { padding: 10px; }
+    .sidebar .drop-title { color: #cbd5e1; font-size: 12px; margin-bottom: 2px; }
+    .sidebar .drop-status { color: #94a3b8; font-size: 11px; }
+    .sidebar input[type="file"] { color: #94a3b8; font-size: 11px; margin: 4px 0; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 4px; width: 100%; box-sizing: border-box; }
+    .sidebar #historyStatus { font-size: 11px; color: #64748b; display: block; margin-top: 4px; line-height: 1.4; }
+    .sidebar .secondary { font-size: 12px; padding: 6px 10px; margin: 6px 0 0; }
+    .sidebar-admin { border-top: 1px solid #1e293b; flex-shrink: 0; }
+    .sidebar-admin-content { padding: 10px 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .sidebar.collapsed .sidebar-admin-content { display: none; }
+    .sidebar-admin-btn { width: 100%; margin: 0; font-size: 12px; padding: 7px 10px; }
+    .sidebar-admin-status { font-size: 11px; color: #64748b; line-height: 1.4; }
+    .sidebar-admin-icon-area { display: none; padding: 8px 0; text-align: center; }
+    .sidebar.collapsed .sidebar-admin-icon-area { display: block; }
+    .sidebar.collapsed .sidebar-section-divider + .sidebar-admin-content { display: none; }
+
+    /* ── Main Content ── */
+    .main-content { flex: 1; overflow-y: auto; padding: 20px 24px 32px; min-width: 0; background: #f8fafc; }
+    .app-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+    .app-title { margin: 0; font-size: 20px; }
+    .app-version { font-size: 13px; font-weight: 400; color: #94a3b8; }
+    .app-desc { color: #64748b; font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
+
+    /* ── Stat Bar ── */
+    .stat-bar { display: flex; align-items: stretch; flex-wrap: wrap; gap: 0; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; background: white; margin: 4px 0 0; }
+    .stat-item { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 16px; border-right: 1px solid #e5e7eb; flex: 1; min-width: 56px; }
+    .stat-item:last-child { border-right: none; }
+    .stat-num { font-size: 20px; font-weight: 800; color: #1f2937; line-height: 1; }
+    .stat-label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+    .stat-item.is-blocked .stat-num { color: #dc2626; }
+    .stat-item.is-warn .stat-num { color: #d97706; }
+
+    /* ── Review Actions ── */
+    .review-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; }
+    .dropdown-wrap { position: relative; display: inline-block; }
+    .dropdown-menu { position: absolute; top: calc(100% + 4px); left: 0; background: white; border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); z-index: 20; min-width: 260px; padding: 4px; }
+    .dropdown-menu.hidden { display: none; }
+    .dropdown-menu button { display: block; width: 100%; text-align: left; background: none; color: #374151; padding: 9px 12px; border-radius: 6px; margin: 0; font-weight: 600; font-size: 13px; border: none; }
+    .dropdown-menu button:hover:not(:disabled) { background: #f1f5f9; }
+    .dropdown-menu button.danger { color: #dc2626; }
+    .dropdown-menu button:disabled { color: #94a3b8; cursor: not-allowed; }
+
+    /* ── Collapsible Cards ── */
+    .collapsible-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; padding: 0; }
+    .collapsible-header h2 { margin: 0; }
+    .collapsible-chevron { color: #94a3b8; transition: transform .2s; flex-shrink: 0; }
+    .collapsible-header.open .collapsible-chevron { transform: rotate(180deg); }
+    .collapsible-body { margin-top: 14px; }
+
+    /* ── Cards / shared ── */
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 18px; margin: 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-    .workflow-grid { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 14px; margin: 16px 0; }
-    .step-card { margin: 0; display: flex; flex-direction: column; gap: 10px; }
-    .step-heading { display: flex; align-items: center; gap: 10px; margin: 0; }
-    .step-badge { background: #dbeafe; color: #1d4ed8; border-radius: 999px; padding: 4px 10px; font-weight: 800; font-size: 13px; }
     .drop { border: 2px dashed #f59e0b; border-radius: 12px; padding: 18px; text-align: center; background: #fffbeb; transition: background .15s, border-color .15s; }
     .drop.ready { background: #fffbeb; border-color: #f59e0b; }
     .drop.loaded { background: #ecfdf5; border-color: #16a34a; }
     .drop.dragover { background: #e0f2fe; border-color: #0284c7; }
     .drop-title { font-weight: 800; margin-bottom: 4px; }
     .drop-status { display: block; margin-top: 8px; font-size: 13px; color: #475569; }
-    @media (max-width: 760px) { .workflow-grid { grid-template-columns: 1fr; } }
     button { border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; background: #2563eb; color: white; font-weight: 600; margin: 4px; }
     button.secondary { background: #475569; }
     button.danger { background: #dc2626; }
@@ -252,104 +340,157 @@ The goal is to evolve this tool based on reality, not assumptions.
   </style>
 </head>
 <body>
-  <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;">
-    <h1 style="margin:0;">TIM — Receiving + Inventory + Product Catalog v1.27</h1>
-    <button id="checkUpdateBtn" class="secondary" style="font-size:12px;padding:4px 10px;white-space:nowrap;" onclick="checkForUpdate()">Check for Updates</button>
-    <span id="updateStatus" style="font-size:12px;color:#64748b;"></span>
-  </div>
-  <div class="small">Local browser tool for Calix, Tarana, and other serialized devices. It creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>.<br><b>Safety rule:</b> Product mappings must use Odoo external IDs captured from the Product Variant view. Odoo will not accept IDs captured from the Product Template view.</div>
 
-  <nav class="tab-nav">
-    <button class="tab-btn active" id="tabBtnReceiving" onclick="switchTab('receiving')">Receiving</button>
-    <button class="tab-btn" id="tabBtnInventory" onclick="switchTab('inventory')">Inventory</button>
-    <button class="tab-btn" id="tabBtnProducts" onclick="switchTab('products')">Products</button>
-  </nav>
+  <!-- Hidden utility element (referenced by JS, not displayed) -->
+  <textarea id="mapPreview" style="display:none;" readonly></textarea>
 
+<div class="app-shell">
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- SIDEBAR                                                          -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <aside id="appSidebar" class="sidebar">
+
+    <!-- Header -->
+    <div class="sidebar-header">
+      <span class="sidebar-logo">TIM</span>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="sidebar-nav">
+      <button class="sidebar-nav-btn active" id="sideNavReceiving" onclick="switchTab('receiving')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg></span>
+        <span class="sidebar-nav-label">Receiving</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavInventory" onclick="switchTab('inventory')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg></span>
+        <span class="sidebar-nav-label">Inventory</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+        <span class="sidebar-nav-label">Products</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavMapping" onclick="switchTab('mapping')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></span>
+        <span class="sidebar-nav-label">Product Mapping</span>
+      </button>
+    </nav>
+
+    <!-- Setup section -->
+    <div class="sidebar-section-divider">Setup</div>
+
+    <div class="sidebar-setup-scroll">
+
+      <!-- Step 1: Master JSON -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus1Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus1Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Step 1 — Master JSON</div>
+          <p class="sidebar-p">Optional but recommended. Load <code>Calix_Odoo_Converter_source_data.json</code> for duplicate checking and mapping data.</p>
+          <div id="historyDropZone" class="drop ready">
+            <div class="drop-title">Drop master JSON here</div>
+            <input id="historyFile" type="file" accept=".json,application/json" />
+            <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
+          </div>
+          <button class="secondary" id="exportHistoryBtn" style="margin-top:8px;">Export History JSON</button>
+          <span id="historyStatus"></span>
+        </div>
+      </div>
+
+      <!-- Step 2: Source Data -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus2Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus2Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Step 2 — New Source Data</div>
+          <p class="sidebar-p">Drop a Calix spreadsheet or an RMA spreadsheet.</p>
+          <div id="sourceDropZone" class="drop ready">
+            <div class="drop-title">Drop Calix or RMA file here</div>
+            <input id="sourceFile" type="file" accept=".xlsx,.xls,.csv" />
+            <span id="sourceDropStatus" class="drop-status">Waiting for upload</span>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /sidebar-setup-scroll -->
+
+    <!-- Admin section -->
+    <div class="sidebar-admin">
+      <div class="sidebar-section-divider">Admin</div>
+      <div class="sidebar-admin-content">
+        <button class="secondary sidebar-admin-btn" id="checkUpdateBtn" onclick="checkForUpdate()">Check for Updates</button>
+        <span id="updateStatus" class="sidebar-admin-status"></span>
+      </div>
+      <div class="sidebar-admin-icon-area">
+        <span class="sidebar-setup-svg" title="Check for Updates" onclick="checkForUpdate()" style="cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </span>
+      </div>
+    </div>
+
+  </aside><!-- /sidebar -->
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MAIN CONTENT                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <main class="main-content">
+
+    <!-- App header -->
+    <div class="app-header">
+      <h1 class="app-title">TIM <span class="app-version">v1.27</span></h1>
+    </div>
+    <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
+
+  <!-- ── Receiving view ── -->
   <div id="tabReceiving" class="tab-panel active">
-  <div class="workflow-grid">
-    <div class="card step-card">
-      <h2 class="step-heading"><span class="step-badge">Step 1</span> Master JSON</h2>
-      <p class="small">Optional but recommended. Load <code>Calix_Odoo_Converter_source_data.json</code> Provides duplicate checking, mapping data, or history updates.</p>
-      <div id="historyDropZone" class="drop ready">
-        <div class="drop-title">Drop master JSON here</div>
-        <input id="historyFile" type="file" accept=".json,application/json" />
-        <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
-      </div>
-      <div>
-        <button class="secondary" id="exportHistoryBtn">Export Current History JSON</button>
-        <span id="historyStatus" class="small">Remember to save your data to the master file when done.</span>
-      </div>
-    </div>
 
-    <div class="card step-card">
-      <h2 class="step-heading"><span class="step-badge">Step 2</span> New Source Data</h2>
-      <p class="small">Drop a Calix spreadsheet or an RMA spreadsheet. (two input formats allowed)</p>
-      <div id="sourceDropZone" class="drop ready">
-        <div class="drop-title">Drop Calix or RMA file here</div>
-        <input id="sourceFile" type="file" accept=".xlsx,.xls,.csv" />
-        <span id="sourceDropStatus" class="drop-status">Waiting for upload</span>
+    <div class="card">
+      <h2 style="margin-top:0;">Review</h2>
+      <div id="summary" class="stat-bar"></div>
+      <p class="small" style="margin:8px 0 12px;">Blocked rows must be fixed before export. DNI rows are valid but excluded from Odoo import.</p>
+      <div class="review-actions">
+        <button id="exportCsvBtn" disabled>Export Odoo CSV</button>
+        <button id="openBlindReceiveBtn" class="secondary">Blind Receive / Add Manually</button>
+        <div class="dropdown-wrap">
+          <button class="secondary" onclick="toggleMoreDropdown(event)">More ▾</button>
+          <div class="dropdown-menu hidden" id="moreDropMenu">
+            <button id="markImportedBtn" disabled>Mark as Imported / Append to History</button>
+            <button id="appendHistoryOnlyBtn" disabled>Add Batch to History Only</button>
+            <button id="mergeExistingBtn" disabled>Merge Existing Records</button>
+            <button id="exportBlockedBtn" disabled>Export Blocked Rows</button>
+            <button id="excludeBlockedBtn" class="danger" disabled>Exclude Blocked Rows From Batch</button>
+          </div>
+        </div>
+        <button class="danger" id="clearBatchBtn" style="margin-left:auto;">Clear Batch</button>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <h2>3. Review</h2>
-    <div id="summary" class="summary"></div>
-    <p class="small">Blocked rows must be fixed before export. DNI rows are valid but excluded from Odoo import.</p>
-    <button id="openBlindReceiveBtn">Blind Receive / Add Devices Manually</button>
-    <button id="exportCsvBtn" disabled>Export Odoo CSV</button>
-    <button id="markImportedBtn" disabled>Mark as Imported / Append to History</button>
-    <button id="appendHistoryOnlyBtn" disabled>Add Batch to History Only</button>
-    <button class="secondary" id="mergeExistingBtn" disabled>Merge Existing Records</button>
-    <button class="secondary" id="exportBlockedBtn" disabled>Export Blocked Rows</button>
-    <button class="danger" id="excludeBlockedBtn" disabled>Exclude Blocked Rows From Batch</button>
-    <button class="danger" id="clearBatchBtn">Clear Batch</button>
-  </div>
-
-  <div class="card">
-    <h2>Current Batch</h2>
-    <div class="scroll"><table id="batchTable"></table></div>
-  </div>
-
-  <div class="card">
-    <h2>Search History</h2>
-    <input id="historySearch" type="search" placeholder="Search (auto-filtering)..." />
-    <div class="scroll"><table id="historyTable"></table></div>
-  </div>
-
-  <div class="card">
-    <h2>Mapping Editor</h2>
-    <p class="small">Add or update a product mapping. Use the External ID exported from <b>Product Variants</b>. Product Template IDs are blocked to prevent bad Odoo imports. After saving, the current batch will be reprocessed automatically.</p>
-    <div>
-      <label class="small">Vendor Part # (map key)<br><input id="mapProduct" type="text" placeholder="100-05603 — leave blank if NISC-only item" /></label><br>
-      <label class="small">NISC Item # / Odoo Internal Ref<br><input id="mapHctc" type="text" placeholder="6030" /></label><br>
-      <label class="small">Odoo Product Variant External ID<br><input id="mapExternalId" type="text" placeholder="__export__.product_product_..." /></label><br>
-      <label class="small">Odoo Description<br><input id="mapName" type="text" style="width: 90%;" placeholder="Odoo product description" /></label><br>
-      <label class="small">Vendor<br><input id="mapVendor" type="text" placeholder="Calix, Tarana, Other" /></label><br>
-      <label class="small">Tracking Type<br>
-        <select id="mapTrackingType" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;">
-          <option value="serial">Serial — each unit has a unique serial number</option>
-          <option value="reel">Reel — cable/fiber tracked by footage</option>
-          <option value="none">None — bulk quantity count only</option>
-        </select>
-      </label><br>
-      <label class="small"><input id="mapSerialTracked" type="checkbox" checked /> Serial tracked / importable to Odoo</label><br>
-      <label class="small"><input id="mapRequiresFsan" type="checkbox" /> Requires FSAN/name</label><br>
-      <label class="small"><input id="mapHistoryOnly" type="checkbox" /> History-only by default / do not export to Odoo</label><br>
-      <button id="saveMappingBtn">Save Mapping</button>
-      <button class="secondary" id="clearMappingFormBtn">Clear Mapping Form</button>
+    <div class="card">
+      <h2 style="margin-top:0;">Current Batch</h2>
+      <div class="scroll"><table id="batchTable"></table></div>
     </div>
-    <h3>Unknown Products From Current Batch</h3>
-    <p class="small">Click one to pre-fill the mapping form.</p>
-    <div class="scroll"><table id="unknownProductsTable"></table></div>
-  </div>
 
-  <div class="card">
-    <h2>Product Map JSON</h2>
-    <p class="small">Read-only preview. Use Export Current History JSON to save the source data file. Any product_template mapping is invalid and will be blocked.</p>
-    <textarea id="mapPreview" readonly></textarea>
-  </div>
-
+    <!-- Search History (collapsible) -->
+    <div class="card">
+      <div class="collapsible-header" id="searchHistoryHeader" onclick="toggleCollapsible('searchHistoryBody','searchHistoryHeader','searchHistoryChevron')">
+        <h2 style="margin:0;">Search History</h2>
+        <svg id="searchHistoryChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="searchHistoryBody" class="collapsible-body" style="display:none;">
+        <input id="historySearch" type="search" placeholder="Search (auto-filtering)..." />
+        <div class="scroll"><table id="historyTable"></table></div>
+      </div>
+    </div>
 
   </div><!-- /tabReceiving -->
 
@@ -810,6 +951,44 @@ The goal is to evolve this tool based on reality, not assumptions.
 
   </div><!-- /tabProducts -->
 
+  <!-- ── Product Mapping view ── -->
+  <div id="tabMapping" class="tab-panel">
+    <div class="card">
+      <h2 style="margin-top:0;">Mapping Editor</h2>
+      <p class="small">Add or update a product mapping. Use the External ID exported from <b>Product Variants</b>. Product Template IDs are blocked to prevent bad Odoo imports. After saving, the current batch will be reprocessed automatically.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:12px;">
+        <label class="small">Vendor Part # (map key)<br><input id="mapProduct" type="text" placeholder="100-05603 — leave blank if NISC-only item" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">NISC Item # / Odoo Internal Ref<br><input id="mapHctc" type="text" placeholder="6030" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Product Variant External ID<br><input id="mapExternalId" type="text" placeholder="__export__.product_product_..." style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Description<br><input id="mapName" type="text" placeholder="Odoo product description" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Vendor<br><input id="mapVendor" type="text" placeholder="Calix, Tarana, Other" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Tracking Type<br>
+          <select id="mapTrackingType" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;">
+            <option value="serial">Serial — each unit has a unique serial number</option>
+            <option value="reel">Reel — cable/fiber tracked by footage</option>
+            <option value="none">None — bulk quantity count only</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
+        <label class="small"><input id="mapSerialTracked" type="checkbox" checked /> Serial tracked / importable to Odoo</label>
+        <label class="small"><input id="mapRequiresFsan" type="checkbox" /> Requires FSAN/name</label>
+        <label class="small"><input id="mapHistoryOnly" type="checkbox" /> History-only by default / do not export to Odoo</label>
+      </div>
+      <button id="saveMappingBtn">Save Mapping</button>
+      <button class="secondary" id="clearMappingFormBtn">Clear Form</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Unknown Products From Current Batch</h2>
+      <p class="small">Click a row to pre-fill the mapping form above.</p>
+      <div class="scroll"><table id="unknownProductsTable"></table></div>
+    </div>
+  </div><!-- /tabMapping -->
+
+  </main><!-- /main-content -->
+</div><!-- /app-shell -->
+
   <!-- Item History Modal -->
   <div id="prodHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal item-history-modal">
@@ -1016,6 +1195,7 @@ let recentBlindSerials = [];
 
 const $ = id => document.getElementById(id);
 $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+
 
 function normalize(v) { return String(v ?? "").trim(); }
 function normKey(v) { return normalize(v).toUpperCase(); }
@@ -1609,14 +1789,16 @@ function renderSummary() {
   const merge = currentBatch.filter(r => r.status === "merge_candidate").length;
   const blocked = currentBatch.filter(r => r.status === "blocked").length;
   const warnings = currentBatch.filter(r => /warning/i.test(r.messages)).length;
-  $("summary").innerHTML = `
-    <div><b>${total}</b><br><span class="small">Rows</span></div>
-    <div><b>${valid}</b><br><span class="small">Exportable</span></div>
-    <div><b>${dni}</b><br><span class="small">DNI</span></div>
-    <div><b>${historyOnly}</b><br><span class="small">History Only</span></div>
-    <div><b>${merge}</b><br><span class="small">Mergeable</span></div>
-    <div><b>${blocked}</b><br><span class="small">Blocked</span></div>
-    <div><b>${warnings}</b><br><span class="small">Warnings</span></div>`;
+  const s = (n, label, cls) =>
+    `<div class="stat-item${cls ? " " + cls : ""}"><span class="stat-num">${n}</span><span class="stat-label">${label}</span></div>`;
+  $("summary").innerHTML =
+    s(total, "Rows") +
+    s(valid, "Exportable") +
+    s(dni, "DNI") +
+    s(historyOnly, "Hist. Only") +
+    s(merge, "Mergeable") +
+    s(blocked, "Blocked", blocked > 0 ? "is-blocked" : "") +
+    s(warnings, "Warnings", warnings > 0 ? "is-warn" : "");
   $("exportCsvBtn").disabled = !(valid > 0 && blocked === 0);
   $("markImportedBtn").disabled = !importedPending;
   $("appendHistoryOnlyBtn").disabled = currentBatch.length === 0;
@@ -1726,7 +1908,8 @@ function loadSourceData(parsed, fileName = "selected JSON") {
 
   $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
   setDropState("historyDropZone", "historyDropStatus", true, `Loaded: ${fileName}`);
-  $("historyStatus").textContent = `${history.records.length} history records loaded from ${fileName}.` + (inferredMapCount ? ` ${inferredMapCount} product mappings inferred from history.` : "") + (blockedTemplateMapCount ? ` WARNING: ${blockedTemplateMapCount} Product Template external ID mapping(s) detected and will be blocked.` : "");
+  $("historyStatus").textContent = `${history.records.length} records loaded.` + (inferredMapCount ? ` ${inferredMapCount} mappings inferred.` : "") + (blockedTemplateMapCount ? ` ⚠ ${blockedTemplateMapCount} template ID(s) blocked.` : "");
+  updateSidebarStatus(1, history.records.length);
 
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   else renderAll();
@@ -1751,8 +1934,10 @@ async function loadSourceFile(file) {
     const parsed = await readSourceWorkbook(file);
     processRows(parsed.rows);
     setDropState("sourceDropZone", "sourceDropStatus", true, `Loaded: ${file.name} (${parsed.type})`);
+    updateSidebarStatus(2, parsed.rows.length - 1); // subtract header row
   } catch (err) {
     setDropState("sourceDropZone", "sourceDropStatus", false, "Waiting for upload");
+    updateSidebarStatus(2, null);
     alert("Could not parse source file: " + err.message);
   }
 }
@@ -2459,9 +2644,9 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["receiving", "inventory", "products"].forEach(function(t) {
+  ["receiving", "inventory", "products", "mapping"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
-    var btn   = $("tabBtn" + t.charAt(0).toUpperCase() + t.slice(1));
+    var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
     if (btn)   btn.classList.toggle("active", t === name);
   });
@@ -2470,6 +2655,52 @@ function switchTab(name) {
     invShowStorageHint();
   }
   if (name === "products") prodRenderList();
+  try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
+}
+
+// -- Sidebar toggle --------------------------------------------------
+function toggleSidebar() {
+  var sb = $("appSidebar");
+  var collapsed = sb.classList.toggle("collapsed");
+  try { localStorage.setItem("tim_sidebar_collapsed", collapsed ? "1" : "0"); } catch(e) {}
+}
+
+// -- Sidebar status indicators ---------------------------------------
+function updateSidebarStatus(step, rows) {
+  var dot   = $("sideStatus" + step + "Dot");
+  var count = $("sideStatus" + step + "Count");
+  if (!dot || !count) return;
+  if (rows !== null && rows >= 0) {
+    dot.classList.add("loaded");
+    count.classList.add("loaded");
+    count.textContent = rows >= 1000 ? (rows / 1000).toFixed(1) + "k" : String(rows);
+  } else {
+    dot.classList.remove("loaded");
+    count.classList.remove("loaded");
+    count.textContent = "";
+  }
+}
+
+// -- More dropdown ---------------------------------------------------
+function toggleMoreDropdown(e) {
+  if (e) e.stopPropagation();
+  $("moreDropMenu").classList.toggle("hidden");
+}
+document.addEventListener("click", function() {
+  var m = $("moreDropMenu");
+  if (m) m.classList.add("hidden");
+});
+
+// -- Collapsible cards -----------------------------------------------
+function toggleCollapsible(bodyId, headerId, chevronId) {
+  var body    = $(bodyId);
+  var header  = $(headerId);
+  var chevron = $(chevronId);
+  if (!body) return;
+  var open = body.style.display === "none" || body.style.display === "";
+  body.style.display = open ? "block" : "none";
+  if (header)  header.classList.toggle("open", open);
+  if (chevron) chevron.style.transform = open ? "rotate(180deg)" : "";
 }
 
 function invShowStorageHint() {
@@ -4454,6 +4685,18 @@ function invFinalizeSession() {
   renderInvSessionMeta();
   alert("Session finalized and merged into master JSON.\nReplace your existing master file with the downloaded copy.");
 }
+
+// Restore sidebar + tab state (runs after all variables are declared)
+try {
+  if (localStorage.getItem("tim_sidebar_collapsed") === "1") {
+    var _sb = document.getElementById("appSidebar");
+    if (_sb) _sb.classList.add("collapsed");
+  }
+  var _savedTab = localStorage.getItem("tim_active_tab");
+  if (_savedTab && ["receiving","inventory","products","mapping"].includes(_savedTab)) {
+    switchTab(_savedTab);
+  }
+} catch(e) {}
 </script>
 <script>
   if ('serviceWorker' in navigator) {
