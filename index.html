@@ -51,7 +51,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TIM — Receiving + Inventory + Product Catalog v1.27.1</title>
+  <title>TIM — Receiving + Inventory + Product Catalog v1.27</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#2563eb" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -123,6 +123,93 @@ The goal is to evolve this tool based on reality, not assumptions.
     .sidebar-admin-icon-area { display: none; padding: 8px 0; text-align: center; }
     .sidebar.collapsed .sidebar-admin-icon-area { display: block; }
     .sidebar.collapsed .sidebar-section-divider + .sidebar-admin-content { display: none; }
+
+    /* ── Sidebar: username area ── */
+    .sidebar-user-section { padding: 6px 8px 8px; border-bottom: 1px solid #1e293b; flex-shrink: 0; }
+    .sidebar.collapsed .sidebar-user-section { display: none; }
+    .sidebar-user-label { font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; padding: 0 2px 4px; display: block; }
+    .sidebar-username-input { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f1f5f9; font-size: 13px; }
+    .sidebar-username-input:focus { outline: none; border-color: #3b82f6; }
+    .sidebar-username-input.needs-value { border-color: #f59e0b; }
+    .sidebar-username-input::placeholder { color: #475569; }
+
+    /* ── Sidebar: inventory session section ── */
+    .sidebar-inv-card { background: #1e293b; border-radius: 10px; padding: 10px 12px 12px; margin-bottom: 8px; }
+    .sidebar-inv-card-title { font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .sidebar-inv-dot { width: 7px; height: 7px; border-radius: 50%; background: #334155; flex-shrink: 0; }
+    .sidebar-inv-dot.active { background: #22c55e; }
+    .sidebar-inv-no-session { font-size: 12px; color: #475569; margin-bottom: 8px; text-align: center; padding: 4px 0; }
+    .sidebar-inv-session-name { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px; word-break: break-all; line-height: 1.3; }
+    .sidebar-inv-session-stats { font-size: 11px; color: #94a3b8; margin-bottom: 8px; }
+    .sidebar-inv-name-input { width: 100%; box-sizing: border-box; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f1f5f9; font-size: 12px; margin-bottom: 8px; }
+    .sidebar-inv-name-input::placeholder { color: #475569; }
+    .sidebar-inv-name-input:focus { outline: none; border-color: #3b82f6; }
+    .sidebar-inv-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    .sidebar-inv-btn { padding: 7px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; border: none; text-align: center; width: 100%; box-sizing: border-box; transition: opacity .15s, background .12s; }
+    .sidebar-inv-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .sidebar-inv-btn-start { background: #2563eb; color: white; }
+    .sidebar-inv-btn-start:not(:disabled):hover { background: #1d4ed8; }
+    .sidebar-inv-btn-resume { background: #334155; color: #cbd5e1; }
+    .sidebar-inv-btn-resume:not(:disabled):hover { background: #475569; }
+    .sidebar-inv-btn-finalize { background: #059669; color: white; grid-column: 1 / -1; }
+    .sidebar-inv-btn-finalize:not(:disabled):hover { background: #047857; }
+    .sidebar-inv-btn-secondary { background: #1e3a5f; color: #93c5fd; }
+    .sidebar-inv-btn-secondary:hover { background: #1e40af; }
+    .sidebar-inv-btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .sidebar-inv-btn-danger:not(:disabled):hover { background: #991b1b; }
+    .sidebar-inv-label-btn { display: block; padding: 7px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; text-align: center; width: 100%; box-sizing: border-box; background: #1e3a5f; color: #93c5fd; }
+    .sidebar-inv-label-btn:hover { background: #1e40af; }
+
+    /* ── Inventory persistent status bar ── */
+    .inv-status-bar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 12px; color: #f1f5f9; margin-bottom: 12px; flex-wrap: wrap; min-height: 38px; }
+    .inv-status-bar.hidden { display: none; }
+    .inv-status-mode-pill { font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 4px; letter-spacing: .05em; background: #2563eb; color: white; flex-shrink: 0; }
+    .inv-status-mode-pill.mode-serial { background: #7c3aed; }
+    .inv-status-mode-pill.mode-reel { background: #059669; }
+    .inv-status-mode-pill.mode-item { background: #d97706; }
+    .inv-status-loc { display: flex; align-items: center; gap: 3px; background: #334155; border-radius: 6px; padding: 2px 4px 2px 8px; flex-shrink: 0; }
+    .inv-status-loc-text { font-size: 12px; font-weight: 600; }
+    .inv-status-loc-text.no-loc { color: #64748b; font-weight: 400; }
+    .inv-status-loc-clear { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; padding: 0 2px; line-height: 1; transition: color .12s; }
+    .inv-status-loc-clear:hover { color: #f87171; }
+    .inv-status-session { flex: 1; color: #34d399; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 80px; font-weight: 600; font-size: 11px; }
+    .inv-status-counts { color: #94a3b8; white-space: nowrap; flex-shrink: 0; font-size: 11px; }
+    .inv-status-save { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #166534; color: #bbf7d0; flex-shrink: 0; transition: background .2s; }
+    .inv-status-save.unsaved { background: #713f12; color: #fde68a; }
+    .inv-status-save.hidden { display: none; }
+
+    /* ── Activity feed ── */
+    .inv-activity-feed { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+    .inv-activity-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid #1e293b; }
+    .inv-activity-title { font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; }
+    .inv-activity-clear-btn { background: none; border: none; color: #334155; cursor: pointer; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+    .inv-activity-clear-btn:hover { color: #94a3b8; background: #1e293b; }
+    .inv-activity-list { padding: 2px 0; }
+    .inv-activity-empty { padding: 10px 14px; font-size: 12px; color: #334155; text-align: center; }
+    .inv-activity-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 12px; border-bottom: 1px solid #0d1117; font-size: 13px; }
+    .inv-activity-entry:last-child { border-bottom: none; }
+    .inv-activity-entry.fresh { animation: activityPulse .55s ease-out; }
+    .inv-activity-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; line-height: 1.2; font-family: monospace; }
+    .inv-activity-body { flex: 1; min-width: 0; }
+    .inv-activity-msg { color: #e2e8f0; line-height: 1.35; word-break: break-word; }
+    .inv-activity-detail { font-size: 11px; color: #475569; margin-top: 1px; }
+    .inv-activity-time { font-size: 10px; color: #334155; flex-shrink: 0; white-space: nowrap; margin-top: 3px; font-family: monospace; }
+    .inv-activity-entry.type-ok       { border-left: 3px solid #22c55e; }
+    .inv-activity-entry.type-warn     { border-left: 3px solid #f59e0b; }
+    .inv-activity-entry.type-error    { border-left: 3px solid #ef4444; }
+    .inv-activity-entry.type-info     { border-left: 3px solid #3b82f6; }
+    .inv-activity-entry.type-location { border-left: 3px solid #a78bfa; }
+    .inv-activity-entry.type-mode     { border-left: 3px solid #38bdf8; }
+    .inv-activity-entry.type-ok .inv-activity-icon    { color: #22c55e; }
+    .inv-activity-entry.type-warn .inv-activity-icon  { color: #f59e0b; }
+    .inv-activity-entry.type-error .inv-activity-icon { color: #ef4444; }
+    .inv-activity-entry.type-location .inv-activity-icon { color: #a78bfa; }
+    .inv-activity-entry.type-mode .inv-activity-icon  { color: #38bdf8; }
+    .inv-activity-entry.type-info .inv-activity-icon  { color: #3b82f6; }
+    @keyframes activityPulse {
+      0%   { background: rgba(99,102,241,.22); }
+      100% { background: transparent; }
+    }
 
     /* ── Main Content ── */
     .main-content { flex: 1; overflow-y: auto; padding: 20px 24px 32px; min-width: 0; background: #f8fafc; }
@@ -302,6 +389,10 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-scan-fields-col { flex:1; min-width:0; }
     .inv-scan-keypad-col { flex:0 0 214px; }
     .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
+    @media (max-width:660px) {
+      .inv-scan-two-col { flex-direction:column; }
+      .inv-scan-keypad-col { flex:none; width:100%; }
+    }
 
     /* === Reel inline entry panel === */
     .inv-reel-inline { background:#f0fdf4; border:2px solid #86efac; border-radius:12px; padding:12px 14px; margin-top:10px; }
@@ -379,10 +470,42 @@ The goal is to evolve this tool based on reality, not assumptions.
       </button>
     </nav>
 
+    <!-- Username -->
+    <div class="sidebar-user-section">
+      <span class="sidebar-user-label">User</span>
+      <input id="timUsernameInput" class="sidebar-username-input needs-value" type="text"
+             placeholder="Your name (required)"
+             oninput="timSetUsername(this.value)"
+             onblur="timSetUsername(this.value)" />
+    </div>
+
     <!-- Setup section -->
     <div class="sidebar-section-divider">Setup</div>
 
     <div class="sidebar-setup-scroll">
+
+      <!-- Inventory Session -->
+      <div class="sidebar-inv-card">
+        <div class="sidebar-inv-card-title">
+          <span id="sideInvDot" class="sidebar-inv-dot"></span>
+          Inventory Session
+        </div>
+        <div id="sideInvNoSession" class="sidebar-inv-no-session">No active session</div>
+        <div id="sideInvInfo" class="hidden">
+          <div id="sideInvName" class="sidebar-inv-session-name">—</div>
+          <div id="sideInvStats" class="sidebar-inv-session-stats">0 events · 0 exceptions</div>
+        </div>
+        <input id="invSessionNameInput" class="sidebar-inv-name-input" type="text"
+               placeholder="Custom name (optional)" autocomplete="off" />
+        <div class="sidebar-inv-actions">
+          <button class="sidebar-inv-btn sidebar-inv-btn-start"   id="invStartBtn"   onclick="invStartNewSession()">+ Start New</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-resume"  id="invResumeBtn"  onclick="invResumeSession()">&#8617; Resume</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-finalize" id="invFinalizeBtn" onclick="invFinalizeSession()" disabled>&#10003; Finalize &amp; Merge</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-secondary" onclick="invExportBackup()">&#8595; Export</button>
+          <label class="sidebar-inv-label-btn">&#8593; Import<input id="invImportFile" type="file" accept=".json" style="display:none;" onchange="invImportBackup(this)" /></label>
+          <button class="sidebar-inv-btn sidebar-inv-btn-danger"  id="invClearBtn"   onclick="invClearSession()" disabled>&#10005; Clear</button>
+        </div>
+      </div>
 
       <!-- Step 1: Master JSON -->
       <div class="sidebar-setup-item">
@@ -447,7 +570,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
     <!-- App header -->
     <div class="app-header">
-      <h1 class="app-title">TIM <span class="app-version">v1.27.1</span></h1>
+      <h1 class="app-title">TIM <span class="app-version">v1.27</span></h1>
     </div>
     <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
 
@@ -499,59 +622,47 @@ The goal is to evolve this tool based on reality, not assumptions.
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tabInventory" class="tab-panel">
 
-    <!-- Autosave status bar -->
-    <div id="invAutosaveBar" class="autosave-bar hidden">
-      <span id="invAutosaveText">Autosaved</span>
+    <!-- Persistent status bar (replaces session card + autosave bar) -->
+    <div id="invStatusBar" class="inv-status-bar hidden">
+      <span id="invStatusModePill" class="inv-status-mode-pill">AUTO</span>
+      <div class="inv-status-loc">
+        <span id="invStatusLocText" class="inv-status-loc-text no-loc">No location</span>
+        <button class="inv-status-loc-clear" onclick="invClearLocation()" title="Clear location">&#215;</button>
+      </div>
+      <span id="invStatusSession" class="inv-status-session">No session</span>
+      <span id="invStatusCounts" class="inv-status-counts">0 events</span>
+      <span id="invStatusSave" class="inv-status-save hidden">Saved</span>
+    </div>
+    <!-- Hidden legacy meta elements — keep JS references working -->
+    <div style="display:none;">
+      <span id="invAutosaveBar"></span><span id="invAutosaveText"></span>
+      <span id="invNoSession"></span><span id="invSessionMeta"></span>
+      <span id="invMetaName"></span><span id="invMetaId"></span>
+      <span id="invMetaStatus"></span><span id="invMetaCreated"></span>
+      <span id="invMetaUpdated"></span>
+      <span id="invMetaEventCount">0</span><span id="invMetaSeq">0</span>
     </div>
 
-    <!-- Session Controls -->
-    <div class="card">
-      <h2>Inventory Session</h2>
-
-      <div id="invNoSession" class="inv-no-session">
-        <h3>No active inventory session</h3>
-        <p class="small">Start a new session or resume a previous one to begin counting inventory.</p>
+    <!-- Activity Feed -->
+    <div id="invActivityFeed" class="inv-activity-feed">
+      <div class="inv-activity-header">
+        <span class="inv-activity-title">Activity</span>
+        <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
       </div>
-
-      <div id="invSessionMeta" class="hidden">
-        <div class="inv-session-meta">
-          <div class="inv-meta-item"><b>Session Name</b><span id="invMetaName">—</span></div>
-          <div class="inv-meta-item"><b>Session ID</b><span id="invMetaId">—</span></div>
-          <div class="inv-meta-item"><b>Status</b><span id="invMetaStatus">—</span></div>
-          <div class="inv-meta-item"><b>Created</b><span id="invMetaCreated">—</span></div>
-          <div class="inv-meta-item"><b>Last Updated</b><span id="invMetaUpdated">—</span></div>
-          <div class="inv-meta-item"><b>Events</b><span id="invMetaEventCount">0</span></div>
-          <div class="inv-meta-item"><b>Sequence</b>#<span id="invMetaSeq">0</span></div>
-        </div>
-      </div>
-
-      <div class="inv-controls">
-        <div>
-          <input id="invSessionNameInput" class="inv-session-name-input" type="text" placeholder="Session name (e.g. May 2026 Main Warehouse)" />
-        </div>
-        <button id="invStartBtn" onclick="invStartNewSession()">Start New Session</button>
-        <button class="secondary" id="invResumeBtn" onclick="invResumeSession()">Resume Session</button>
-        <button class="secondary" onclick="invExportBackup()">Export Session Backup JSON</button>
-        <label class="secondary" style="display:inline-flex;align-items:center;gap:6px;background:#475569;color:white;font-weight:600;padding:10px 14px;border-radius:8px;cursor:pointer;margin:4px;">
-          Import Session Backup JSON
-          <input id="invImportFile" type="file" accept=".json" style="display:none;" onchange="invImportBackup(this)" />
-        </label>
-        <button class="finalize-btn" id="invFinalizeBtn" onclick="invFinalizeSession()" disabled>Finalize &amp; Merge to Master JSON</button>
-        <button class="danger" id="invClearBtn" onclick="invClearSession()" disabled>Clear Session</button>
+      <div id="invActivityList" class="inv-activity-list">
+        <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
       </div>
     </div>
 
     <!-- Scan / Entry Panel -->
     <div class="card" id="invScanCard">
       <h2>Scan / Entry Panel</h2>
-      <p class="small">Select a scan mode, then scan or type. Barcode scanners that send Enter will auto-submit.</p>
+      <p class="small">Scan or type any value. Any string starting with <b>WH</b> automatically sets the location. Barcode scanners that send Enter will auto-submit.</p>
+      <!-- Hidden legacy display element — JS still writes to it safely -->
+      <span id="invLocationDisplay" style="display:none;"></span>
+      <span id="invScanLocation" style="display:none;"></span>
 
       <div class="inv-scan-panel">
-        <div class="inv-location-bar">
-          <span class="inv-location-label">Current Location:</span>
-          <span id="invLocationDisplay" class="inv-location-none">None — scan a LOC barcode or type below to set</span>
-          <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invClearLocation()">Clear</button>
-        </div>
 
         <!-- Mode Toggle -->
         <div class="inv-mode-toggle">
@@ -591,12 +702,9 @@ The goal is to evolve this tool based on reality, not assumptions.
         <div class="inv-scan-two-col">
           <div class="inv-scan-fields-col">
             <!-- Context fields -->
-            <div class="inv-scan-context" style="grid-template-columns:1fr 1fr;">
-              <label>Location (sticky)
-                <input id="invScanLocation" type="text" placeholder="Scan WH barcode or type (e.g. WH01000)" autocomplete="off" oninput="invUpdateLocationInput(this.value)" />
-              </label>
-              <label>NISC Item # Context
-                <input id="invScanItem" type="text" placeholder="NISC Item # — stays set between scans" autocomplete="off" />
+            <div class="inv-scan-context" style="grid-template-columns:1fr;">
+              <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
+                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" />
               </label>
             </div>
             <select id="invScanTypeOverride" style="display:none;">
@@ -905,14 +1013,14 @@ The goal is to evolve this tool based on reality, not assumptions.
           <tr><td>10-year event ceiling</td><td>~162,000 records / ~49 MB</td><td>Check master JSON file size after 2–3 years</td></tr>
         </table>
 
-        <h3>Master JSON Schema (v1.27.1)</h3>
+        <h3 id="schema-version-heading">Master JSON Schema (v1.27)</h3>
         <p>All data lives in <code>Calix_Odoo_Converter_source_data.json</code>. Top-level keys:</p>
         <table>
           <tr><th>Key</th><th>Contents</th><th>Notes</th></tr>
           <tr><td>product_map</td><td>Product catalog keyed by Vendor Part # (or NISC Item # when no vendor part exists)</td><td>Each entry includes <code>hctc</code> (NISC Item #) and <code>tracking_type</code></td></tr>
           <tr><td>history.records</td><td>Receiving history (Calix/RMA imports)</td><td>Existing structure — unchanged</td></tr>
-          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.27.1; one record per finalized session</td></tr>
-          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.27.1; each event carries its sessionId</td></tr>
+          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.27; one record per finalized session</td></tr>
+          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.27; each event carries its sessionId</td></tr>
         </table>
 
         <h3>Tracking Types</h3>
@@ -1180,6 +1288,15 @@ The goal is to evolve this tool based on reality, not assumptions.
   </div>
 
 <script>
+
+const APP_VERSION = "v1.27";
+
+// Stamp version into title bar, app header, and schema docs heading
+document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
+const _verSpan = document.querySelector('.app-version');
+if (_verSpan) _verSpan.textContent = APP_VERSION;
+const _schemaH3 = document.getElementById('schema-version-heading');
+if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
 let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [] };
 let PRODUCT_MAP = appData.product_map;
@@ -2584,8 +2701,94 @@ async function checkForUpdate() {
 // ===================================================================
 
 // -- Constants ------------------------------------------------------
-const INV_STORAGE_KEY = "calix_inv_session_v1";
+const INV_STORAGE_KEY  = "calix_inv_session_v1";
 const INV_SCHEMA_VERSION = "1.0";
+const TIM_USERNAME_KEY = "tim_username";
+
+function timGetUsername() {
+  try { return localStorage.getItem(TIM_USERNAME_KEY) || ""; } catch(e) { return ""; }
+}
+function timSetUsername(val) {
+  val = (val || "").trim();
+  try { localStorage.setItem(TIM_USERNAME_KEY, val); } catch(e) {}
+  var inp = $("timUsernameInput");
+  if (inp) inp.classList.toggle("needs-value", !val);
+}
+function timInitUsername() {
+  var val = timGetUsername();
+  var inp = $("timUsernameInput");
+  if (inp) { inp.value = val; inp.classList.toggle("needs-value", !val); }
+}
+
+// -- Audio feedback -------------------------------------------------
+var _timAudioCtx = null;
+function _timAudioCtx_get() {
+  if (!_timAudioCtx) {
+    try { _timAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  return _timAudioCtx;
+}
+function timUnlockAudio() {
+  var ctx = _timAudioCtx_get();
+  if (ctx && ctx.state === "suspended") ctx.resume().catch(function(){});
+}
+function timBeep(type) {
+  var ctx = _timAudioCtx_get();
+  if (!ctx) return;
+  if (ctx.state === "suspended") { ctx.resume().then(function(){ timBeep(type); }).catch(function(){}); return; }
+  var t = ctx.currentTime;
+  function tone(freq, dur, vol, shape, delay) {
+    delay = delay || 0;
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    osc.type = shape || "sine";
+    osc.frequency.setValueAtTime(freq, t + delay);
+    g.gain.setValueAtTime(vol, t + delay);
+    g.gain.exponentialRampToValueAtTime(0.001, t + delay + dur);
+    osc.start(t + delay); osc.stop(t + delay + dur);
+  }
+  if      (type === "ok")    { tone(880, 0.08, 0.25, "sine"); }
+  else if (type === "warn")  { tone(440, 0.12, 0.18, "sine"); }
+  else if (type === "error") { tone(200, 0.06, 0.18, "square", 0); tone(200, 0.06, 0.18, "square", 0.1); }
+}
+
+// -- Activity feed --------------------------------------------------
+var invActivityLog = [];
+var INV_ACTIVITY_MAX = 8;
+var _invActivityIcons = { ok:"✓", warn:"⚠", error:"✗", info:"i", location:"⊙", mode:"⇄" };
+
+function invAddActivity(type, message, detail) {
+  timBeep(type);
+  invActivityLog.unshift({ type: type, message: message, detail: detail || "", time: new Date() });
+  if (invActivityLog.length > INV_ACTIVITY_MAX) invActivityLog.length = INV_ACTIVITY_MAX;
+  renderInvActivityFeed();
+}
+
+function invClearActivityFeed() {
+  invActivityLog = [];
+  renderInvActivityFeed();
+}
+
+function renderInvActivityFeed() {
+  var list = $("invActivityList");
+  if (!list) return;
+  if (!invActivityLog.length) {
+    list.innerHTML = '<div class="inv-activity-empty">No activity yet. Start a session and scan.</div>';
+    return;
+  }
+  list.innerHTML = invActivityLog.map(function(e, i) {
+    var icon = _invActivityIcons[e.type] || "•";
+    var ts   = e.time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" });
+    return '<div class="inv-activity-entry type-' + e.type + (i === 0 ? " fresh" : "") + '">' +
+      '<span class="inv-activity-icon">' + icon + '</span>' +
+      '<div class="inv-activity-body">' +
+        '<div class="inv-activity-msg">'    + escapeHtml(e.message) + '</div>' +
+        (e.detail ? '<div class="inv-activity-detail">' + escapeHtml(e.detail) + '</div>' : '') +
+      '</div>' +
+      '<span class="inv-activity-time">' + ts + '</span>' +
+      '</div>';
+  }).join("");
+}
 
 // -- State ----------------------------------------------------------
 let invSession = null;
@@ -2728,12 +2931,8 @@ function invShowStorageHint() {
 // -- Autosave -------------------------------------------------------
 function scheduleInvAutosave() {
   invAutosavePending = true;
-  var bar = $("invAutosaveBar");
-  if (bar) {
-    bar.classList.remove("hidden");
-    bar.classList.add("unsaved");
-    $("invAutosaveText").textContent = "Unsaved changes...";
-  }
+  var ind = $("invStatusSave");
+  if (ind) { ind.textContent = "Unsaved"; ind.className = "inv-status-save unsaved"; }
   clearTimeout(invAutosaveTimer);
   invAutosaveTimer = setTimeout(invAutosave, 500);
 }
@@ -2756,16 +2955,17 @@ function invAutosave() {
   } catch(e) { /* quota or sandboxed */ }
 
   invAutosavePending = false;
-  var bar = $("invAutosaveBar");
-  if (!bar) return;
-  bar.classList.remove("hidden", "unsaved");
-  if (saved) {
-    $("invAutosaveText").textContent = "Autosaved at " + new Date().toLocaleTimeString();
-  } else {
-    bar.classList.add("unsaved");
-    $("invAutosaveText").textContent =
-      "In-memory only (localStorage unavailable in this environment) — use Export Session Backup JSON to save.";
+  var ind = $("invStatusSave");
+  if (ind) {
+    if (saved) {
+      ind.textContent = "Saved " + new Date().toLocaleTimeString();
+      ind.className = "inv-status-save";
+    } else {
+      ind.textContent = "Memory only";
+      ind.className = "inv-status-save unsaved";
+    }
   }
+  renderInvSidebarSession();
 }
 
 // -- Event creation -------------------------------------------------
@@ -2796,13 +2996,26 @@ function invCreateEvent(eventType, data) {
 
 // -- Session management ---------------------------------------------
 function invStartNewSession() {
-  var nameInput = $("invSessionNameInput");
-  var name = normalize(nameInput ? nameInput.value : "") ||
-             "Inventory Session " + new Date().toLocaleDateString();
+  var username = timGetUsername();
+  if (!username) {
+    alert("Please enter your name in the sidebar before starting a session.");
+    var uInp = $("timUsernameInput");
+    if (uInp) uInp.focus();
+    return;
+  }
 
   if (invSession && invSession.status === "active") {
     if (!confirm("A session is already active. Starting a new session will replace it.\n\nExport a backup first if you need to keep the current session.\n\nContinue?")) return;
   }
+
+  var customName = normalize($("invSessionNameInput") ? $("invSessionNameInput").value : "");
+  var d = new Date();
+  var datePart = d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0");
+  var timePart = String(d.getHours()).padStart(2, "0") +
+    String(d.getMinutes()).padStart(2, "0");
+  var name = username + (customName ? "_" + customName : "") + "_" + datePart + "_" + timePart;
 
   invSession = {
     sessionId:       invGenerateSessionId(),
@@ -2818,10 +3031,10 @@ function invStartNewSession() {
   invSettings   = {};
   invSequence   = 0;
 
+  var nameInput = $("invSessionNameInput");
   if (nameInput) nameInput.value = "";
   invAutosave();
   renderInvSessionUI();
-  alert("Session started: " + invSession.sessionId);
 }
 
 function invResumeSession() {
@@ -2933,23 +3146,86 @@ function invImportBackup(input) {
 // -- Render helpers -------------------------------------------------
 function renderInvSessionMeta() {
   if (!invSession) return;
-  $("invMetaName").textContent      = invSession.sessionName || "—";
-  $("invMetaId").textContent        = invSession.sessionId;
-  $("invMetaStatus").textContent    = invSession.status;
-  $("invMetaCreated").textContent   = invFormatDateTime(invSession.createdAt);
-  $("invMetaUpdated").textContent   = invFormatDateTime(invSession.updatedAt);
-  $("invMetaEventCount").textContent = invEvents.length;
-  $("invMetaSeq").textContent       = invSession.sequenceCounter;
+  var n; // helper to avoid null crashes on hidden legacy elements
+  if ((n=$("invMetaName")))       n.textContent = invSession.sessionName || "—";
+  if ((n=$("invMetaId")))         n.textContent = invSession.sessionId;
+  if ((n=$("invMetaStatus")))     n.textContent = invSession.status;
+  if ((n=$("invMetaCreated")))    n.textContent = invFormatDateTime(invSession.createdAt);
+  if ((n=$("invMetaUpdated")))    n.textContent = invFormatDateTime(invSession.updatedAt);
+  if ((n=$("invMetaEventCount"))) n.textContent = invEvents.length;
+  if ((n=$("invMetaSeq")))        n.textContent = invSession.sequenceCounter;
+  renderInvStatusBar();
+  renderInvSidebarSession();
 }
 
 function renderInvSessionUI() {
   var hasSession = !!invSession;
-  $("invNoSession").classList.toggle("hidden", hasSession);
-  $("invSessionMeta").classList.toggle("hidden", !hasSession);
-  $("invClearBtn").disabled = !hasSession;
-  $("invFinalizeBtn").disabled = !hasSession;
+  var noSess = $("invNoSession"); if (noSess) noSess.classList.toggle("hidden", hasSession);
+  var meta   = $("invSessionMeta"); if (meta) meta.classList.toggle("hidden", !hasSession);
+  var clrBtn = $("invClearBtn");    if (clrBtn) clrBtn.disabled = !hasSession;
+  var finBtn = $("invFinalizeBtn"); if (finBtn) finBtn.disabled = !hasSession;
   if (hasSession) renderInvSessionMeta();
+  renderInvSidebarSession();
+  renderInvStatusBar();
   renderInvEventLog();
+}
+
+function renderInvSidebarSession() {
+  var hasSession = !!invSession;
+  var dot     = $("sideInvDot");
+  var noSess  = $("sideInvNoSession");
+  var info    = $("sideInvInfo");
+  var nameEl  = $("sideInvName");
+  var statsEl = $("sideInvStats");
+  var clrBtn  = $("invClearBtn");
+  var finBtn  = $("invFinalizeBtn");
+
+  if (dot)    dot.classList.toggle("active", hasSession);
+  if (noSess) noSess.classList.toggle("hidden", hasSession);
+  if (info)   info.classList.toggle("hidden", !hasSession);
+  if (clrBtn) clrBtn.disabled = !hasSession;
+  if (finBtn) finBtn.disabled = !hasSession;
+
+  if (hasSession && invSession) {
+    if (nameEl)  nameEl.textContent  = invSession.sessionName;
+    var excCount = invEvents.filter(function(e) { return e.eventType === "exception"; }).length;
+    if (statsEl) statsEl.textContent = invEvents.length + " events · " + excCount + " exceptions";
+  }
+}
+
+function renderInvStatusBar() {
+  var bar = $("invStatusBar");
+  if (!bar) return;
+  var hasSession = !!invSession;
+  bar.classList.toggle("hidden", !hasSession);
+  if (!hasSession) return;
+
+  var modePill = $("invStatusModePill");
+  if (modePill) {
+    var modeLabel = { auto: "AUTO", serial: "SERIAL", reel: "REEL", item: "ITEM" };
+    modePill.textContent = modeLabel[invScanMode] || "AUTO";
+    modePill.className   = "inv-status-mode-pill" + (invScanMode !== "auto" ? " mode-" + invScanMode : "");
+  }
+
+  var locText = $("invStatusLocText");
+  if (locText) {
+    if (invCurrentLocation) {
+      locText.textContent = invCurrentLocation;
+      locText.classList.remove("no-loc");
+    } else {
+      locText.textContent = "No location";
+      locText.classList.add("no-loc");
+    }
+  }
+
+  var sessEl = $("invStatusSession");
+  if (sessEl) sessEl.textContent = invSession.sessionName;
+
+  var countsEl = $("invStatusCounts");
+  if (countsEl) {
+    var exc = invEvents.filter(function(e) { return e.eventType === "exception"; }).length;
+    countsEl.textContent = invEvents.length + " events" + (exc ? " · " + exc + " exc." : "");
+  }
 }
 
 function renderInvEventLog() {
@@ -3400,11 +3676,12 @@ function invCreateExceptionEvent(scannedValue, scanType, problem, suggestedActio
 }
 
 // -- Scan feedback -------------------------------------------------
-function invSetScanFeedback(message, type) {
+function invSetScanFeedback(message, type, activityDetail) {
   var fb = $("invScanFeedback");
-  if (!fb) return;
-  fb.textContent = message;
-  fb.className = "inv-scan-feedback " + (type || "info");
+  if (fb) { fb.textContent = message; fb.className = "inv-scan-feedback " + (type || "info"); }
+  if (type === "ok" || type === "warn" || type === "error") {
+    invAddActivity(type, message, activityDetail || "");
+  }
 }
 
 // -- Individual scan handlers --------------------------------------
@@ -3607,6 +3884,7 @@ function invSetLocation(loc) {
     }
   }
   if (field) field.value = invCurrentLocation;
+  renderInvStatusBar();
 }
 
 function invClearLocation() {
@@ -3696,6 +3974,7 @@ function invSetScanMode(mode) {
     invKeypadTargetEl = null;
   }
 
+  renderInvStatusBar();
   setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
 }
 
@@ -3885,12 +4164,17 @@ function invProcessScan() {
   // Dismiss any open qty keypad (don't apply — user chose to scan something new)
   invHideQtyKeypad();
 
+  timUnlockAudio();
+
   // Mode-switch barcodes: ##MAUTO, ##MSERIAL, ##MREEL, ##MITEM
   var modeSwitchMap = { "##MAUTO": "auto", "##MSERIAL": "serial", "##MREEL": "reel", "##MITEM": "item" };
   if (modeSwitchMap[rawValue]) {
     invSetScanMode(modeSwitchMap[rawValue]);
     var modeLabels = { auto: "Auto-Detect", serial: "Serial / FSAN", reel: "Cable Reel", item: "Item # (Bulk)" };
-    invSetScanFeedback("Mode switched to: " + modeLabels[modeSwitchMap[rawValue]], "ok");
+    var newLabel = modeLabels[modeSwitchMap[rawValue]];
+    var fb = $("invScanFeedback");
+    if (fb) { fb.textContent = "Mode: " + newLabel; fb.className = "inv-scan-feedback ok"; }
+    invAddActivity("mode", "Mode → " + newLabel);
     $("invScanInput").value = "";
     invUpdateDetectedBadge("");
     return;
@@ -3913,7 +4197,9 @@ function invProcessScan() {
   // Location scan: update sticky location and return
   if (scanType === "location") {
     invSetLocation(rawValue);
-    invSetScanFeedback("Location set to: " + rawValue, "ok");
+    var fb = $("invScanFeedback");
+    if (fb) { fb.textContent = "Location → " + rawValue; fb.className = "inv-scan-feedback ok"; }
+    invAddActivity("location", "Location → " + rawValue);
     $("invScanInput").value = "";
     invUpdateDetectedBadge("");
     setTimeout(function() { $("invScanInput").focus(); }, 50);
@@ -4697,6 +4983,16 @@ try {
     switchTab(_savedTab);
   }
 } catch(e) {}
+
+timInitUsername();
+renderInvSessionUI();
+
+// Unlock Web Audio on first user gesture (required by Safari + Chrome autoplay policy)
+(function() {
+  function _unlock() { timUnlockAudio(); document.removeEventListener("pointerdown", _unlock); document.removeEventListener("keydown", _unlock); }
+  document.addEventListener("pointerdown", _unlock);
+  document.addEventListener("keydown", _unlock);
+})();
 </script>
 <script>
   if ('serviceWorker' in navigator) {
