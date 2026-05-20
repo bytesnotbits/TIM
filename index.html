@@ -51,7 +51,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TIM — Receiving + Inventory + Product Catalog v1.27</title>
+  <title>TIM — Receiving + Inventory + Product Catalog v1.27.1</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#2563eb" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -447,7 +447,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
     <!-- App header -->
     <div class="app-header">
-      <h1 class="app-title">TIM <span class="app-version">v1.27</span></h1>
+      <h1 class="app-title">TIM <span class="app-version">v1.27.1</span></h1>
     </div>
     <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
 
@@ -905,14 +905,14 @@ The goal is to evolve this tool based on reality, not assumptions.
           <tr><td>10-year event ceiling</td><td>~162,000 records / ~49 MB</td><td>Check master JSON file size after 2–3 years</td></tr>
         </table>
 
-        <h3>Master JSON Schema (v1.27)</h3>
+        <h3>Master JSON Schema (v1.27.1)</h3>
         <p>All data lives in <code>Calix_Odoo_Converter_source_data.json</code>. Top-level keys:</p>
         <table>
           <tr><th>Key</th><th>Contents</th><th>Notes</th></tr>
           <tr><td>product_map</td><td>Product catalog keyed by Vendor Part # (or NISC Item # when no vendor part exists)</td><td>Each entry includes <code>hctc</code> (NISC Item #) and <code>tracking_type</code></td></tr>
           <tr><td>history.records</td><td>Receiving history (Calix/RMA imports)</td><td>Existing structure — unchanged</td></tr>
-          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.27; one record per finalized session</td></tr>
-          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.27; each event carries its sessionId</td></tr>
+          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.27.1; one record per finalized session</td></tr>
+          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.27.1; each event carries its sessionId</td></tr>
         </table>
 
         <h3>Tracking Types</h3>
