@@ -1447,7 +1447,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.7";
+const APP_VERSION = "v1.27.8";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2824,9 +2824,9 @@ async function checkForUpdate() {
     if (!res.ok) throw new Error("Network response " + res.status);
     const text = await res.text();
 
-    // Extract version from <title> tag
-    const remoteMatch = text.match(/v(\d+\.\d+)(?:\b|<)/);
-    const localMatch  = document.title.match(/v(\d+\.\d+)(?:\b|<)/);
+    // Extract version from APP_VERSION constant in fetched file
+    const remoteMatch = text.match(/APP_VERSION\s*=\s*"v([\d.]+)"/);
+    const localMatch  = APP_VERSION.match(/v([\d.]+)/);
     const remoteVer = remoteMatch ? remoteMatch[1] : null;
     const localVer  = localMatch  ? localMatch[1]  : null;
 
