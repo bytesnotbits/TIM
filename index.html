@@ -327,7 +327,7 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-scan-context label { font-size: 13px; font-weight: 700; color: #475569; display: block; }
     .inv-scan-context input, .inv-scan-context select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 4px; font-size: 13px; }
     .inv-scan-main-row { display: flex; gap: 8px; align-items: stretch; margin: 10px 0; }
-    .inv-scan-main-input { flex: 1; padding: 12px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 16px; font-family: monospace; }
+    .inv-scan-main-input { flex: 1; padding: 10px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 22px; font-family: monospace; font-weight: 600; }
     .inv-scan-main-input:focus { border-color: #1d4ed8; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
     .inv-detected-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1e40af; margin: 4px 4px 4px 0; }
     .inv-detected-badge.unknown { background: #f1f5f9; color: #64748b; }
@@ -368,11 +368,11 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-qty-keypad-title { font-size:12px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.05em; }
     .inv-qty-keypad-context { font-size:11px; color:#475569; margin-bottom:8px; padding:5px 8px; background:white; border:1px solid #e5e7eb; border-radius:6px; line-height:1.35; min-height:28px; }
     /* Focus-jump row (reel mode) */
-    .inv-key-focus-row { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-bottom:7px; }
-    .inv-key-focus { background:#1e293b; color:#64748b; border:1px solid #334155; border-radius:7px; padding:7px 3px; font-size:11px; font-weight:700; cursor:pointer; text-align:center; transition:background .1s, color .1s; }
-    .inv-key-focus:hover { background:#334155; color:#e2e8f0; }
-    .inv-key-focus:active { background:#2563eb; color:white; }
-    .inv-key-focus.targeted { background:#2563eb; color:white; border-color:#1d4ed8; }
+    .inv-key-focus-row { display:grid; grid-template-columns:repeat(2,1fr); gap:4px; margin-bottom:7px; }
+    .inv-key-focus { background:#1e3a8a; color:white; border:1px solid #1e40af; border-radius:7px; padding:8px 3px; font-size:12px; font-weight:700; cursor:pointer; text-align:center; transition:background .1s, color .1s; }
+    .inv-key-focus:hover { background:#1d4ed8; }
+    .inv-key-focus:active { background:#2563eb; }
+    .inv-key-focus.targeted { background:#2563eb; color:white; border-color:#93c5fd; box-shadow:0 0 0 2px rgba(147,197,253,.5); }
     /* Display row */
     .inv-qty-display-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
     .inv-qty-display-label { font-size:12px; font-weight:700; color:#475569; white-space:nowrap; }
@@ -380,14 +380,14 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-qty-display.negative { color:#dc2626; border-color:#dc2626; }
     /* 3-column digit grid */
     .inv-qty-keys { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin-bottom:5px; }
-    .inv-qty-key { background:white; border:1px solid #d1d5db; border-radius:8px; padding:13px 0; font-size:17px; font-weight:700; cursor:pointer; color:#1f2937; margin:0; text-align:center; transition:background .1s; touch-action:manipulation; }
+    .inv-qty-key { background:white; border:2px solid #94a3b8; border-radius:8px; padding:12px 0; font-size:20px; font-weight:800; cursor:pointer; color:#0f172a; margin:0; text-align:center; transition:background .1s; touch-action:manipulation; box-shadow:0 1px 3px rgba(0,0,0,.12); }
     .inv-qty-key:hover { background:#f1f5f9; }
     .inv-qty-key:active { background:#dbeafe; }
-    .inv-qty-key.backspace { background:#fef9c3; color:#92400e; border-color:#fde68a; font-size:18px; }
-    .inv-qty-key.dbl-zero  { font-size:14px; }
-    .inv-qty-key.clear     { background:#f1f5f9; color:#475569; font-size:15px; }
-    .inv-qty-key.sign      { background:#fff7ed; color:#9a3412; border-color:#fed7aa; font-size:17px; }
-    .inv-qty-key.apply     { background:#16a34a; color:white; border-color:#15803d; font-size:14px; font-weight:800; }
+    .inv-qty-key.backspace { background:#fef08a; color:#78350f; border-color:#fbbf24; font-size:20px; }
+    .inv-qty-key.dbl-zero  { font-size:16px; }
+    .inv-qty-key.clear     { background:#e2e8f0; color:#1e293b; border-color:#94a3b8; font-size:16px; font-weight:800; }
+    .inv-qty-key.sign      { background:#fed7aa; color:#7c2d12; border-color:#fb923c; font-size:18px; font-weight:800; }
+    .inv-qty-key.apply     { background:#16a34a; color:white; border-color:#15803d; font-size:15px; font-weight:800; }
     /* Bottom row: C | ± | Apply */
     .inv-qty-bottom-row { display:grid; grid-template-columns:1fr 1fr 2fr; gap:5px; }
     .inv-note-btn { background:none; border:none; padding:2px 5px; margin:0; cursor:pointer; font-size:15px; line-height:1; border-radius:4px; }
@@ -400,7 +400,7 @@ The goal is to evolve this tool based on reality, not assumptions.
     /* === Two-column scan layout (fields left, keypad right) === */
     .inv-scan-two-col { display:flex; gap:16px; align-items:flex-start; }
     .inv-scan-fields-col { flex:1; min-width:0; }
-    .inv-scan-keypad-col { flex:0 0 214px; }
+    .inv-scan-keypad-col { flex:0 0 278px; }
     .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
     @media (max-width:660px) {
       .inv-scan-two-col { flex-direction:column; }
@@ -768,11 +768,11 @@ The goal is to evolve this tool based on reality, not assumptions.
             <!-- Context fields -->
             <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
               <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
-                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" />
+                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" style="padding:6px 8px;font-size:13px;" />
               </label>
             </div>
             <label class="small" style="display:block;margin-bottom:6px;">Notes (optional — applies to this scan)
-              <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
+              <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
             </label>
 
             <!-- Phase 5: Unknown serial inline prompt -->
@@ -905,10 +905,12 @@ The goal is to evolve this tool based on reality, not assumptions.
               <div id="invQtyKeypadContext" class="inv-qty-keypad-context">Scan an item to begin.</div>
               <!-- Focus-jump row: reel mode only -->
               <div id="invKeyFocusRow" class="inv-key-focus-row hidden">
-                <button class="inv-key-focus" data-target="reel"  onclick="invKeyFocusField('reel')">Reel #</button>
-                <button class="inv-key-focus" data-target="item"  onclick="invKeyFocusField('item')">Item #</button>
-                <button class="inv-key-focus" data-target="inner" onclick="invKeyFocusField('inner')">Inner</button>
-                <button class="inv-key-focus" data-target="outer" onclick="invKeyFocusField('outer')">Outer</button>
+                <button class="inv-key-focus" data-target="reel"   onclick="invKeyFocusField('reel')">Reel #</button>
+                <button class="inv-key-focus" data-target="item"   onclick="invKeyFocusField('item')">Item #</button>
+                <button class="inv-key-focus" data-target="inner"  onclick="invKeyFocusField('inner')">Inner</button>
+                <button class="inv-key-focus" data-target="outer"  onclick="invKeyFocusField('outer')">Outer</button>
+                <button class="inv-key-focus" data-target="inner2" onclick="invKeyFocusField('inner2')">Inner 2</button>
+                <button class="inv-key-focus" data-target="outer2" onclick="invKeyFocusField('outer2')">Outer 2</button>
               </div>
               <!-- Display -->
               <div class="inv-qty-display-row">
@@ -1476,7 +1478,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.11";
+const APP_VERSION = "v1.27.12";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4375,18 +4377,12 @@ function invQtyKeySign() {
 
 function invKeyFocusField(target) {
   var el = null;
-  var spanType = $("invReelSpanType") ? $("invReelSpanType").value : "single";
-  if (target === "reel") {
-    el = $("invReelNumber");
-  } else if (target === "item") {
-    el = $("invReelItemNumber");
-  } else if (target === "inner") {
-    var inA = $("invReelInnerA"), inB = $("invReelInnerB");
-    el = (spanType === "two_way" && inA && inA.value !== "" && inB) ? inB : inA;
-  } else if (target === "outer") {
-    var outA = $("invReelOuterA"), outB = $("invReelOuterB");
-    el = (spanType === "two_way" && outA && outA.value !== "" && outB) ? outB : outA;
-  }
+  if (target === "reel")   { el = $("invReelNumber"); }
+  else if (target === "item")   { el = $("invReelItemNumber"); }
+  else if (target === "inner")  { el = $("invReelInnerA"); }
+  else if (target === "outer")  { el = $("invReelOuterA"); }
+  else if (target === "inner2") { el = $("invReelInnerB"); }
+  else if (target === "outer2") { el = $("invReelOuterB"); }
   if (!el) return;
   invKeypadTargetEl = el;
   el.focus();
