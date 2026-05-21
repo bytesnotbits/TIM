@@ -355,6 +355,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
     /* === Mode Switch Barcodes === */
     .inv-mode-barcodes { display:flex; gap:14px; flex-wrap:wrap; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px; align-items:flex-start; }
+    .inv-mode-barcodes.hidden { display:none; }
     .inv-mode-barcode-item { display:flex; flex-direction:column; align-items:center; gap:4px; }
     .inv-mode-barcode-label { font-size:11px; font-weight:700; color:#475569; text-align:center; max-width:110px; }
     .inv-mode-barcode-code { font-size:10px; color:#94a3b8; font-family:monospace; }
@@ -1447,7 +1448,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.9";
+const APP_VERSION = "v1.27.10";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4196,7 +4197,9 @@ function invSetScanMode(mode) {
 function invToggleModeBarcodes() {
   var panel = $("invModeBarcodes");
   if (!panel) return;
-  panel.classList.toggle("hidden");
+  var hidden = panel.classList.toggle("hidden");
+  var btn = document.querySelector("[onclick='invToggleModeBarcodes()']");
+  if (btn) btn.textContent = "Mode Barcodes " + (hidden ? "▾" : "▴");
 }
 
 // ===================================================================
