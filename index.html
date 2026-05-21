@@ -50,7 +50,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>TIM — Receiving + Inventory + Product Catalog v1.27</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#2563eb" />
@@ -71,7 +71,7 @@ The goal is to evolve this tool based on reality, not assumptions.
     .app-shell { display: flex; height: 100vh; }
 
     /* ── Sidebar ── */
-    .sidebar { width: 300px; min-width: 300px; height: 100vh; background: #0f172a; display: flex; flex-direction: column; overflow: hidden; transition: width .22s ease, min-width .22s ease; flex-shrink: 0; }
+    .sidebar { width: 300px; min-width: 300px; height: 100vh; background: #0f172a; display: flex; flex-direction: column; overflow: hidden; transition: width .22s ease, min-width .22s ease; flex-shrink: 0; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
     .sidebar.collapsed { width: 52px; min-width: 52px; }
     .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 10px; border-bottom: 1px solid #1e293b; flex-shrink: 0; min-height: 48px; box-sizing: border-box; }
     .sidebar-logo { font-size: 18px; font-weight: 800; color: white; letter-spacing: .04em; white-space: nowrap; overflow: hidden; transition: opacity .15s; }
@@ -769,7 +769,7 @@ The goal is to evolve this tool based on reality, not assumptions.
             <div class="inv-scan-main-row">
               <input id="invScanInput" class="inv-scan-main-input" type="text"
                      placeholder="Scan barcode or type value, then press Enter"
-                     autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+                     autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none" />
               <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
               <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
               <button class="secondary" onclick="document.getElementById('invScanInput').focus()" style="padding:12px 14px;">Focus</button>
@@ -5224,11 +5224,31 @@ function exportInvSummaryXlsx() {
       }
     });
   }
+  // When notes/item fields lose focus, return to scan input so keyboard dismisses
+  // and the next scan goes to the right place. Skips if a modal or inline panel is open.
+  function invMaybeRefocusScanInput() {
+    setTimeout(function() {
+      if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
+      var rip = $("invReelInlinePanel");
+      if (rip && !rip.classList.contains("hidden")) return;
+      var spp = $("invSerialPromptPanel");
+      if (spp && !spp.classList.contains("hidden")) return;
+      var si = $("invScanInput");
+      if (si) si.focus();
+    }, 150);
+  }
+
+  var notesInput = $("invScanNotes");
+  if (notesInput) {
+    notesInput.addEventListener("blur", invMaybeRefocusScanInput);
+  }
+
   var itemInput = $("invScanItem");
   if (itemInput) {
     itemInput.addEventListener("input", function() {
       itemInput.value = sanitizeScannerValue(itemInput.value, { uppercase: true });
     });
+    itemInput.addEventListener("blur", invMaybeRefocusScanInput);
   }
 
   var locationInput = $("invScanLocation");
