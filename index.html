@@ -473,6 +473,10 @@ The goal is to evolve this tool based on reality, not assumptions.
     .item-history-section { margin-top:16px; border-top:1px solid #e5e7eb; padding-top:12px; }
     .finalize-btn { background:#166534; }
     .finalize-btn:hover { background:#15803d; }
+
+    /* === Inline Reel Entry Panel === */
+    .inv-reel-entry-panel { background:#f0fdf4; border:2px solid #86efac; border-radius:10px; padding:12px 14px; margin-top:10px; }
+    .inv-reel-entry-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
   </style>
 </head>
 <body>
@@ -689,17 +693,6 @@ The goal is to evolve this tool based on reality, not assumptions.
       <span id="invMetaEventCount">0</span><span id="invMetaSeq">0</span>
     </div>
 
-    <!-- Activity Feed -->
-    <div id="invActivityFeed" class="inv-activity-feed">
-      <div class="inv-activity-header">
-        <span class="inv-activity-title">Activity</span>
-        <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
-      </div>
-      <div id="invActivityList" class="inv-activity-list">
-        <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
-      </div>
-    </div>
-
     <!-- Scan / Entry Panel -->
     <div class="card" id="invScanCard">
       <h2>Scan / Entry Panel</h2>
@@ -747,12 +740,7 @@ The goal is to evolve this tool based on reality, not assumptions.
         <!-- Two-column layout: fields left, soft keypad right -->
         <div class="inv-scan-two-col">
           <div class="inv-scan-fields-col">
-            <!-- Context fields -->
-            <div class="inv-scan-context" style="grid-template-columns:1fr;">
-              <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
-                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" />
-              </label>
-            </div>
+            <!-- Hidden utility inputs -->
             <select id="invScanTypeOverride" style="display:none;">
               <option value="">Auto-detect</option>
               <option value="serial">Serial Number</option>
@@ -764,12 +752,10 @@ The goal is to evolve this tool based on reality, not assumptions.
               <option value="reel_number">Reel Number</option>
             </select>
             <input id="invScanQty" type="hidden" value="1" />
-            <label class="small" style="display:block;margin-bottom:6px;">Notes (optional — applies to this scan)
-              <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
-            </label>
+            <!-- Primary scan input — always at top -->
             <div class="inv-scan-main-row">
               <input id="invScanInput" class="inv-scan-main-input" type="text"
-                     placeholder="Scan barcode or type value, then press Enter"
+                     placeholder="Scan barcode or type value..."
                      autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none" />
               <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
               <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
@@ -779,6 +765,15 @@ The goal is to evolve this tool based on reality, not assumptions.
               <span id="invDetectedBadge" class="inv-detected-badge unknown">type: —</span>
             </div>
             <div id="invScanFeedback" class="inv-scan-feedback info">Start a session, then scan a barcode or type a value.</div>
+            <!-- Context fields -->
+            <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
+              <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
+                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" />
+              </label>
+            </div>
+            <label class="small" style="display:block;margin-bottom:6px;">Notes (optional — applies to this scan)
+              <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
+            </label>
 
             <!-- Phase 5: Unknown serial inline prompt -->
             <div id="invSerialPromptPanel" class="inv-serial-prompt hidden">
@@ -808,12 +803,102 @@ The goal is to evolve this tool based on reality, not assumptions.
               </div>
             </div>
 
-            <!-- Reel entry modal: see #invReelInlinePanel at bottom of body -->
+            <!-- Reel entry inline panel (shown in Cable Reel mode) -->
+            <div id="invReelInlinePanel" class="inv-reel-entry-panel hidden">
+              <div class="inv-reel-entry-header">
+                <b style="font-size:13px;color:#166534;">Cable Reel Entry</b>
+                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invDiscardReelEntry()">Discard / Clear</button>
+              </div>
+              <div class="inv-reel-inline-grid">
+                <label>Item Number *
+                  <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
+                         oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" style="text-transform:uppercase;" />
+                </label>
+                <label>Reel Number *
+                  <input id="invReelNumber" type="text" placeholder="e.g. REEL123" autocomplete="off"
+                         oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" style="text-transform:uppercase;" />
+                </label>
+              </div>
+              <div style="margin-bottom:10px;">
+                <label style="font-size:12px;color:#475569;font-weight:700;display:block;">Span Type
+                  <select id="invReelSpanType" onchange="invReelSpanTypeChange()" style="margin-top:3px;width:100%;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+                    <option value="single">Single Span</option>
+                    <option value="two_way">Two-Way (two spans)</option>
+                  </select>
+                </label>
+              </div>
+              <!-- Span A -->
+              <div class="inv-reel-span-section">
+                <b style="font-size:12px;color:#475569;">Span A</b>
+                <div class="inv-reel-span-row">
+                  <label>Inner Seq
+                    <input id="invReelInnerA" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq A" />
+                  </label>
+                  <label>Outer Seq
+                    <input id="invReelOuterA" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq A" />
+                  </label>
+                  <label>Available Ft
+                    <input id="invReelFtA" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#1d4ed8;" placeholder="—" />
+                  </label>
+                </div>
+              </div>
+              <!-- Span B (two-way only) -->
+              <div id="invReelSpanBSection" class="inv-reel-span-section span-b" style="display:none;">
+                <b style="font-size:12px;color:#475569;">Span B</b>
+                <div class="inv-reel-span-row">
+                  <label>Inner Seq
+                    <input id="invReelInnerB" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq B" />
+                  </label>
+                  <label>Outer Seq
+                    <input id="invReelOuterB" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq B" />
+                  </label>
+                  <label>Available Ft
+                    <input id="invReelFtB" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#16a34a;" placeholder="—" />
+                  </label>
+                </div>
+              </div>
+              <!-- Total -->
+              <div class="inv-reel-inline-total">
+                <b style="font-size:13px;color:#1d4ed8;">Total Available Ft</b>
+                <span id="invReelTotalFt" style="font-size:20px;font-weight:800;color:#1d4ed8;">—</span>
+              </div>
+              <!-- Historical comparison -->
+              <div id="invReelHistoryPanel" style="display:none;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:10px;">
+                <b style="font-size:12px;color:#92400e;">Previous Count for This Reel</b>
+                <div class="scroll" style="max-height:70px;margin-top:6px;">
+                  <table style="font-size:12px;width:auto;">
+                    <thead>
+                      <tr>
+                        <th style="white-space:nowrap;">Previous Ft</th>
+                        <th style="white-space:nowrap;">Current Ft</th>
+                        <th style="white-space:nowrap;">Difference</th>
+                        <th style="white-space:nowrap;">Counted At</th>
+                      </tr>
+                    </thead>
+                    <tbody id="invReelHistoryBody"></tbody>
+                  </table>
+                </div>
+              </div>
+              <!-- Notes -->
+              <label style="font-size:12px;color:#475569;font-weight:700;display:block;margin-bottom:10px;">Notes
+                <input id="invReelNotes" type="text" placeholder="Optional notes for this reel count"
+                       style="width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;font-size:13px;"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();invSubmitReelEntry();}" />
+              </label>
+              <div style="display:flex;gap:8px;">
+                <button id="invReelSaveBtn" onclick="invSubmitReelEntry()" style="flex:1;padding:10px;">Save Reel Count</button>
+                <button class="secondary" onclick="invDiscardReelEntry()">Discard</button>
+              </div>
+            </div>
           </div>
 
           <!-- Soft keypad column (persistent in Item and Reel modes) -->
           <div class="inv-scan-keypad-col">
-            <div id="invQtyKeypad" class="inv-qty-keypad hidden">
+            <div id="invQtyKeypad" class="inv-qty-keypad mode-qty">
               <div class="inv-qty-keypad-header">
                 <span id="invQtyKeypadTitle" class="inv-qty-keypad-title">Adjust Quantity</span>
               </div>
@@ -859,41 +944,82 @@ The goal is to evolve this tool based on reality, not assumptions.
       </div>
     </div>
 
+    <!-- Activity Feed -->
+    <div id="invActivityFeed" class="inv-activity-feed">
+      <div class="inv-activity-header">
+        <span class="inv-activity-title">Activity</span>
+        <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
+      </div>
+      <div id="invActivityList" class="inv-activity-list">
+        <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
+      </div>
+    </div>
+
     <!-- Exceptions -->
     <div class="card" id="invExceptionsCard">
-      <h2>Exceptions <span id="invExceptionCount" class="small" style="font-weight:400;">0 exceptions</span></h2>
-      <p class="small">Problems detected during scanning. Never silently discarded — each exception is a permanent timestamped event.</p>
-      <div class="scroll">
-        <table>
-          <thead>
-            <tr><th>Seq</th><th>Time</th><th>Scanned Value</th><th>Problem</th><th>Suggested Action</th><th>Status</th><th>Notes</th></tr>
-          </thead>
-          <tbody id="invExceptionsBody">
-            <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No exceptions.</td></tr>
-          </tbody>
-        </table>
+      <div class="collapsible-header" id="invExceptionsHeader" onclick="toggleCollapsible('invExceptionsCollapse','invExceptionsHeader','invExceptionsChevron')">
+        <h2 style="margin:0;">Exceptions <span id="invExceptionCount" class="small" style="font-weight:400;">0 exceptions</span></h2>
+        <svg id="invExceptionsChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="invExceptionsCollapse" class="collapsible-body" style="display:none;">
+        <p class="small">Problems detected during scanning. Never silently discarded — each exception is a permanent timestamped event.</p>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr><th>Seq</th><th>Time</th><th>Scanned Value</th><th>Problem</th><th>Suggested Action</th><th>Status</th><th>Notes</th></tr>
+            </thead>
+            <tbody id="invExceptionsBody">
+              <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No exceptions.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
     <!-- Inventory Summary -->
     <div class="card" id="invSummaryCard">
-      <h2>Inventory Summary</h2>
-      <p class="small">Derived from active events — recalculated automatically after each scan. Voided events are excluded.</p>
-      <div style="margin-bottom:10px;">
-        <button id="invExportSummaryBtn" onclick="exportInvSummaryXlsx()" disabled>Export Summary XLSX</button>
+      <div class="collapsible-header open" id="invSummaryHeader" onclick="toggleCollapsible('invSummaryCollapse','invSummaryHeader','invSummaryChevron')">
+        <h2 style="margin:0;">Inventory Summary</h2>
+        <svg id="invSummaryChevron" class="collapsible-chevron" style="transform:rotate(180deg);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </div>
-      <div class="scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th><th>Description</th><th>Counted Qty</th>
-              <th>Serialized Count</th><th>Reel Footage</th><th>Exceptions</th><th>Last Counted</th>
-            </tr>
-          </thead>
-          <tbody id="invSummaryBody">
-            <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>
-          </tbody>
-        </table>
+      <div id="invSummaryCollapse" class="collapsible-body">
+        <p class="small">Derived from active events — recalculated automatically after each scan. Voided events are excluded.</p>
+        <div style="margin-bottom:10px;">
+          <button id="invExportSummaryBtn" onclick="exportInvSummaryXlsx()" disabled>Export Summary XLSX</button>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th><th>Description</th><th>Counted Qty</th>
+                <th>Serialized Count</th><th>Reel Footage</th><th>Exceptions</th><th>Last Counted</th>
+              </tr>
+            </thead>
+            <tbody id="invSummaryBody">
+              <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- Reel Detail -->
+        <div id="invReelDetailSection" style="display:none;margin-top:16px;">
+          <h3 style="margin:0 0 6px;font-size:14px;color:#166534;">Cable Reel Detail</h3>
+          <p class="small" style="margin:0 0 8px;">Each reel scan with sequence numbers. Two-way reels show both spans.</p>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reel #</th><th>Item</th><th>Span Type</th>
+                  <th>Inner A</th><th>Outer A</th><th>Ft A</th>
+                  <th>Inner B</th><th>Outer B</th><th>Ft B</th>
+                  <th>Total Ft</th><th>Location</th><th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="invReelDetailBody">
+                <tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:16px;">No reel counts yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1246,104 +1372,6 @@ The goal is to evolve this tool based on reality, not assumptions.
     </div>
   </div>
 
-  <!-- Reel entry modal (Phase 4: converted from inline panel) -->
-  <div id="invReelInlinePanel" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="invReelModalTitle">
-    <div class="modal inv-reel-modal-box">
-      <div class="modal-header">
-        <div>
-          <h2 id="invReelModalTitle" style="margin:0;font-size:16px;color:#166534;">Cable Reel Entry</h2>
-        </div>
-        <button class="secondary" style="padding:6px 12px;" onclick="invDiscardReelEntry()">Discard</button>
-      </div>
-      <div class="modal-body">
-        <div class="inv-reel-inline-grid">
-          <label>Item Number *
-            <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
-                   oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" style="text-transform:uppercase;" />
-          </label>
-          <label>Reel Number *
-            <input id="invReelNumber" type="text" placeholder="e.g. REEL123" autocomplete="off"
-                   oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" style="text-transform:uppercase;" />
-          </label>
-        </div>
-        <div style="margin-bottom:10px;">
-          <label style="font-size:12px;color:#475569;font-weight:700;display:block;">Span Type
-            <select id="invReelSpanType" onchange="invReelSpanTypeChange()" style="margin-top:3px;width:100%;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
-              <option value="single">Single Span</option>
-              <option value="two_way">Two-Way (two spans)</option>
-            </select>
-          </label>
-        </div>
-        <!-- Span A -->
-        <div class="inv-reel-span-section">
-          <b style="font-size:12px;color:#475569;">Span A</b>
-          <div class="inv-reel-span-row">
-            <label>Inner Seq
-              <input id="invReelInnerA" type="number" min="0" placeholder="0"
-                     oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq A" />
-            </label>
-            <label>Outer Seq
-              <input id="invReelOuterA" type="number" min="0" placeholder="0"
-                     oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq A" />
-            </label>
-            <label>Available Ft
-              <input id="invReelFtA" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#1d4ed8;" placeholder="—" />
-            </label>
-          </div>
-        </div>
-        <!-- Span B (two-way only) -->
-        <div id="invReelSpanBSection" class="inv-reel-span-section span-b" style="display:none;">
-          <b style="font-size:12px;color:#475569;">Span B</b>
-          <div class="inv-reel-span-row">
-            <label>Inner Seq
-              <input id="invReelInnerB" type="number" min="0" placeholder="0"
-                     oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq B" />
-            </label>
-            <label>Outer Seq
-              <input id="invReelOuterB" type="number" min="0" placeholder="0"
-                     oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq B" />
-            </label>
-            <label>Available Ft
-              <input id="invReelFtB" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#16a34a;" placeholder="—" />
-            </label>
-          </div>
-        </div>
-        <!-- Total -->
-        <div class="inv-reel-inline-total">
-          <b style="font-size:13px;color:#1d4ed8;">Total Available Ft</b>
-          <span id="invReelTotalFt" style="font-size:20px;font-weight:800;color:#1d4ed8;">—</span>
-        </div>
-        <!-- Historical comparison -->
-        <div id="invReelHistoryPanel" style="display:none;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:10px;">
-          <b style="font-size:12px;color:#92400e;">Previous Count for This Reel</b>
-          <div class="scroll" style="max-height:70px;margin-top:6px;">
-            <table style="font-size:12px;width:auto;">
-              <thead>
-                <tr>
-                  <th style="white-space:nowrap;">Previous Ft</th>
-                  <th style="white-space:nowrap;">Current Ft</th>
-                  <th style="white-space:nowrap;">Difference</th>
-                  <th style="white-space:nowrap;">Counted At</th>
-                </tr>
-              </thead>
-              <tbody id="invReelHistoryBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Notes (Enter submits) -->
-        <label style="font-size:12px;color:#475569;font-weight:700;display:block;margin-bottom:10px;">Notes
-          <input id="invReelNotes" type="text" placeholder="Optional notes for this reel count"
-                 style="width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;font-size:13px;"
-                 onkeydown="if(event.key==='Enter'){event.preventDefault();invSubmitReelEntry();}" />
-        </label>
-        <div style="display:flex;gap:8px;">
-          <button id="invReelSaveBtn" onclick="invSubmitReelEntry()" style="flex:1;padding:10px;">Save Reel Count</button>
-          <button class="secondary" onclick="invDiscardReelEntry()">Discard</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <div id="blindReceiveModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="blindReceiveTitle">
     <div class="modal">
       <div class="modal-header">
@@ -1448,7 +1476,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.10";
+const APP_VERSION = "v1.27.11";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3017,6 +3045,8 @@ function switchTab(name) {
   if (name === "inventory" && !invTabOpenedOnce) {
     invTabOpenedOnce = true;
     invShowStorageHint();
+    // Initialize keypad display state on first open
+    invSetScanMode(invScanMode || "auto");
   }
   if (name === "products") prodRenderList();
   try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
@@ -3502,12 +3532,15 @@ function renderInvEventLog() {
 // ===================================================================
 
 function renderInvSummary() {
-  var tbody    = $("invSummaryBody");
+  var tbody     = $("invSummaryBody");
+  var reelTbody = $("invReelDetailBody");
+  var reelSect  = $("invReelDetailSection");
   var exportBtn = $("invExportSummaryBtn");
   if (!tbody) return;
 
   // Derive totals from active (non-voided) events only
   var map = {};
+  var reelRows = [];
   invEvents.forEach(function(evt) {
     if (evt.status === "voided")           return;
     if (evt.eventType === "void_event")    return;
@@ -3531,7 +3564,10 @@ function renderInvSummary() {
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
     else if (evt.eventType === "box_scan")               { r.countedQty += (evt.resolvedDeviceCount || evt.qty || 1); r.serializedCount += (evt.resolvedDeviceCount || 0); }
     else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (evt.qty || 1); }
-    else if (evt.eventType === "cable_reel_count")       { r.reelFootage += (evt.totalAvailableFt || 0); }
+    else if (evt.eventType === "cable_reel_count") {
+      r.reelFootage += (evt.totalAvailableFt || 0);
+      reelRows.push(evt);
+    }
     else if (evt.eventType === "exception")              { r.exceptions += 1; }
   });
 
@@ -3541,21 +3577,46 @@ function renderInvSummary() {
 
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>';
-    return;
+  } else {
+    tbody.innerHTML = rows.map(function(r) {
+      return "<tr>" +
+        "<td>" + escapeHtml(r.item) + "</td>" +
+        "<td>" + escapeHtml(r.description) + "</td>" +
+        '<td style="text-align:right;font-weight:700">' + (r.countedQty || "") + "</td>" +
+        '<td style="text-align:right">' + (r.serializedCount || "") + "</td>" +
+        '<td style="text-align:right">' + (r.reelFootage ? r.reelFootage.toLocaleString() + " ft" : "") + "</td>" +
+        '<td style="text-align:right' + (r.exceptions ? ";color:#dc2626;font-weight:700" : "") + '">' +
+          (r.exceptions || "") + "</td>" +
+        '<td style="white-space:nowrap">' + invFormatDateTime(r.lastCounted) + "</td>" +
+        "</tr>";
+    }).join("");
   }
 
-  tbody.innerHTML = rows.map(function(r) {
-    return "<tr>" +
-      "<td>" + escapeHtml(r.item) + "</td>" +
-      "<td>" + escapeHtml(r.description) + "</td>" +
-      '<td style="text-align:right;font-weight:700">' + (r.countedQty || "") + "</td>" +
-      '<td style="text-align:right">' + (r.serializedCount || "") + "</td>" +
-      '<td style="text-align:right">' + (r.reelFootage ? r.reelFootage.toLocaleString() + " ft" : "") + "</td>" +
-      '<td style="text-align:right' + (r.exceptions ? ";color:#dc2626;font-weight:700" : "") + '">' +
-        (r.exceptions || "") + "</td>" +
-      '<td style="white-space:nowrap">' + invFormatDateTime(r.lastCounted) + "</td>" +
-      "</tr>";
-  }).join("");
+  // Reel detail table
+  if (reelTbody && reelSect) {
+    if (!reelRows.length) {
+      reelSect.style.display = "none";
+    } else {
+      reelSect.style.display = "";
+      reelTbody.innerHTML = reelRows.map(function(e) {
+        var isTwoWay = e.spanType === "two_way";
+        return "<tr>" +
+          "<td style='font-family:monospace;font-weight:700'>" + escapeHtml(e.reelNumber || e.scannedValue || "") + "</td>" +
+          "<td>" + escapeHtml(e.itemNumber || "") + "</td>" +
+          "<td>" + (isTwoWay ? "Two-Way" : "Single") + "</td>" +
+          '<td style="text-align:right">' + (e.innerSeqA != null ? e.innerSeqA : "") + "</td>" +
+          '<td style="text-align:right">' + (e.outerSeqA != null ? e.outerSeqA : "") + "</td>" +
+          '<td style="text-align:right;color:#1d4ed8;font-weight:700">' + (e.availableFtA != null ? e.availableFtA.toLocaleString() : "") + "</td>" +
+          '<td style="text-align:right">' + (isTwoWay && e.innerSeqB != null ? e.innerSeqB : "—") + "</td>" +
+          '<td style="text-align:right">' + (isTwoWay && e.outerSeqB != null ? e.outerSeqB : "—") + "</td>" +
+          '<td style="text-align:right;color:#16a34a;font-weight:700">' + (isTwoWay && e.availableFtB != null ? e.availableFtB.toLocaleString() : "—") + "</td>" +
+          '<td style="text-align:right;font-weight:800;color:#1d4ed8">' + ((e.totalAvailableFt || 0).toLocaleString()) + " ft</td>" +
+          "<td>" + escapeHtml(e.location || "") + "</td>" +
+          '<td style="white-space:nowrap">' + invFormatDateTime(e.timestamp) + "</td>" +
+          "</tr>";
+      }).join("");
+    }
+  }
 }
 
 function exportInvEventLogCsv() {
@@ -4149,7 +4210,7 @@ function invSetScanMode(mode) {
     invLastBulkEventId = null;
     invQtyKeypadValue = "1";
     invKeypadTargetEl = null;
-    if (kp) { kp.classList.remove("hidden"); kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
+    if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
     if (focusRow) focusRow.classList.add("hidden");
     if (signBtn)  signBtn.style.display = "";
     var titleEl = $("invQtyKeypadTitle"); if (titleEl) titleEl.textContent = "Quantity";
@@ -4164,12 +4225,14 @@ function invSetScanMode(mode) {
     invLastBulkEventId = null;
     invQtyKeypadValue = "1";
     invKeypadTargetEl = null;
-    if (kp) { kp.classList.remove("hidden"); kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-reel"; }
+    if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-reel"; }
     if (focusRow) focusRow.classList.remove("hidden");
     if (signBtn)  signBtn.style.display = "none";
     var titleEl = $("invQtyKeypadTitle"); if (titleEl) titleEl.textContent = "Reel Entry";
     var applyBtn = $("invQtyKeyApplyBtn"); if (applyBtn) applyBtn.textContent = "✓ Save Reel";
     var lbl = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "→";
+    // Show reel entry panel inline with cleared fields
+    if (rip) { rip.classList.remove("hidden"); invClearReelFields(); }
     invQtyKeypadRefreshReelTarget();
 
   } else {
@@ -4179,7 +4242,7 @@ function invSetScanMode(mode) {
     invLastBulkEventId = null;
     invQtyKeypadValue = "1";
     invKeypadTargetEl = null;
-    if (kp) { kp.classList.remove("hidden"); kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
+    if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
     if (rip) rip.classList.add("hidden");
     if (focusRow) focusRow.classList.add("hidden");
     if (signBtn)  signBtn.style.display = "";
@@ -4756,18 +4819,47 @@ function invSubmitReelEntry(silent) {
   $("invScanInput").value = "";
 }
 
+function invClearReelFields() {
+  ["invReelItemNumber","invReelNumber","invReelInnerA","invReelOuterA","invReelFtA",
+   "invReelInnerB","invReelOuterB","invReelFtB"].forEach(function(id) {
+    var el = $(id);
+    if (el) { el.value = ""; el.classList.remove("inv-reel-prefilled"); }
+  });
+  var st = $("invReelSpanType"); if (st) st.value = "single";
+  var sb = $("invReelSpanBSection"); if (sb) sb.style.display = "none";
+  var notes = $("invReelNotes"); if (notes) notes.value = "";
+  var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
+  var total = $("invReelTotalFt"); if (total) total.textContent = "—";
+  invReelModalScannedValue = "";
+  // Pre-fill item # from sticky context if set
+  var ctxItem = $("invScanItem");
+  var itemFld = $("invReelItemNumber");
+  if (ctxItem && ctxItem.value && itemFld) {
+    itemFld.value = ctxItem.value.trim().toUpperCase();
+  }
+}
+
 function invCloseReelInline() {
-  var rip = $("invReelInlinePanel");
-  if (rip) rip.classList.add("hidden");
   invKeypadTargetEl = null;
   document.querySelectorAll(".inv-reel-keypad-targeted").forEach(function(el) {
     el.classList.remove("inv-reel-keypad-targeted");
   });
-  if (invQtyKeypadMode === "reel") {
+  if (invScanMode === "reel") {
+    // Keep panel open — just clear fields for next entry
+    invClearReelFields();
     var ctx = $("invQtyKeypadContext");
-    if (ctx) ctx.textContent = "Scan a reel to begin.";
+    if (ctx) ctx.textContent = "Scan a reel or fill fields below.";
     var disp = $("invQtyDisplay");
     if (disp) { disp.textContent = "—"; disp.className = "inv-qty-display"; }
+  } else {
+    var rip = $("invReelInlinePanel");
+    if (rip) rip.classList.add("hidden");
+    if (invQtyKeypadMode === "reel") {
+      var ctx2 = $("invQtyKeypadContext");
+      if (ctx2) ctx2.textContent = "Scan a reel to begin.";
+      var disp2 = $("invQtyDisplay");
+      if (disp2) { disp2.textContent = "—"; disp2.className = "inv-qty-display"; }
+    }
   }
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
@@ -5254,10 +5346,12 @@ function exportInvSummaryXlsx() {
   function invMaybeRefocusScanInput() {
     setTimeout(function() {
       if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
-      var rip = $("invReelInlinePanel");
-      if (rip && !rip.classList.contains("hidden")) return;
       var spp = $("invSerialPromptPanel");
       if (spp && !spp.classList.contains("hidden")) return;
+      // Only block refocus if focus is actively inside the reel entry panel
+      var active = document.activeElement;
+      var rip = $("invReelInlinePanel");
+      if (rip && !rip.classList.contains("hidden") && active && rip.contains(active)) return;
       var si = $("invScanInput");
       if (si) si.focus();
     }, 150);
@@ -5325,22 +5419,17 @@ function exportInvSummaryXlsx() {
     if (e.key === "Escape") { e.preventDefault(); prodCloseHistoryModal(); }
   });
 
-  // Qty keypad: physical keyboard support (item mode only; reel fields handle their own input)
+  // Qty keypad: physical keyboard support (item mode only; reel fields and scan input handle their own)
   document.addEventListener("keydown", function(e) {
-    var kp = $("invQtyKeypad");
-    if (!kp || kp.classList.contains("hidden")) return;
     if (invQtyKeypadMode !== "qty") return; // reel fields handle their own keyboard
-    // Only capture when scan input has focus AND it's empty (don't steal chars during item# entry)
+    // Never intercept when the scan input or any text input has focus
     var si = $("invScanInput");
-    var activeIsScanInput = document.activeElement === si;
-    var activeIsOtherInput = document.activeElement &&
-      document.activeElement.tagName === "INPUT" && !activeIsScanInput;
-    if (activeIsOtherInput) return;
-    if (activeIsScanInput && si.value.length > 0) return; // typing an item# — don't intercept
+    var active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) return;
     if (e.key >= "0" && e.key <= "9") { e.preventDefault(); invQtyKeyDigit(e.key); }
     else if (e.key === "Backspace") { e.preventDefault(); invQtyKeyBackspace(); }
     else if (e.key === "-" || e.key === "+") { e.preventDefault(); invQtyKeySign(); }
-    else if (e.key === "Enter" && !activeIsScanInput) { e.preventDefault(); invQtyKeyApply(); }
+    else if (e.key === "Enter") { e.preventDefault(); invQtyKeyApply(); }
     else if (e.key === "Escape") { e.preventDefault(); invQtyKeySkip(); }
   });
 
