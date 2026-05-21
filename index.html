@@ -71,9 +71,9 @@ The goal is to evolve this tool based on reality, not assumptions.
     .app-shell { display: flex; height: 100vh; }
 
     /* ── Sidebar ── */
-    .sidebar { width: 300px; min-width: 300px; height: 100vh; background: #0f172a; display: flex; flex-direction: column; overflow: hidden; transition: width .22s ease, min-width .22s ease; flex-shrink: 0; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); }
+    .sidebar { width: 300px; min-width: 300px; height: 100vh; background: #0f172a; display: flex; flex-direction: column; overflow: hidden; transition: width .22s ease, min-width .22s ease; flex-shrink: 0; }
     .sidebar.collapsed { width: 52px; min-width: 52px; }
-    .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 10px; border-bottom: 1px solid #1e293b; flex-shrink: 0; min-height: 48px; box-sizing: border-box; }
+    .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 10px; padding-top: calc(14px + env(safe-area-inset-top, 0px)); border-bottom: 1px solid #1e293b; flex-shrink: 0; min-height: 48px; box-sizing: border-box; }
     .sidebar-logo { font-size: 18px; font-weight: 800; color: white; letter-spacing: .04em; white-space: nowrap; overflow: hidden; transition: opacity .15s; }
     .sidebar.collapsed .sidebar-logo { opacity: 0; pointer-events: none; width: 0; }
     .sidebar-toggle { background: none; border: none; color: #64748b; cursor: pointer; padding: 4px; border-radius: 6px; margin: 0; display: flex; align-items: center; flex-shrink: 0; transition: color .15s, background .15s; }
@@ -1447,7 +1447,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.6";
+const APP_VERSION = "v1.27.7";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4420,6 +4420,8 @@ function invProcessScan() {
 
   var override    = $("invScanTypeOverride") ? $("invScanTypeOverride").value : "";
   var scanType    = override || invClassifyScan(rawValue);
+  // Location barcodes always take priority over any mode override
+  if (invClassifyScan(rawValue) === "location") scanType = "location";
   var contextItem = sanitizeScannerValue($("invScanItem") ? $("invScanItem").value || "" : "", { uppercase: true });
   var notes       = $("invScanNotes") ? ($("invScanNotes").value || "").trim() : "";
 
