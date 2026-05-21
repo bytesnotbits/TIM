@@ -528,8 +528,8 @@ The goal is to evolve this tool based on reality, not assumptions.
 
     <div class="sidebar-setup-scroll">
 
-      <!-- Inventory Session -->
-      <div class="sidebar-inv-card">
+      <!-- Inventory Session (shown only when Inventory tab is active) -->
+      <div id="sideInvSessionCard" class="sidebar-inv-card hidden">
         <div class="sidebar-inv-card-title">
           <span id="sideInvDot" class="sidebar-inv-dot"></span>
           Inventory Session
@@ -1447,7 +1447,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.5";
+const APP_VERSION = "v1.27.6";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3011,6 +3011,8 @@ function switchTab(name) {
     if (panel) panel.classList.toggle("active", t === name);
     if (btn)   btn.classList.toggle("active", t === name);
   });
+  var invCard = $("sideInvSessionCard");
+  if (invCard) invCard.classList.toggle("hidden", name !== "inventory");
   if (name === "inventory" && !invTabOpenedOnce) {
     invTabOpenedOnce = true;
     invShowStorageHint();
