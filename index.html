@@ -179,36 +179,36 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-status-save.hidden { display: none; }
 
     /* ── Activity feed ── */
-    .inv-activity-feed { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
-    .inv-activity-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid #1e293b; }
-    .inv-activity-title { font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; }
-    .inv-activity-clear-btn { background: none; border: none; color: #334155; cursor: pointer; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
-    .inv-activity-clear-btn:hover { color: #94a3b8; background: #1e293b; }
-    .inv-activity-list { padding: 2px 0; }
-    .inv-activity-empty { padding: 10px 14px; font-size: 12px; color: #334155; text-align: center; }
-    .inv-activity-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 12px; border-bottom: 1px solid #0d1117; font-size: 13px; }
+    .inv-activity-feed { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 14px; overflow: hidden; }
+    .inv-activity-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid #e2e8f0; background: #f1f5f9; }
+    .inv-activity-title { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .1em; }
+    .inv-activity-clear-btn { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+    .inv-activity-clear-btn:hover { color: #475569; background: #e2e8f0; }
+    .inv-activity-list { padding: 2px 0; max-height: 220px; overflow-y: auto; }
+    .inv-activity-empty { padding: 10px 14px; font-size: 12px; color: #94a3b8; text-align: center; font-style: italic; }
+    .inv-activity-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; background: white; }
     .inv-activity-entry:last-child { border-bottom: none; }
-    .inv-activity-entry.fresh { animation: activityPulse .55s ease-out; }
+    .inv-activity-entry.fresh { animation: activityPulse .6s ease-out; }
     .inv-activity-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; line-height: 1.2; font-family: monospace; }
     .inv-activity-body { flex: 1; min-width: 0; }
-    .inv-activity-msg { color: #e2e8f0; line-height: 1.35; word-break: break-word; }
-    .inv-activity-detail { font-size: 11px; color: #475569; margin-top: 1px; }
-    .inv-activity-time { font-size: 10px; color: #334155; flex-shrink: 0; white-space: nowrap; margin-top: 3px; font-family: monospace; }
+    .inv-activity-msg { color: #1e293b; line-height: 1.35; word-break: break-word; font-weight: 500; }
+    .inv-activity-detail { font-size: 11px; color: #64748b; margin-top: 1px; }
+    .inv-activity-time { font-size: 10px; color: #94a3b8; flex-shrink: 0; white-space: nowrap; margin-top: 3px; font-family: monospace; }
     .inv-activity-entry.type-ok       { border-left: 3px solid #22c55e; }
     .inv-activity-entry.type-warn     { border-left: 3px solid #f59e0b; }
     .inv-activity-entry.type-error    { border-left: 3px solid #ef4444; }
     .inv-activity-entry.type-info     { border-left: 3px solid #3b82f6; }
     .inv-activity-entry.type-location { border-left: 3px solid #a78bfa; }
     .inv-activity-entry.type-mode     { border-left: 3px solid #38bdf8; }
-    .inv-activity-entry.type-ok .inv-activity-icon    { color: #22c55e; }
-    .inv-activity-entry.type-warn .inv-activity-icon  { color: #f59e0b; }
-    .inv-activity-entry.type-error .inv-activity-icon { color: #ef4444; }
-    .inv-activity-entry.type-location .inv-activity-icon { color: #a78bfa; }
-    .inv-activity-entry.type-mode .inv-activity-icon  { color: #38bdf8; }
-    .inv-activity-entry.type-info .inv-activity-icon  { color: #3b82f6; }
+    .inv-activity-entry.type-ok .inv-activity-icon    { color: #16a34a; }
+    .inv-activity-entry.type-warn .inv-activity-icon  { color: #d97706; }
+    .inv-activity-entry.type-error .inv-activity-icon { color: #dc2626; }
+    .inv-activity-entry.type-location .inv-activity-icon { color: #7c3aed; }
+    .inv-activity-entry.type-mode .inv-activity-icon  { color: #0284c7; }
+    .inv-activity-entry.type-info .inv-activity-icon  { color: #2563eb; }
     @keyframes activityPulse {
-      0%   { background: rgba(99,102,241,.22); }
-      100% { background: transparent; }
+      0%   { background: #eff6ff; }
+      100% { background: white; }
     }
 
     /* ── Main Content ── */
@@ -697,6 +697,12 @@ The goal is to evolve this tool based on reality, not assumptions.
     <div class="card" id="invScanCard">
       <h2>Scan / Entry Panel</h2>
       <p class="small">Scan or type any value. Any string starting with <b>WH</b> automatically sets the location. Barcode scanners that send Enter will auto-submit.</p>
+      <!-- Location bar -->
+      <div id="invLocBar" style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;margin-bottom:10px;">
+        <span style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;">Location</span>
+        <span id="invLocBarValue" style="font-weight:800;font-size:16px;color:#15803d;flex:1;font-family:monospace;letter-spacing:.04em;">None</span>
+        <button class="secondary" style="padding:3px 10px;font-size:11px;margin:0;" onclick="invClearLocation()">Clear</button>
+      </div>
       <!-- Hidden legacy display element — JS still writes to it safely -->
       <span id="invLocationDisplay" style="display:none;"></span>
       <span id="invScanLocation" style="display:none;"></span>
@@ -756,7 +762,7 @@ The goal is to evolve this tool based on reality, not assumptions.
             <div class="inv-scan-main-row">
               <input id="invScanInput" class="inv-scan-main-input" type="text"
                      placeholder="Scan barcode or type value..."
-                     autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none" />
+                     autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
               <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
               <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
               <button class="secondary" onclick="document.getElementById('invScanInput').focus()" style="padding:12px 14px;">Focus</button>
@@ -764,7 +770,6 @@ The goal is to evolve this tool based on reality, not assumptions.
             <div>
               <span id="invDetectedBadge" class="inv-detected-badge unknown">type: —</span>
             </div>
-            <div id="invScanFeedback" class="inv-scan-feedback info">Start a session, then scan a barcode or type a value.</div>
             <!-- Context fields -->
             <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
               <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
@@ -944,16 +949,15 @@ The goal is to evolve this tool based on reality, not assumptions.
           </div>
         </div>
       </div>
-    </div>
-
-    <!-- Activity Feed -->
-    <div id="invActivityFeed" class="inv-activity-feed">
-      <div class="inv-activity-header">
-        <span class="inv-activity-title">Activity</span>
-        <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
-      </div>
-      <div id="invActivityList" class="inv-activity-list">
-        <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
+      <!-- Activity Feed (inline) -->
+      <div id="invActivityFeed" class="inv-activity-feed">
+        <div class="inv-activity-header">
+          <span class="inv-activity-title">Activity</span>
+          <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
+        </div>
+        <div id="invActivityList" class="inv-activity-list">
+          <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
+        </div>
       </div>
     </div>
 
@@ -1478,7 +1482,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.12";
+const APP_VERSION = "v1.27.13";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2994,6 +2998,7 @@ let invNotesModalEventId = null;
 let invScanMode = "auto";          // "auto" | "serial" | "reel" | "item"
 let invLastBulkEventId = null;     // eventId of most recent bulk_quantity_count
 let invQtyKeypadValue = "1";       // current soft keypad display value
+let invQtyKeypadFresh = true;      // true = next digit replaces the default "1"
 let invQtyKeypadMode = "qty";      // "qty" | "reel" — routes key presses
 let invKeypadTargetEl = null;      // focused reel field in reel mode
 
@@ -4142,6 +4147,7 @@ function invSetLocation(loc) {
   invCurrentLocation = (loc || "").trim().toUpperCase();
   var display = $("invLocationDisplay");
   var field   = $("invScanLocation");
+  var bar     = $("invLocBarValue");
   if (display) {
     if (invCurrentLocation) {
       display.textContent = invCurrentLocation;
@@ -4151,6 +4157,7 @@ function invSetLocation(loc) {
       display.className = "inv-location-none";
     }
   }
+  if (bar) bar.textContent = invCurrentLocation || "None";
   if (field) field.value = invCurrentLocation;
   renderInvStatusBar();
 }
@@ -4164,6 +4171,8 @@ function invClearLocation() {
 function invUpdateLocationInput(val) {
   invCurrentLocation = (val || "").trim().toUpperCase();
   var display = $("invLocationDisplay");
+  var bar     = $("invLocBarValue");
+  if (bar) bar.textContent = invCurrentLocation || "None";
   if (!display) return;
   if (invCurrentLocation) {
     display.textContent = invCurrentLocation;
@@ -4210,7 +4219,7 @@ function invSetScanMode(mode) {
   if (mode === "item") {
     invQtyKeypadMode = "qty";
     invLastBulkEventId = null;
-    invQtyKeypadValue = "1";
+    invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
     invKeypadTargetEl = null;
     if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
     if (focusRow) focusRow.classList.add("hidden");
@@ -4225,7 +4234,7 @@ function invSetScanMode(mode) {
   } else if (mode === "reel") {
     invQtyKeypadMode = "reel";
     invLastBulkEventId = null;
-    invQtyKeypadValue = "1";
+    invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
     invKeypadTargetEl = null;
     if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-reel"; }
     if (focusRow) focusRow.classList.remove("hidden");
@@ -4242,7 +4251,7 @@ function invSetScanMode(mode) {
     invAutoSaveReelInline();
     invQtyKeypadMode = "qty";
     invLastBulkEventId = null;
-    invQtyKeypadValue = "1";
+    invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
     invKeypadTargetEl = null;
     if (kp) { kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
     if (rip) rip.classList.add("hidden");
@@ -4273,7 +4282,7 @@ function invToggleModeBarcodes() {
 
 function invShowQtyKeypad(eventId, itemNumber, description) {
   invLastBulkEventId = eventId;
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   var display = $("invQtyDisplay");
   if (display) { display.textContent = "1"; display.className = "inv-qty-display"; }
   var ctx = $("invQtyKeypadContext");
@@ -4282,7 +4291,7 @@ function invShowQtyKeypad(eventId, itemNumber, description) {
 
 function invShowLockedKeypad() {
   invLastBulkEventId = null;
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   var display = $("invQtyDisplay");
   if (display) { display.textContent = "1"; display.className = "inv-qty-display"; }
   var ctx = $("invQtyKeypadContext");
@@ -4292,7 +4301,7 @@ function invShowLockedKeypad() {
 function invHideQtyKeypad() {
   // Keypad always stays visible; just reset its state
   invLastBulkEventId = null;
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   invKeypadTargetEl = null;
   if (invScanMode === "reel") {
     invQtyKeypadRefreshReelTarget();
@@ -4355,10 +4364,11 @@ function invQtyKeyDigit(d) {
     invKeypadTargetEl.focus();
     return;
   }
-  // qty mode — replace the default "1" on first digit press
-  if (invQtyKeypadValue === "1" || invQtyKeypadValue === "-1") {
+  // qty mode — replace the default "1" on first digit press only
+  if (invQtyKeypadFresh) {
     var sign = invQtyKeypadValue.charAt(0) === "-" ? "-" : "";
     invQtyKeypadValue = sign + d;
+    invQtyKeypadFresh = false;
   } else {
     var digits = invQtyKeypadValue.replace(/[^0-9]/g, "");
     if (digits.length + d.length > 6) return;
@@ -4416,13 +4426,13 @@ function invQtyKeyClear() {
     invKeypadTargetEl.focus();
     return;
   }
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   invQtyRefreshDisplay();
 }
 
 function invQtyKeySkip() {
   invLastBulkEventId = null;
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   if (invScanMode === "reel") {
     invKeypadTargetEl = null;
     invQtyKeypadRefreshReelTarget();
@@ -4457,7 +4467,7 @@ function invQtyKeyApply() {
 
   // Reset for next item — keypad stays visible in item mode
   invLastBulkEventId = null;
-  invQtyKeypadValue = "1";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   invQtyRefreshDisplay();
   var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Qty updated — scan next item.";
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
@@ -4553,7 +4563,7 @@ function invProcessScan() {
     } else {
       // box_id and others — reset to idle
       invLastBulkEventId = null;
-      invQtyKeypadValue = "1";
+      invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
       var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
       var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
     }
