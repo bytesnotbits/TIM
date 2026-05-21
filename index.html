@@ -4172,13 +4172,21 @@ function invSetScanMode(mode) {
     invQtyKeypadRefreshReelTarget();
 
   } else {
-    // auto / serial — save any pending reel, hide both panels
+    // auto / serial — save any pending reel, show qty keypad like item mode
     invAutoSaveReelInline();
-    if (kp)  kp.classList.add("hidden");
-    if (rip) rip.classList.add("hidden");
+    invQtyKeypadMode = "qty";
     invLastBulkEventId = null;
     invQtyKeypadValue = "1";
     invKeypadTargetEl = null;
+    if (kp) { kp.classList.remove("hidden"); kp.className = kp.className.replace(/\bmode-\w+/g,"").trim() + " mode-qty"; }
+    if (rip) rip.classList.add("hidden");
+    if (focusRow) focusRow.classList.add("hidden");
+    if (signBtn)  signBtn.style.display = "";
+    var titleEl = $("invQtyKeypadTitle"); if (titleEl) titleEl.textContent = "Quantity";
+    var applyBtn = $("invQtyKeyApplyBtn"); if (applyBtn) applyBtn.textContent = "✓ Apply";
+    var lbl = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "Qty:";
+    var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
+    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
   }
 
   renderInvStatusBar();
@@ -4196,7 +4204,6 @@ function invToggleModeBarcodes() {
 // ===================================================================
 
 function invShowQtyKeypad(eventId, itemNumber, description) {
-  // In persistent keypad design, just update context — visibility is mode-controlled
   invLastBulkEventId = eventId;
   invQtyKeypadValue = "1";
   var display = $("invQtyDisplay");
@@ -4205,21 +4212,27 @@ function invShowQtyKeypad(eventId, itemNumber, description) {
   if (ctx) ctx.textContent = (itemNumber || "Item") + (description ? " — " + description : "") + "  ·  ×1 applied — adjust or scan next";
 }
 
+function invShowLockedKeypad() {
+  invLastBulkEventId = null;
+  invQtyKeypadValue = "1";
+  var display = $("invQtyDisplay");
+  if (display) { display.textContent = "1"; display.className = "inv-qty-display"; }
+  var ctx = $("invQtyKeypadContext");
+  if (ctx) ctx.textContent = "Serialized item — quantity is always 1";
+}
+
 function invHideQtyKeypad() {
-  // In item/reel mode the keypad stays visible; just reset its state
+  // Keypad always stays visible; just reset its state
   invLastBulkEventId = null;
   invQtyKeypadValue = "1";
   invKeypadTargetEl = null;
-  if (invScanMode !== "item" && invScanMode !== "reel") {
-    var kp = $("invQtyKeypad");
-    if (kp) kp.classList.add("hidden");
-  } else if (invScanMode === "item") {
+  if (invScanMode === "reel") {
+    invQtyKeypadRefreshReelTarget();
+  } else {
     var display = $("invQtyDisplay");
     if (display) { display.textContent = "1"; display.className = "inv-qty-display"; }
     var ctx = $("invQtyKeypadContext");
     if (ctx) ctx.textContent = "Scan an item to begin.";
-  } else if (invScanMode === "reel") {
-    invQtyKeypadRefreshReelTarget();
   }
 }
 
@@ -4348,14 +4361,12 @@ function invQtyKeyClear() {
 function invQtyKeySkip() {
   invLastBulkEventId = null;
   invQtyKeypadValue = "1";
-  if (invScanMode === "item") {
-    invQtyRefreshDisplay();
-    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
-  } else if (invScanMode === "reel") {
+  if (invScanMode === "reel") {
     invKeypadTargetEl = null;
     invQtyKeypadRefreshReelTarget();
   } else {
-    var kp = $("invQtyKeypad"); if (kp) kp.classList.add("hidden");
+    invQtyRefreshDisplay();
+    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
   }
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
@@ -4472,10 +4483,17 @@ function invProcessScan() {
 
   if (ok) {
     $("invScanInput").value = "";
-    // Show qty keypad after a successful bulk item scan
     if (scanType === "item_number" && invLastBulkEventId) {
       var bulkEvt = invEvents.find(function(e) { return e.eventId === invLastBulkEventId; });
       if (bulkEvt) invShowQtyKeypad(invLastBulkEventId, bulkEvt.itemNumber || rawValue, bulkEvt.description || "");
+    } else if (scanType === "serial" || scanType === "fsan" || scanType === "mac") {
+      invShowLockedKeypad();
+    } else {
+      // box_id and others — reset to idle
+      invLastBulkEventId = null;
+      invQtyKeypadValue = "1";
+      var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
+      var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
     }
   }
   invUpdateDetectedBadge("");
