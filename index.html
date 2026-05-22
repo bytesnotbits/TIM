@@ -517,6 +517,10 @@ The goal is to evolve this tool based on reality, not assumptions.
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></span>
         <span class="sidebar-nav-label">Product Mapping</span>
       </button>
+      <button class="sidebar-nav-btn" id="sideNavBarcodes" onclick="switchTab('barcodes')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="5" x2="2" y2="19"/><line x1="5" y1="5" x2="5" y2="19"/><line x1="9" y1="5" x2="9" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="5" x2="22" y2="19"/></svg></span>
+        <span class="sidebar-nav-label">Barcodes</span>
+      </button>
     </nav>
 
     <!-- Username -->
@@ -1262,6 +1266,77 @@ The goal is to evolve this tool based on reality, not assumptions.
 
   </div><!-- /tabProducts -->
 
+  <!-- ── Barcodes view ── -->
+  <div id="tabBarcodes" class="tab-panel">
+
+    <!-- Scan Panel -->
+    <div class="card" id="bcScanCard">
+      <h2 style="margin-top:0;">Scan Barcode</h2>
+      <p class="small">Scan a barcode to assign it to a product. If the barcode is not recognized, scan the item number to link them. The scanner's Enter key will auto-submit.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+        <input id="bcScanInput" type="text" placeholder="Scan barcode…" autocomplete="off" autocorrect="off" spellcheck="false"
+               style="flex:1;font-size:16px;font-family:monospace;padding:10px 12px;border:2px solid #cbd5e1;border-radius:8px;"
+               onkeydown="if(event.key==='Enter'){bcProcessBarcodeScan();}" />
+        <button onclick="bcProcessBarcodeScan()" style="white-space:nowrap;">Submit</button>
+      </div>
+      <div id="bcScanFeedback" style="display:none;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:10px;"></div>
+
+      <!-- Unknown barcode — item number prompt -->
+      <div id="bcUnknownSection" class="hidden" style="background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:14px;">
+        <p style="margin:0 0 10px;font-size:14px;color:#92400e;">
+          <strong>Unknown barcode:</strong> <code id="bcPendingBarcodeDisplay" style="background:#ffedd5;padding:2px 6px;border-radius:4px;font-size:13px;"></code><br>
+          Scan the <strong>item number</strong> to link it to this barcode.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="bcItemScanInput" type="text" placeholder="Scan item number…" autocomplete="off" autocorrect="off" spellcheck="false"
+                 style="flex:1;min-width:200px;font-size:16px;font-family:monospace;padding:10px 12px;border:2px solid #fed7aa;border-radius:8px;"
+                 onkeydown="if(event.key==='Enter'){bcProcessItemNumber();}" />
+          <button onclick="bcProcessItemNumber()" style="white-space:nowrap;">Link</button>
+          <button class="secondary" onclick="bcCancelUnknown()" style="white-space:nowrap;">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Batch Review Panel -->
+    <div class="card">
+      <h2 style="margin-top:0;">Current Batch &nbsp;<span id="bcBatchCount" class="small" style="font-weight:400;">0 barcodes</span></h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Barcode</th><th>Item #</th><th>Description</th><th>Time</th><th></th></tr></thead>
+          <tbody id="bcBatchBody">
+            <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px;">No barcodes in batch. Scan a barcode to start.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap;">
+        <button class="danger" onclick="bcClearBatch()" style="margin:0;">Clear Batch</button>
+        <div style="flex:1;"></div>
+        <p class="small" style="margin:0;color:#6b7280;max-width:380px;text-align:right;">
+          <strong>Export &amp; Save</strong> generates an Odoo-compatible CSV <em>and</em> permanently adds these barcodes to TIM's database.
+        </p>
+        <button id="bcExportSaveBtn" onclick="bcExportAndSave()" style="margin:0;background:#166534;white-space:nowrap;">Export &amp; Save</button>
+      </div>
+    </div>
+
+    <!-- Import from Odoo -->
+    <div class="card">
+      <div class="collapsible-header" id="bcImportHeader" onclick="toggleCollapsible('bcImportBody','bcImportHeader','bcImportChevron')">
+        <h2 style="margin:0;">Import / Sync from Odoo</h2>
+        <svg id="bcImportChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="bcImportBody" class="collapsible-body" style="display:none;">
+        <p class="small">Import a Product Variant CSV from Odoo to sync its barcode assignments into TIM. Barcodes already in TIM keep their mapping unless Odoo shows a different item — Odoo wins on conflict.</p>
+        <div id="bcImportZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Product Variant CSV here</div>
+          <input id="bcImportFile" type="file" accept=".csv" onchange="bcImportOdooCsv(this.files[0])" />
+          <span id="bcImportStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <div id="bcImportResult" class="small" style="margin-top:8px;color:#475569;"></div>
+      </div>
+    </div>
+
+  </div><!-- /tabBarcodes -->
+
   <!-- ── Product Mapping view ── -->
   <div id="tabMapping" class="tab-panel">
     <div class="card">
@@ -1490,7 +1565,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.27.14";
+const APP_VERSION = "v1.28.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1499,8 +1574,9 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [] };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {} };
 let PRODUCT_MAP = appData.product_map;
+let BARCODE_MAP = appData.barcode_map;
 let history = appData.history;
 let currentBatch = [];
 let lastLoadedRows = [];
@@ -2301,6 +2377,11 @@ function loadSourceData(parsed, fileName = "selected JSON") {
 
   if (Array.isArray(parsed.inventory_sessions)) appData.inventory_sessions = parsed.inventory_sessions;
   if (Array.isArray(parsed.inventory_events))   appData.inventory_events   = parsed.inventory_events;
+  if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
+    Object.assign(BARCODE_MAP, parsed.barcode_map);
+    appData.barcode_map = BARCODE_MAP;
+    bcSaveBarcodeMapToStorage();
+  }
 
   const inferredMapCount = inferProductMapFromHistory(history.records);
   const blockedTemplateMapCount = countBlockedTemplateMappings(PRODUCT_MAP);
@@ -3146,7 +3227,7 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["receiving", "inventory", "products", "mapping"].forEach(function(t) {
+  ["receiving", "inventory", "products", "mapping", "barcodes"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
@@ -3161,6 +3242,7 @@ function switchTab(name) {
     invSetScanMode(invScanMode || "auto");
   }
   if (name === "products") prodRenderList();
+  if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
 }
 
@@ -3949,6 +4031,9 @@ function invClassifyScan(raw) {
   // Product map match → item number (before MAC so item codes with hex chars aren't caught)
   if (findProductMapMatch(v)) return "item_number";
 
+  // Barcode map check — after product map to avoid misclassifying item numbers
+  if (BARCODE_MAP[normKey(v)]) return "barcode";
+
   // MAC detection — only after history/product map checks to avoid false positives.
   // Formatted MAC (AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF): accept unambiguously.
   // Bare 12-hex-char string: only accept if it matches a known MAC in history,
@@ -4644,6 +4729,9 @@ function invProcessScan() {
     ok = invHandleBoxScan(rawValue, contextItem, notes, invCurrentLocation);
   } else if (scanType === "item_number") {
     ok = invHandleBulkCount(rawValue, qty, notes, invCurrentLocation);
+  } else if (scanType === "barcode") {
+    var resolvedItem = BARCODE_MAP[normKey(rawValue)];
+    ok = invHandleBulkCount(resolvedItem, qty, notes, invCurrentLocation);
   } else if (scanType === "mac") {
     ok = invHandleMacScan(rawValue, contextItem, notes, invCurrentLocation);
   } else if (scanType === "reel_number") {
@@ -4660,7 +4748,7 @@ function invProcessScan() {
 
   if (ok) {
     $("invScanInput").value = "";
-    if (scanType === "item_number" && invLastBulkEventId) {
+    if ((scanType === "item_number" || scanType === "barcode") && invLastBulkEventId) {
       var bulkEvt = invEvents.find(function(e) { return e.eventId === invLastBulkEventId; });
       if (bulkEvt) invShowQtyKeypad(invLastBulkEventId, bulkEvt.itemNumber || rawValue, bulkEvt.description || "");
     } else if (scanType === "serial" || scanType === "fsan" || scanType === "mac") {
@@ -5594,7 +5682,8 @@ function buildExportPayload() {
     inventory_sessions: appData.inventory_sessions || [],
     inventory_events: (appData.inventory_events || []).filter(function(e) {
       return !e.timestamp || e.timestamp >= cutoffISO;
-    })
+    }),
+    barcode_map: BARCODE_MAP
   };
 }
 
@@ -5935,7 +6024,7 @@ try {
     if (_sb) _sb.classList.add("collapsed");
   }
   var _savedTab = localStorage.getItem("tim_active_tab");
-  if (_savedTab && ["receiving","inventory","products","mapping"].includes(_savedTab)) {
+  if (_savedTab && ["receiving","inventory","products","mapping","barcodes"].includes(_savedTab)) {
     switchTab(_savedTab);
   }
 } catch(e) {}
@@ -5949,6 +6038,309 @@ renderInvSessionUI();
   document.addEventListener("pointerdown", _unlock);
   document.addEventListener("keydown", _unlock);
 })();
+
+
+// ===================================================================
+// BARCODE ASSIGNMENT TAB
+// ===================================================================
+
+const BC_STORAGE_KEY = "tim_barcode_map_v1";
+var bcBatch = [];
+var bcPendingBarcode = null;
+
+function bcLoadBarcodeMap() {
+  try {
+    var raw = localStorage.getItem(BC_STORAGE_KEY);
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    if (saved && typeof saved === "object") {
+      Object.assign(BARCODE_MAP, saved);
+      appData.barcode_map = BARCODE_MAP;
+    }
+  } catch(e) {}
+}
+
+function bcSaveBarcodeMapToStorage() {
+  try { localStorage.setItem(BC_STORAGE_KEY, JSON.stringify(BARCODE_MAP)); } catch(e) {}
+}
+
+function bcShowFeedback(type, msg) {
+  var el = $("bcScanFeedback");
+  if (!el) return;
+  var bg   = { ok:"#dcfce7", warn:"#fef9c3", error:"#fee2e2", info:"#e0f2fe" };
+  var text = { ok:"#166534", warn:"#78350f", error:"#991b1b", info:"#0c4a6e" };
+  el.style.display = "block";
+  el.style.background = bg[type] || "#f1f5f9";
+  el.style.color = text[type] || "#374151";
+  el.textContent = msg;
+}
+
+function bcProcessBarcodeScan() {
+  var inp = $("bcScanInput");
+  var raw = (inp ? inp.value : "").trim();
+  if (!raw) return;
+  if (inp) inp.value = "";
+  timUnlockAudio();
+
+  // Known barcode — already in map
+  var bcKey = normKey(raw);
+  var existingItem = BARCODE_MAP[bcKey];
+  if (existingItem) {
+    var pm = findProductMapMatch(existingItem);
+    var desc = pm ? (getMapDescription(pm.entry) || existingItem) : existingItem;
+    bcShowFeedback("ok", "Known: " + existingItem + (desc && desc !== existingItem ? " — " + desc : ""));
+    bcAddToBatch(raw, existingItem, desc);
+    timBeep("ok");
+    if (inp) inp.focus();
+    return;
+  }
+
+  // Scanned an item number instead of a barcode
+  var productMatch = findProductMapMatch(raw);
+  if (productMatch) {
+    var hctc = productMatch.entry.hctc || productMatch.key;
+    bcShowFeedback("warn", "That looks like item number " + hctc + ", not a barcode. Scan the product barcode instead.");
+    timBeep("warn");
+    if (inp) inp.focus();
+    return;
+  }
+
+  // Unknown barcode — prompt for item number
+  bcPendingBarcode = raw;
+  $("bcPendingBarcodeDisplay").textContent = raw;
+  var sec = $("bcUnknownSection");
+  if (sec) sec.classList.remove("hidden");
+  var itemInp = $("bcItemScanInput");
+  if (itemInp) { itemInp.value = ""; itemInp.focus(); }
+  bcShowFeedback("info", "Unknown barcode. Scan the item number to link it, or Cancel to skip.");
+  timBeep("warn");
+}
+
+function bcProcessItemNumber() {
+  var inp = $("bcItemScanInput");
+  var raw = (inp ? inp.value : "").trim();
+  if (!raw) return;
+
+  var productMatch = findProductMapMatch(raw);
+  if (!productMatch) {
+    bcShowFeedback("error", '"' + raw + '" not found in product catalog. Try again.');
+    if (inp) { inp.value = ""; inp.focus(); }
+    timBeep("error");
+    return;
+  }
+
+  var itemNumber = productMatch.entry.hctc || productMatch.key;
+  var desc = getMapDescription(productMatch.entry) || itemNumber;
+
+  bcAddToBatch(bcPendingBarcode, itemNumber, desc);
+  bcShowFeedback("ok", 'Linked "' + bcPendingBarcode + '" → ' + itemNumber + (desc && desc !== itemNumber ? " (" + desc + ")" : ""));
+  timBeep("ok");
+
+  bcPendingBarcode = null;
+  var sec = $("bcUnknownSection");
+  if (sec) sec.classList.add("hidden");
+  if (inp) inp.value = "";
+  var scanInp = $("bcScanInput");
+  if (scanInp) { scanInp.value = ""; scanInp.focus(); }
+}
+
+function bcCancelUnknown() {
+  bcPendingBarcode = null;
+  var sec = $("bcUnknownSection");
+  if (sec) sec.classList.add("hidden");
+  bcShowFeedback("info", "Cancelled. Ready for next barcode scan.");
+  var scanInp = $("bcScanInput");
+  if (scanInp) { scanInp.value = ""; scanInp.focus(); }
+}
+
+function bcAddToBatch(barcode, itemNumber, description) {
+  var bcKey = normKey(barcode);
+  var existing = bcBatch.find(function(r) { return normKey(r.barcode) === bcKey; });
+  if (existing) {
+    existing.itemNumber = itemNumber;
+    existing.description = description;
+    existing.timestamp = new Date().toISOString();
+  } else {
+    bcBatch.push({ barcode: barcode, itemNumber: itemNumber, description: description || "", timestamp: new Date().toISOString() });
+  }
+  bcRenderBatch();
+}
+
+function bcRemoveFromBatch(idx) {
+  bcBatch.splice(idx, 1);
+  bcRenderBatch();
+}
+
+function bcRenderBatch() {
+  var tbody = $("bcBatchBody");
+  var countEl = $("bcBatchCount");
+  if (countEl) countEl.textContent = bcBatch.length + (bcBatch.length === 1 ? " barcode" : " barcodes");
+  if (!tbody) return;
+  if (!bcBatch.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px;">No barcodes in batch. Scan a barcode to start.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = bcBatch.map(function(r, i) {
+    return '<tr>' +
+      '<td style="font-family:monospace;font-size:13px;">' + escapeHtml(r.barcode) + '</td>' +
+      '<td><strong>' + escapeHtml(r.itemNumber) + '</strong></td>' +
+      '<td>' + escapeHtml(r.description || "") + '</td>' +
+      '<td style="white-space:nowrap;color:#6b7280;font-size:12px;">' + new Date(r.timestamp).toLocaleTimeString() + '</td>' +
+      '<td><button class="danger" style="padding:3px 10px;font-size:12px;margin:0;" onclick="bcRemoveFromBatch(' + i + ')">Remove</button></td>' +
+      '</tr>';
+  }).join("");
+}
+
+function bcClearBatch() {
+  if (!bcBatch.length) return;
+  if (!confirm("Clear all " + bcBatch.length + " item(s) from the current batch?")) return;
+  bcBatch = [];
+  bcRenderBatch();
+  bcShowFeedback("info", "Batch cleared.");
+  var scanInp = $("bcScanInput");
+  if (scanInp) { scanInp.value = ""; scanInp.focus(); }
+}
+
+function bcExportAndSave() {
+  if (!bcBatch.length) { alert("No barcodes in the current batch to export."); return; }
+
+  // Group by item number preserving insertion order
+  var grouped = {};
+  var itemOrder = [];
+  bcBatch.forEach(function(r) {
+    var k = normKey(r.itemNumber);
+    if (!grouped[k]) { grouped[k] = []; itemOrder.push(k); }
+    grouped[k].push(r);
+  });
+
+  var lines = [["id","default_code","name","template_multi_barcode_ids"].map(csvEscape).join(",")];
+  itemOrder.forEach(function(k) {
+    var items = grouped[k];
+    var pm = findProductMapMatch(items[0].itemNumber);
+    var odooId = pm && pm.entry ? (pm.entry.odoo_external_id || pm.entry.external_id || "") : "";
+    var desc = items[0].description || (pm ? getMapDescription(pm.entry) : "");
+    items.forEach(function(r, i) {
+      lines.push([
+        i === 0 ? odooId : "",
+        r.itemNumber,
+        i === 0 ? desc : "",
+        r.barcode
+      ].map(csvEscape).join(","));
+    });
+  });
+
+  var date = new Date().toISOString().slice(0, 10);
+  downloadText("TIM_Barcodes_" + date + ".csv", lines.join("\n"), "text/csv");
+
+  // Commit to persistent BARCODE_MAP
+  var count = bcBatch.length;
+  bcBatch.forEach(function(r) { BARCODE_MAP[normKey(r.barcode)] = r.itemNumber; });
+  appData.barcode_map = BARCODE_MAP;
+  bcSaveBarcodeMapToStorage();
+
+  bcBatch = [];
+  bcRenderBatch();
+  bcShowFeedback("ok", count + " barcode(s) saved to TIM’s database and exported to Odoo CSV.");
+  timBeep("ok");
+}
+
+// ── Odoo CSV import ──────────────────────────────────────────────────
+
+function bcImportOdooCsv(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try { bcProcessOdooImport(e.target.result, file.name); }
+    catch(err) { alert("Import failed: " + err.message); }
+  };
+  reader.readAsText(file);
+  var inp = $("bcImportFile");
+  if (inp) inp.value = "";
+}
+
+function bcProcessOdooImport(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  var header = bcParseCsvRow(lines[0] || "");
+  function colIdx(name) {
+    return header.findIndex(function(h) { return h.trim().toLowerCase() === name.toLowerCase(); });
+  }
+  var idIdx      = colIdx("id");
+  var codeIdx    = colIdx("default_code");
+  var barcodeIdx = colIdx("template_multi_barcode_ids");
+
+  if (barcodeIdx === -1) throw new Error("Column 'template_multi_barcode_ids' not found. Is this an Odoo Product Variant CSV?");
+  if (codeIdx === -1)    throw new Error("Column 'default_code' not found.");
+
+  var added = 0, updated = 0, unchanged = 0, conflicts = [];
+  var currentCode = "", currentId = "";
+
+  for (var i = 1; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var cells = bcParseCsvRow(line);
+    var id      = (idIdx >= 0      ? cells[idIdx]      || "" : "").trim();
+    var code    = (codeIdx >= 0    ? cells[codeIdx]    || "" : "").trim();
+    var barcode = (barcodeIdx >= 0 ? cells[barcodeIdx] || "" : "").trim();
+
+    if (code) { currentCode = code; currentId = id; }
+    if (!barcode || !currentCode) continue;
+
+    var bcKey    = normKey(barcode);
+    var existing = BARCODE_MAP[bcKey];
+
+    if (!existing) {
+      BARCODE_MAP[bcKey] = currentCode; added++;
+    } else if (normKey(existing) === normKey(currentCode)) {
+      unchanged++;
+    } else {
+      conflicts.push({ barcode: barcode, was: existing, now: currentCode });
+      BARCODE_MAP[bcKey] = currentCode; updated++;
+    }
+
+    // Backfill Odoo external ID into product_map if missing
+    if (currentId) {
+      var pm = findProductMapMatch(currentCode);
+      if (pm && pm.entry && !pm.entry.odoo_external_id) pm.entry.odoo_external_id = currentId;
+    }
+  }
+
+  appData.barcode_map = BARCODE_MAP;
+  bcSaveBarcodeMapToStorage();
+
+  var summary = added + " added, " + updated + " updated (Odoo wins), " + unchanged + " unchanged.";
+  var detail = "";
+  if (conflicts.length) {
+    detail = "\n\nConflicts resolved (Odoo value used):\n" +
+      conflicts.slice(0, 10).map(function(c) { return "  " + c.barcode + ": " + c.was + " → " + c.now; }).join("\n") +
+      (conflicts.length > 10 ? "\n  …and " + (conflicts.length - 10) + " more" : "");
+  }
+
+  setDropState("bcImportZone", "bcImportStatus", true, "Loaded: " + fileName + " — " + (added + updated) + " barcode(s) updated");
+  var res = $("bcImportResult");
+  if (res) res.textContent = summary + (conflicts.length ? " " + conflicts.length + " conflict(s) resolved." : "");
+  alert("Import complete: " + summary + detail);
+}
+
+function bcParseCsvRow(line) {
+  var result = [], cur = "", inQ = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (inQ) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') { inQ = false; }
+      else { cur += c; }
+    } else {
+      if (c === '"') { inQ = true; }
+      else if (c === ',') { result.push(cur); cur = ""; }
+      else { cur += c; }
+    }
+  }
+  result.push(cur);
+  return result;
+}
+
+bcLoadBarcodeMap();
+
 </script>
 <script>
   if ('serviceWorker' in navigator) {
