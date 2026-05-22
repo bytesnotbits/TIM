@@ -2395,6 +2395,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   else renderAll();
   prodRenderList();
+  timSaveMasterCache();
 }
 
 $("historyFile").addEventListener("change", e => loadJsonFile(e.target.files[0]));
@@ -2460,6 +2461,7 @@ $("markImportedBtn").addEventListener("click", () => {
   currentBatch = [];
   lastExportRows = [];
   clearBatchDraft();
+  timSaveMasterCache();
   $("historyStatus").textContent = `${history.records.length} history records in memory. Export updated JSON to save it.`;
   renderAll();
   alert("History updated in memory. Click Export Current History JSON to save it.");
@@ -2483,6 +2485,7 @@ $("appendHistoryOnlyBtn").addEventListener("click", () => {
   currentBatch = currentBatch.filter(r => r.status === "blocked");
   lastExportRows = [];
   importedPending = false;
+  timSaveMasterCache();
   $("historyStatus").textContent = history.records.length + " history records in memory. Export updated JSON to save it.";
   renderAll();
   scheduleBatchDraftSave();
@@ -2603,6 +2606,7 @@ $("saveMappingBtn").addEventListener("click", () => {
 
   appData.product_map = PRODUCT_MAP;
   $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+  timSaveMasterCache();
 
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   alert("Mapping saved. Export the source data JSON when you are ready to keep this change.");
@@ -5668,6 +5672,51 @@ function exportInvSummaryXlsx() {
 })();
 
 // ═══════════════════════════════════════════════════════════════════════
+// MASTER DATA CACHE  —  persists product_map + history across reloads
+// ═══════════════════════════════════════════════════════════════════════
+
+const TIM_MASTER_CACHE_KEY = "tim_master_cache_v1";
+
+function timSaveMasterCache() {
+  try {
+    localStorage.setItem(TIM_MASTER_CACHE_KEY, JSON.stringify({
+      product_map: PRODUCT_MAP,
+      history: history
+    }));
+  } catch(e) { /* QuotaExceededError — file is still the canonical backup */ }
+}
+
+function timLoadMasterCache() {
+  try {
+    var raw = localStorage.getItem(TIM_MASTER_CACHE_KEY);
+    if (!raw) return false;
+    var parsed = JSON.parse(raw);
+    if (!parsed) return false;
+    var hadData = false;
+    if (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) {
+      PRODUCT_MAP = parsed.product_map;
+      appData.product_map = PRODUCT_MAP;
+      $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+      hadData = true;
+    }
+    if (parsed.history && Array.isArray(parsed.history.records)) {
+      history = parsed.history;
+      appData.history = history;
+      hadData = true;
+    }
+    if (hadData) {
+      var pCount = Object.keys(PRODUCT_MAP).length;
+      var hCount = (history.records || []).length;
+      setDropState("historyDropZone", "historyDropStatus", true, "Restored from local cache");
+      $("historyStatus").textContent = pCount + " products, " + hCount + " history records (restored from local cache — load master JSON to refresh).";
+      updateSidebarStatus(1, hCount);
+      prodRenderList();
+    }
+    return hadData;
+  } catch(e) { return false; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // SHARED EXPORT HELPER (10-year purge on inventory_events)
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -6029,6 +6078,7 @@ try {
   }
 } catch(e) {}
 
+timLoadMasterCache();
 timInitUsername();
 renderInvSessionUI();
 
@@ -6045,6 +6095,7 @@ renderInvSessionUI();
 // ===================================================================
 
 const BC_STORAGE_KEY = "tim_barcode_map_v1";
+const BC_BATCH_DRAFT_KEY = "tim_bc_batch_draft_v1";
 var bcBatch = [];
 var bcPendingBarcode = null;
 
@@ -6062,6 +6113,22 @@ function bcLoadBarcodeMap() {
 
 function bcSaveBarcodeMapToStorage() {
   try { localStorage.setItem(BC_STORAGE_KEY, JSON.stringify(BARCODE_MAP)); } catch(e) {}
+}
+
+function bcSaveBatchDraft() {
+  try { localStorage.setItem(BC_BATCH_DRAFT_KEY, JSON.stringify(bcBatch)); } catch(e) {}
+}
+
+function bcLoadBatchDraft() {
+  try {
+    var raw = localStorage.getItem(BC_BATCH_DRAFT_KEY);
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    if (Array.isArray(saved) && saved.length) {
+      bcBatch = saved;
+      bcRenderBatch();
+    }
+  } catch(e) {}
 }
 
 function bcShowFeedback(type, msg) {
@@ -6182,6 +6249,7 @@ function bcRemoveFromBatch(idx) {
 }
 
 function bcRenderBatch() {
+  bcSaveBatchDraft();
   var tbody = $("bcBatchBody");
   var countEl = $("bcBatchCount");
   if (countEl) countEl.textContent = bcBatch.length + (bcBatch.length === 1 ? " barcode" : " barcodes");
@@ -6350,6 +6418,7 @@ function bcParseCsvRow(line) {
 }
 
 bcLoadBarcodeMap();
+bcLoadBatchDraft();
 
 </script>
 <script>
