@@ -1565,7 +1565,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.28.00";
+const APP_VERSION = "v1.28.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6082,8 +6082,18 @@ function bcProcessBarcodeScan() {
   if (inp) inp.value = "";
   timUnlockAudio();
 
-  // Known barcode — already in map
   var bcKey = normKey(raw);
+
+  // Already in the current batch (not yet committed to DB)
+  var batchEntry = bcBatch.find(function(r) { return normKey(r.barcode) === bcKey; });
+  if (batchEntry) {
+    bcShowFeedback("ok", "Already in batch: " + batchEntry.itemNumber + (batchEntry.description && batchEntry.description !== batchEntry.itemNumber ? " — " + batchEntry.description : ""));
+    timBeep("ok");
+    if (inp) inp.focus();
+    return;
+  }
+
+  // Known barcode — committed to DB
   var existingItem = BARCODE_MAP[bcKey];
   if (existingItem) {
     var pm = findProductMapMatch(existingItem);
