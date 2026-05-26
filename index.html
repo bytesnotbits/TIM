@@ -1620,7 +1620,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.30.01";
+const APP_VERSION = "v1.30.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6062,7 +6062,7 @@ function prodBulkUpload(file) {
           description:      nameVal   || existing.description || "",
           tracking_type:    trackingType,
           serial_tracked:   trackingType === "serial",
-          reel_direction:   existing.reel_direction || null, // preserved from existing; set via edit modal
+          reel_direction:   trackingType === "reel" ? (existing.reel_direction || "one_way") : null,
           odoo_external_id: externalId || existing.odoo_external_id || null,
           external_id:      externalId || existing.external_id      || null,
           requires_fsan:    requiresFsan,
@@ -6793,7 +6793,7 @@ function prodEditProduct(key) {
   $("prodEditVendor").value  = entry.vendor  || "";
   $("prodEditName").value    = entry.name    || entry.description || "";
   $("prodEditTracking").value = entry.tracking_type || "serial";
-  $("prodEditReelDir").value  = entry.reel_direction || "";
+  $("prodEditReelDir").value  = entry.reel_direction || (entry.tracking_type === "reel" ? "one_way" : "");
   $("prodEditOdooId").value   = entry.odoo_external_id || entry.external_id || "";
   $("prodEditFsan").checked    = !!entry.requires_fsan;
   $("prodEditHistOnly").checked = !!entry.history_only;
@@ -6814,6 +6814,10 @@ function prodEditTrackingChanged() {
   var isReel = $("prodEditTracking") && $("prodEditTracking").value === "reel";
   var wrap = $("prodEditReelDirWrap");
   if (wrap) wrap.style.display = isReel ? "" : "none";
+  // Default to one_way when switching to reel and no direction is set yet
+  if (isReel && $("prodEditReelDir") && !$("prodEditReelDir").value) {
+    $("prodEditReelDir").value = "one_way";
+  }
 }
 
 function prodSaveEdit() {
@@ -6822,7 +6826,7 @@ function prodSaveEdit() {
   var trackingType = $("prodEditTracking").value;
   var externalId   = $("prodEditOdooId").value.trim();
   var nameVal      = $("prodEditName").value.trim();
-  var reelDir      = trackingType === "reel" ? ($("prodEditReelDir").value || null) : null;
+  var reelDir      = trackingType === "reel" ? ($("prodEditReelDir").value || "one_way") : null;
   // Merge: preserve any fields not surfaced in this form (e.g. reel_ids)
   PRODUCT_MAP[_prodEditKey] = Object.assign({}, existing, {
     hctc:             $("prodEditHctc").value.trim() || _prodEditKey,
@@ -6838,12 +6842,19 @@ function prodSaveEdit() {
     history_only:     $("prodEditHistOnly").checked
   });
   appData.product_map = PRODUCT_MAP;
-  $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
-  timSaveMasterCache();
-  prodRenderList();
+
+  // Close modal immediately so the user isn't waiting on re-renders
   $("prodEditModal").classList.add("hidden");
+  var savedKey = _prodEditKey;
   _prodEditKey = null;
-  if (lastLoadedRows.length) processRows(lastLoadedRows);
+
+  // Defer all heavy work until after the browser paints the closed modal
+  setTimeout(function() {
+    $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+    timSaveMasterCache();
+    prodRenderList();
+    if (lastLoadedRows.length) processRows(lastLoadedRows);
+  }, 0);
 }
 
 function prodCancelEdit() {
@@ -6886,8 +6897,7 @@ function prodCancelEdit() {
           </label>
           <label id="prodEditReelDirWrap">Reel Direction
             <select id="prodEditReelDir">
-              <option value="">Not specified</option>
-              <option value="one_way">One-way</option>
+              <option value="one_way" selected>One-way (default)</option>
               <option value="two_way">Two-way</option>
             </select>
           </label>
