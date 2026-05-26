@@ -1565,7 +1565,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.28.02";
+const APP_VERSION = "v1.28.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1586,6 +1586,45 @@ let blindQueue = [];
 let activeBlindMapMatch = null;
 let blindQueueEditIndex = -1;
 let recentBlindSerials = [];
+
+// ── IndexedDB key-value store (replaces localStorage for all data) ──
+const TimDB = (() => {
+  let _db = null;
+  const DB_NAME = "tim_db";
+  const DB_VERSION = 1;
+  const STORE = "kv";
+  function open() {
+    if (_db) return Promise.resolve(_db);
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: "key" });
+      req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+      req.onerror = e => reject(e.target.error);
+    });
+  }
+  function get(key) {
+    return open().then(db => new Promise((resolve, reject) => {
+      const req = db.transaction(STORE, "readonly").objectStore(STORE).get(key);
+      req.onsuccess = () => resolve(req.result ? req.result.value : null);
+      req.onerror = e => reject(e.target.error);
+    }));
+  }
+  function set(key, value) {
+    return open().then(db => new Promise((resolve, reject) => {
+      const req = db.transaction(STORE, "readwrite").objectStore(STORE).put({ key, value });
+      req.onsuccess = () => resolve();
+      req.onerror = e => reject(e.target.error);
+    }));
+  }
+  function remove(key) {
+    return open().then(db => new Promise((resolve, reject) => {
+      const req = db.transaction(STORE, "readwrite").objectStore(STORE).delete(key);
+      req.onsuccess = () => resolve();
+      req.onerror = e => reject(e.target.error);
+    }));
+  }
+  return { get, set, remove };
+})();
 
 // -- Batch draft persistence ----------------------------------------
 const BATCH_DRAFT_KEY = "tim_batch_draft_v1";
@@ -1608,26 +1647,22 @@ function saveBatchDraft() {
     importedPending: importedPending
   };
   const st = document.getElementById("batchDraftSaveStatus");
-  try {
-    localStorage.setItem(BATCH_DRAFT_KEY, JSON.stringify(payload));
+  TimDB.set(BATCH_DRAFT_KEY, payload).then(function() {
     if (st) { st.textContent = "Draft saved " + new Date().toLocaleTimeString(); st.className = "inv-status-save"; st.classList.remove("hidden"); }
-  } catch(e) {
+  }).catch(function() {
     if (st) { st.textContent = "Draft: memory only"; st.className = "inv-status-save unsaved"; st.classList.remove("hidden"); }
-  }
+  });
 }
 
 function clearBatchDraft() {
-  try { localStorage.removeItem(BATCH_DRAFT_KEY); } catch(e) {}
+  TimDB.remove(BATCH_DRAFT_KEY).catch(function(){});
   const st = document.getElementById("batchDraftSaveStatus");
   if (st) { st.textContent = ""; st.className = "inv-status-save hidden"; }
 }
 
 function loadBatchDraft() {
-  let raw;
-  try { raw = localStorage.getItem(BATCH_DRAFT_KEY); } catch(e) { return; }
-  if (!raw) return;
-  try {
-    const payload = JSON.parse(raw);
+  TimDB.get(BATCH_DRAFT_KEY).then(function(payload) {
+    if (!payload) return;
     const batchCount = (payload.currentBatch || []).length;
     const queueCount = (payload.blindQueue || []).length;
     if (!batchCount && !queueCount) { clearBatchDraft(); return; }
@@ -1641,15 +1676,12 @@ function loadBatchDraft() {
       text.textContent = "Unsaved batch found: " + parts.join(" and ") + when + ". Restore?";
       banner.classList.remove("hidden");
     }
-  } catch(e) { clearBatchDraft(); }
+  }).catch(function() {});
 }
 
 function restoreBatchDraft() {
-  let raw;
-  try { raw = localStorage.getItem(BATCH_DRAFT_KEY); } catch(e) { return; }
-  if (!raw) return;
-  try {
-    const payload = JSON.parse(raw);
+  TimDB.get(BATCH_DRAFT_KEY).then(function(payload) {
+    if (!payload) return;
     currentBatch = payload.currentBatch || [];
     blindQueue = payload.blindQueue || [];
     importedPending = payload.importedPending || false;
@@ -1659,7 +1691,7 @@ function restoreBatchDraft() {
     renderBlindQueue();
     const st = document.getElementById("batchDraftSaveStatus");
     if (st) { st.textContent = "Draft restored"; st.className = "inv-status-save"; st.classList.remove("hidden"); }
-  } catch(e) { clearBatchDraft(); }
+  }).catch(function() { clearBatchDraft(); });
 }
 
 function dismissBatchDraft() {
@@ -3215,18 +3247,11 @@ function invGenerateSessionId() {
 }
 
 function invLoadStorageRaw() {
-  try {
-    var raw = localStorage.getItem(INV_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch(e) { return null; }
+  return TimDB.get(INV_STORAGE_KEY);
 }
 
 function invStorageAvailable() {
-  try {
-    localStorage.setItem("__inv_t__", "1");
-    localStorage.removeItem("__inv_t__");
-    return true;
-  } catch(e) { return false; }
+  return !!window.indexedDB;
 }
 
 // -- Tab switching --------------------------------------------------
@@ -3299,22 +3324,26 @@ function invShowStorageHint() {
   if (invSession) return;
   var bar = $("invAutosaveBar");
   if (!bar) return;
-  var saved = invLoadStorageRaw();
-  if (saved && saved.session) {
-    var sessionLabel = saved.session.sessionName || saved.session.sessionId;
-    var eventCount   = (saved.events || []).length;
-    var savedAt      = invFormatDateTime(saved.savedAt);
-    bar.classList.remove("hidden", "unsaved");
-    $("invAutosaveText").textContent =
-      "Saved session found: \"" + sessionLabel + "\" — last saved " + savedAt +
-      " with " + eventCount + " event(s). Click Resume Session to load it.";
-  } else if (!invStorageAvailable()) {
+  if (!invStorageAvailable()) {
     bar.classList.remove("hidden");
     bar.classList.add("unsaved");
     $("invAutosaveText").textContent =
-      "Note: localStorage is not available here (sandboxed preview or private mode). " +
+      "Note: IndexedDB is not available here (sandboxed or private mode). " +
       "Sessions will be in-memory only. Use Export Session Backup JSON to save your work.";
+    return;
   }
+  TimDB.get(INV_STORAGE_KEY).then(function(saved) {
+    if (saved && saved.session) {
+      var sessionLabel = saved.session.sessionName || saved.session.sessionId;
+      var eventCount   = (saved.events || []).length;
+      var savedAt      = invFormatDateTime(saved.savedAt);
+      bar.classList.remove("hidden");
+      bar.classList.remove("unsaved");
+      $("invAutosaveText").textContent =
+        "Saved session found: \"" + sessionLabel + "\" — last saved " + savedAt +
+        " with " + eventCount + " event(s). Click Resume Session to load it.";
+    }
+  }).catch(function(){});
 }
 
 // -- Autosave -------------------------------------------------------
@@ -3337,24 +3366,15 @@ function invAutosave() {
     recounts: invRecounts,
     settings: invSettings
   };
-  var saved = false;
-  try {
-    localStorage.setItem(INV_STORAGE_KEY, JSON.stringify(payload));
-    saved = true;
-  } catch(e) { /* quota or sandboxed */ }
-
   invAutosavePending = false;
-  var ind = $("invStatusSave");
-  if (ind) {
-    if (saved) {
-      ind.textContent = "Saved " + new Date().toLocaleTimeString();
-      ind.className = "inv-status-save";
-    } else {
-      ind.textContent = "Memory only";
-      ind.className = "inv-status-save unsaved";
-    }
-  }
-  renderInvSidebarSession();
+  TimDB.set(INV_STORAGE_KEY, payload).then(function() {
+    var ind = $("invStatusSave");
+    if (ind) { ind.textContent = "Saved " + new Date().toLocaleTimeString(); ind.className = "inv-status-save"; }
+    renderInvSidebarSession();
+  }).catch(function() {
+    var ind = $("invStatusSave");
+    if (ind) { ind.textContent = "Save failed"; ind.className = "inv-status-save unsaved"; }
+  });
 }
 
 // -- Event creation -------------------------------------------------
@@ -3430,32 +3450,26 @@ function invStartNewSession() {
 }
 
 function invResumeSession() {
-  var saved = invLoadStorageRaw();
-  if (!saved || !saved.session) {
-    var msg = "No saved session found in localStorage.";
-    if (invStorageAvailable()) {
-      msg += "\n\nLocalStorage is available but empty. The session may not have been saved, " +
-             "or this tab was reloaded in a sandboxed environment.\n\n" +
-             "Use 'Import Session Backup JSON' to restore from a file export.";
-    } else {
-      msg += "\n\nLocalStorage is not available in this environment. " +
-             "Use 'Import Session Backup JSON' to restore from a file export.";
+  TimDB.get(INV_STORAGE_KEY).then(function(saved) {
+    if (!saved || !saved.session) {
+      alert("No saved session found.\n\nUse 'Import Session Backup JSON' to restore from a file export.");
+      return;
     }
-    alert(msg);
-    return;
-  }
-  invSession    = saved.session;
-  invEvents     = saved.events     || [];
-  invExceptions = saved.exceptions || [];
-  invRecounts   = saved.recounts   || [];
-  invSettings   = saved.settings   || {};
-  invSequence   = invSession.sequenceCounter || 0;
-  invSession.status    = "active";
-  invSession.updatedAt = invNow();
-  invAutosave();
-  renderInvSessionUI();
-  alert("Resumed: " + invSession.sessionId +
-        " — " + invEvents.length + " event(s), sequence at #" + invSequence + ".");
+    invSession    = saved.session;
+    invEvents     = saved.events     || [];
+    invExceptions = saved.exceptions || [];
+    invRecounts   = saved.recounts   || [];
+    invSettings   = saved.settings   || {};
+    invSequence   = invSession.sequenceCounter || 0;
+    invSession.status    = "active";
+    invSession.updatedAt = invNow();
+    invAutosave();
+    renderInvSessionUI();
+    alert("Resumed: " + invSession.sessionId +
+          " — " + invEvents.length + " event(s), sequence at #" + invSequence + ".");
+  }).catch(function() {
+    alert("Failed to read from storage.\n\nUse 'Import Session Backup JSON' to restore from a file export.");
+  });
 }
 
 function invClearSession() {
@@ -3472,7 +3486,7 @@ function invClearSession() {
   invRecounts   = [];
   invSettings   = {};
   invSequence   = 0;
-  try { localStorage.removeItem(INV_STORAGE_KEY); } catch(e) { /* */ }
+  TimDB.remove(INV_STORAGE_KEY).catch(function(){});
   var bar = $("invAutosaveBar");
   if (bar) bar.classList.add("hidden");
   renderInvSessionUI();
@@ -5678,19 +5692,11 @@ function exportInvSummaryXlsx() {
 const TIM_MASTER_CACHE_KEY = "tim_master_cache_v1";
 
 function timSaveMasterCache() {
-  try {
-    localStorage.setItem(TIM_MASTER_CACHE_KEY, JSON.stringify({
-      product_map: PRODUCT_MAP,
-      history: history
-    }));
-  } catch(e) { /* QuotaExceededError — file is still the canonical backup */ }
+  TimDB.set(TIM_MASTER_CACHE_KEY, { product_map: PRODUCT_MAP, history: history }).catch(function(){});
 }
 
 function timLoadMasterCache() {
-  try {
-    var raw = localStorage.getItem(TIM_MASTER_CACHE_KEY);
-    if (!raw) return false;
-    var parsed = JSON.parse(raw);
+  return TimDB.get(TIM_MASTER_CACHE_KEY).then(function(parsed) {
     if (!parsed) return false;
     var hadData = false;
     if (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) {
@@ -5713,7 +5719,7 @@ function timLoadMasterCache() {
       prodRenderList();
     }
     return hadData;
-  } catch(e) { return false; }
+  }).catch(function() { return false; });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -6100,35 +6106,29 @@ var bcBatch = [];
 var bcPendingBarcode = null;
 
 function bcLoadBarcodeMap() {
-  try {
-    var raw = localStorage.getItem(BC_STORAGE_KEY);
-    if (!raw) return;
-    var saved = JSON.parse(raw);
+  TimDB.get(BC_STORAGE_KEY).then(function(saved) {
     if (saved && typeof saved === "object") {
       Object.assign(BARCODE_MAP, saved);
       appData.barcode_map = BARCODE_MAP;
     }
-  } catch(e) {}
+  }).catch(function(){});
 }
 
 function bcSaveBarcodeMapToStorage() {
-  try { localStorage.setItem(BC_STORAGE_KEY, JSON.stringify(BARCODE_MAP)); } catch(e) {}
+  TimDB.set(BC_STORAGE_KEY, BARCODE_MAP).catch(function(){});
 }
 
 function bcSaveBatchDraft() {
-  try { localStorage.setItem(BC_BATCH_DRAFT_KEY, JSON.stringify(bcBatch)); } catch(e) {}
+  TimDB.set(BC_BATCH_DRAFT_KEY, bcBatch).catch(function(){});
 }
 
 function bcLoadBatchDraft() {
-  try {
-    var raw = localStorage.getItem(BC_BATCH_DRAFT_KEY);
-    if (!raw) return;
-    var saved = JSON.parse(raw);
+  TimDB.get(BC_BATCH_DRAFT_KEY).then(function(saved) {
     if (Array.isArray(saved) && saved.length) {
       bcBatch = saved;
       bcRenderBatch();
     }
-  } catch(e) {}
+  }).catch(function(){});
 }
 
 function bcShowFeedback(type, msg) {
