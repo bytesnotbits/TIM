@@ -326,7 +326,9 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-scan-panel { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 14px; margin: 12px 0; }
     .inv-scan-context label { font-size: 13px; font-weight: 700; color: #475569; display: block; }
     .inv-scan-context input, .inv-scan-context select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 4px; font-size: 13px; }
-    .inv-scan-main-row { display: flex; gap: 8px; align-items: stretch; margin: 10px 0; }
+    .inv-scan-main-row { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+    .inv-scan-input-line { display: flex; gap: 8px; align-items: stretch; }
+    .inv-scan-btn-line { display: flex; gap: 8px; }
     .inv-scan-main-input { flex: 1; padding: 10px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 22px; font-family: monospace; font-weight: 600; }
     .inv-scan-main-input:focus { border-color: #1d4ed8; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
     .inv-detected-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1e40af; margin: 4px 4px 4px 0; }
@@ -342,6 +344,24 @@ The goal is to evolve this tool based on reality, not assumptions.
     .inv-location-label { font-weight:700; color:#166534; white-space:nowrap; }
     .inv-location-value { font-family:monospace; color:#15803d; background:#dcfce7; border-radius:4px; padding:2px 7px; font-weight:700; }
     .inv-location-none { color:#94a3b8; font-style:italic; }
+
+    /* === Inline Location Chip === */
+    .inv-loc-chip { display:inline-flex; align-items:center; gap:5px; padding:6px 10px; background:#f0fdf4; border:1.5px solid #86efac; border-radius:8px; cursor:pointer; white-space:nowrap; font-size:12px; margin:0; transition:background .15s,border-color .15s; flex-shrink:0; }
+    .inv-loc-chip:hover { background:#dcfce7; border-color:#4ade80; }
+    .inv-loc-chip.loc-set { background:#dcfce7; border-color:#22c55e; }
+    .inv-loc-chip-label { font-weight:700; color:#166534; text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+    .inv-loc-chip-value { font-family:monospace; font-weight:800; font-size:14px; color:#15803d; }
+    .inv-loc-chip-value.inv-loc-chip-none { color:#94a3b8; font-weight:400; font-style:italic; }
+    .inv-loc-popover { position:absolute; top:calc(100% + 6px); left:0; z-index:200; background:white; border:1px solid #86efac; border-radius:10px; padding:12px; box-shadow:0 4px 16px rgba(0,0,0,.12); min-width:260px; }
+    .inv-loc-popover.hidden { display:none; }
+
+    /* === Post-scan Metadata Row === */
+    .inv-scan-meta-row { display:flex; align-items:center; gap:6px; padding:4px 6px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; font-size:12px; flex-wrap:wrap; margin-top:4px; }
+    .inv-meta-type { background:#dbeafe; color:#1e40af; font-weight:700; border-radius:999px; padding:2px 8px; font-size:11px; }
+    .inv-meta-sep { color:#cbd5e1; font-weight:700; }
+    .inv-meta-item { font-family:monospace; font-weight:700; color:#1e293b; font-size:12px; }
+    .inv-meta-desc { color:#475569; font-size:12px; }
+    .inv-meta-notfound { color:#94a3b8; font-style:italic; font-size:12px; }
 
     /* === Scan Mode Toggle === */
     .inv-mode-toggle { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
@@ -709,12 +729,7 @@ The goal is to evolve this tool based on reality, not assumptions.
     <div class="card" id="invScanCard">
       <h2>Scan / Entry Panel</h2>
       <p class="small">Scan or type any value. Any string starting with <b>WH</b> automatically sets the location. Barcode scanners that send Enter will auto-submit.</p>
-      <!-- Location bar -->
-      <div id="invLocBar" style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;margin-bottom:10px;">
-        <span style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;">Location</span>
-        <span id="invLocBarValue" style="font-weight:800;font-size:16px;color:#15803d;flex:1;font-family:monospace;letter-spacing:.04em;">None</span>
-        <button class="secondary" style="padding:3px 10px;font-size:11px;margin:0;" onclick="invClearLocation()">Clear</button>
-      </div>
+      <!-- Location chip (inline in scan row — see inv-scan-main-row below) -->
       <!-- Hidden legacy display element — JS still writes to it safely -->
       <span id="invLocationDisplay" style="display:none;"></span>
       <span id="invScanLocation" style="display:none;"></span>
@@ -772,16 +787,40 @@ The goal is to evolve this tool based on reality, not assumptions.
             <input id="invScanQty" type="hidden" value="1" />
             <!-- Primary scan input — always at top -->
             <div class="inv-scan-main-row">
-              <input id="invScanInput" class="inv-scan-main-input" type="text"
-                     placeholder="Scan barcode or type value..."
-                     autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-              <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
-              <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
-              <button class="secondary" onclick="document.getElementById('invScanInput').focus()" style="padding:12px 14px;">Focus</button>
+              <!-- Input line: location chip + scan field -->
+              <div class="inv-scan-input-line">
+                <div id="invLocChipWrap" style="position:relative;display:flex;align-items:center;">
+                  <button id="invLocChip" class="inv-loc-chip" onclick="invToggleLocPopover(event)" title="Set location">
+                    <span class="inv-loc-chip-label">LOC</span>
+                    <span id="invLocBarValue" class="inv-loc-chip-value inv-loc-chip-none">—</span>
+                  </button>
+                  <div id="invLocPopover" class="inv-loc-popover hidden">
+                    <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Type or scan a location (e.g. WH-RACK1)</div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                      <input id="invLocPopoverInput" type="text" placeholder="WH-RACK1"
+                             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+                             style="flex:1;padding:7px 10px;border:1.5px solid #86efac;border-radius:6px;font-family:monospace;font-size:14px;font-weight:700;text-transform:uppercase;"
+                             onkeydown="if(event.key==='Enter'){invLocPopoverSet();}if(event.key==='Escape'){invCloseLocPopover();}" />
+                      <button style="padding:7px 14px;font-size:13px;margin:0;" onclick="invLocPopoverSet()">Set</button>
+                      <button class="secondary" style="padding:7px 10px;font-size:13px;margin:0;" onclick="invCloseLocPopover()">✕</button>
+                    </div>
+                    <button class="secondary" style="padding:4px 8px;font-size:11px;margin:6px 0 0;width:100%;text-align:center;" onclick="invClearLocation();invCloseLocPopover()">Clear Location</button>
+                  </div>
+                </div>
+                <input id="invScanInput" class="inv-scan-main-input" type="text"
+                       placeholder="Scan barcode or type value..."
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+              </div>
+              <!-- Button line: action buttons -->
+              <div class="inv-scan-btn-line">
+                <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
+                <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
+              </div>
             </div>
             <div>
               <span id="invDetectedBadge" class="inv-detected-badge unknown">type: —</span>
             </div>
+            <div id="invScanMetaRow" class="inv-scan-meta-row" style="display:none;"></div>
             <!-- Context fields -->
             <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
               <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
@@ -1565,7 +1604,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.28.03";
+const APP_VERSION = "v1.28.05";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4355,7 +4394,8 @@ function invSetLocation(loc) {
   invCurrentLocation = (loc || "").trim().toUpperCase();
   var display = $("invLocationDisplay");
   var field   = $("invScanLocation");
-  var bar     = $("invLocBarValue");
+  var chip    = $("invLocBarValue");
+  var chipBtn = $("invLocChip");
   if (display) {
     if (invCurrentLocation) {
       display.textContent = invCurrentLocation;
@@ -4365,9 +4405,42 @@ function invSetLocation(loc) {
       display.className = "inv-location-none";
     }
   }
-  if (bar) bar.textContent = invCurrentLocation || "None";
+  if (chip) {
+    chip.textContent = invCurrentLocation || "—";
+    chip.className = "inv-loc-chip-value" + (invCurrentLocation ? "" : " inv-loc-chip-none");
+  }
+  if (chipBtn) {
+    if (invCurrentLocation) chipBtn.classList.add("loc-set");
+    else chipBtn.classList.remove("loc-set");
+  }
   if (field) field.value = invCurrentLocation;
   renderInvStatusBar();
+}
+
+function invToggleLocPopover(e) {
+  e.stopPropagation();
+  var pop = $("invLocPopover");
+  if (!pop) return;
+  if (pop.classList.contains("hidden")) {
+    pop.classList.remove("hidden");
+    var inp = $("invLocPopoverInput");
+    if (inp) { inp.value = invCurrentLocation || ""; setTimeout(function(){ inp.focus(); inp.select(); }, 30); }
+  } else {
+    pop.classList.add("hidden");
+  }
+}
+
+function invLocPopoverSet() {
+  var inp = $("invLocPopoverInput");
+  var val = inp ? inp.value.trim().toUpperCase() : "";
+  if (val) invSetLocation(val);
+  invCloseLocPopover();
+  setTimeout(function(){ $("invScanInput").focus(); }, 50);
+}
+
+function invCloseLocPopover() {
+  var pop = $("invLocPopover");
+  if (pop) pop.classList.add("hidden");
 }
 
 function invClearLocation() {
@@ -4766,6 +4839,7 @@ function invProcessScan() {
 
   if (ok) {
     $("invScanInput").value = "";
+    invShowScanMeta(invGetScanMeta(scanType, rawValue));
     if ((scanType === "item_number" || scanType === "barcode") && invLastBulkEventId) {
       var bulkEvt = invEvents.find(function(e) { return e.eventId === invLastBulkEventId; });
       if (bulkEvt) invShowQtyKeypad(invLastBulkEventId, bulkEvt.itemNumber || rawValue, bulkEvt.description || "");
@@ -4785,10 +4859,65 @@ function invProcessScan() {
   setTimeout(function() { var si = $("invScanInput"); si.focus(); si.select(); }, 50);
 }
 
+function invGetScanMeta(scanType, rawValue) {
+  if (scanType === "item_number") {
+    var mm = findProductMapMatch(rawValue);
+    return { type: "item_number", itemNumber: rawValue, description: mm ? getMapDescription(mm.entry) : "" };
+  }
+  if (scanType === "barcode") {
+    var resolved = BARCODE_MAP[normKey(rawValue)] || rawValue;
+    var mm2 = findProductMapMatch(resolved);
+    return { type: "barcode", itemNumber: resolved, description: mm2 ? getMapDescription(mm2.entry) : "" };
+  }
+  if (scanType === "serial") {
+    var rec = invResolveBySerial(normKey(rawValue));
+    var inum = rec ? (rec.item_number || rec.product || "") : "";
+    var mm3 = inum ? findProductMapMatch(inum) : null;
+    return { type: "serial", itemNumber: inum, description: mm3 ? getMapDescription(mm3.entry) : "", notFound: !rec };
+  }
+  if (scanType === "fsan") {
+    var rec2 = invResolveByFsan(normKey(rawValue));
+    var inum2 = rec2 ? (rec2.item_number || rec2.product || "") : "";
+    var mm4 = inum2 ? findProductMapMatch(inum2) : null;
+    return { type: "fsan", itemNumber: inum2, description: mm4 ? getMapDescription(mm4.entry) : "", notFound: !rec2 };
+  }
+  if (scanType === "mac") {
+    var macBare = rawValue.replace(/[:\-\.]/g, "").toUpperCase();
+    var rec3 = invResolveByMac(macBare);
+    var inum3 = rec3 ? (rec3.item_number || rec3.product || "") : "";
+    var mm5 = inum3 ? findProductMapMatch(inum3) : null;
+    return { type: "mac", itemNumber: inum3, description: mm5 ? getMapDescription(mm5.entry) : "", notFound: !rec3 };
+  }
+  return null;
+}
+
+function invShowScanMeta(meta) {
+  var row = $("invScanMetaRow");
+  if (!row || !meta) return;
+  var typeLabel = { item_number: "item", barcode: "barcode→item", serial: "serial", fsan: "fsan", mac: "mac" }[meta.type] || meta.type;
+  var html = '<span class="inv-meta-type">' + typeLabel + '</span>';
+  if (meta.itemNumber) {
+    html += ' <span class="inv-meta-sep">·</span> <span class="inv-meta-item">' + escapeHtml(meta.itemNumber) + '</span>';
+  } else if (meta.notFound) {
+    html += ' <span class="inv-meta-sep">·</span> <span class="inv-meta-notfound">not in history</span>';
+  }
+  if (meta.description) {
+    html += ' <span class="inv-meta-sep">—</span> <span class="inv-meta-desc">' + escapeHtml(meta.description) + '</span>';
+  }
+  row.innerHTML = html;
+  row.style.display = "flex";
+}
+
+function invHideScanMeta() {
+  var row = $("invScanMetaRow");
+  if (row) { row.innerHTML = ""; row.style.display = "none"; }
+}
+
 function invClearScanInput() {
   $("invScanInput").value = "";
   invSetScanFeedback("Ready. Scan a barcode or type a value.", "info");
   invUpdateDetectedBadge("");
+  invHideScanMeta();
   $("invScanInput").focus();
 }
 
@@ -6416,6 +6545,12 @@ function bcParseCsvRow(line) {
   result.push(cur);
   return result;
 }
+
+// Close location popover when clicking outside it
+document.addEventListener("click", function(e) {
+  var wrap = document.getElementById("invLocChipWrap");
+  if (wrap && !wrap.contains(e.target)) invCloseLocPopover();
+});
 
 bcLoadBarcodeMap();
 bcLoadBatchDraft();
