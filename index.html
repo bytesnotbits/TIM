@@ -237,6 +237,18 @@ The goal is to evolve this tool based on reality, not assumptions.
     .dropdown-menu button.danger { color: #dc2626; }
     .dropdown-menu button:disabled { color: #94a3b8; background: transparent; cursor: not-allowed; }
 
+    /* ── Zone clear buttons ── */
+    .zone-clear-btn { font-size: 11px; font-weight: 600; color: #b45309; background: none; border: 1px solid #d97706; border-radius: 5px; padding: 2px 9px; margin: 5px 0 0; cursor: pointer; display: none; }
+    .zone-clear-btn:hover { background: #fff7ed; }
+
+    /* ── Product upload diff modal ── */
+    .diff-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .diff-table th { background: #f8fafc; padding: 7px 10px; text-align: left; font-weight: 700; color: #475569; border-bottom: 2px solid #e5e7eb; }
+    .diff-table td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: top; word-break: break-word; }
+    .diff-section-label { display: block; padding: 7px 12px; background: #f1f5f9; font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .05em; }
+    .diff-new-val { color: #166534; font-weight: 600; }
+    .diff-old-val { color: #94a3b8; text-decoration: line-through; font-size: 11px; display: block; }
+
     /* ── Collapsible Cards ── */
     .collapsible-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; padding: 0; }
     .collapsible-header h2 { margin: 0; }
@@ -596,6 +608,7 @@ The goal is to evolve this tool based on reality, not assumptions.
             <input id="historyFile" type="file" accept=".json,application/json" />
             <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
           </div>
+          <button id="clearMasterDataBtn" class="zone-clear-btn" onclick="clearMasterData()">Clear loaded data</button>
           <button class="secondary" id="exportHistoryBtn" style="margin-top:8px;">Export History JSON</button>
           <span id="historyStatus"></span>
         </div>
@@ -616,6 +629,7 @@ The goal is to evolve this tool based on reality, not assumptions.
             <input id="sourceFile" type="file" accept=".xlsx,.xls,.csv" />
             <span id="sourceDropStatus" class="drop-status">Waiting for upload</span>
           </div>
+          <button id="clearSourceDataBtn" class="zone-clear-btn" onclick="clearSourceData()">Clear loaded data</button>
         </div>
       </div>
 
@@ -1205,11 +1219,12 @@ The goal is to evolve this tool based on reality, not assumptions.
         <div class="prod-template-hint">Columns: Vendor Part # · NISC Item # · Name/Description · Vendor · Tracking Type (serial / reel / none) · Odoo External ID · Requires FSAN (yes/no) · History Only (yes/no)</div>
       </div>
       <div id="prodUploadStatus" class="small" style="margin-top:8px;color:#475569;"></div>
-      <div id="prodUploadSuccessBanner" class="hidden" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div id="prodUploadSuccessBanner" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:none;align-items:center;gap:16px;flex-wrap:wrap;">
         <span style="font-weight:700;color:#166534;">✓ Products loaded into memory.</span>
         <span class="small" style="color:#166534;">Click the button to save them to your master JSON file.</span>
         <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
       </div>
+      <button id="clearProductCatalogBtn" class="zone-clear-btn" onclick="clearProductCatalog()">Clear product catalog</button>
     </div>
 
     <!-- Product Catalog -->
@@ -1370,6 +1385,7 @@ The goal is to evolve this tool based on reality, not assumptions.
           <input id="bcImportFile" type="file" accept=".csv" onchange="bcImportOdooCsv(this.files[0])" />
           <span id="bcImportStatus" class="drop-status">Waiting for upload</span>
         </div>
+        <button id="clearBarcodeImportBtn" class="zone-clear-btn" onclick="clearBarcodeImport()">Clear barcode data</button>
         <div id="bcImportResult" class="small" style="margin-top:8px;color:#475569;"></div>
       </div>
     </div>
@@ -1604,7 +1620,7 @@ The goal is to evolve this tool based on reality, not assumptions.
 
 <script>
 
-const APP_VERSION = "v1.28.06";
+const APP_VERSION = "v1.29.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2141,6 +2157,7 @@ function setDropState(dropId, statusId, loaded, message) {
   drop.classList.toggle("loaded", !!loaded);
   drop.classList.toggle("ready", !loaded);
   status.textContent = message;
+  updateClearBtns();
 }
 
 function buildIndexes(records) {
@@ -5914,6 +5931,7 @@ function prodRenderList() {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">' +
       (allKeys.length ? "No products match the current filters." : "Load a master JSON or upload products to populate the catalog.") +
       "</td></tr>";
+    updateClearBtns();
     return;
   }
 
@@ -5936,6 +5954,7 @@ function prodRenderList() {
       "<td>" + histBtn + "</td>" +
       "</tr>";
   }).join("");
+  updateClearBtns();
 }
 
 function prodDownloadTemplate() {
@@ -5988,12 +6007,13 @@ function prodBulkUpload(file) {
         throw new Error("Could not find 'Vendor Part #' or 'NISC Item #' column. Download the template to see the expected format.");
       }
 
-      var added = 0, updated = 0, skipped = 0;
+      var diff = { added: [], updated: [], unchanged: 0, skipped: 0 };
+
       rawRows.slice(1).forEach(function(row) {
         var vendorPart = colVendorPart >= 0 ? normalize(String(row[colVendorPart])) : "";
         var niscItem   = colNisc >= 0       ? normalize(String(row[colNisc]))       : "";
         var mapKey     = vendorPart || niscItem;
-        if (!mapKey) { skipped++; return; }
+        if (!mapKey) { diff.skipped++; return; }
 
         var trackingRaw  = colTracking >= 0 ? normalize(String(row[colTracking])).toLowerCase() : "";
         var trackingType = trackingRaw === "reel" ? "reel" : trackingRaw === "none" ? "none" : "serial";
@@ -6005,7 +6025,7 @@ function prodBulkUpload(file) {
 
         var existing = PRODUCT_MAP[mapKey] || {};
         var isNew = !PRODUCT_MAP[mapKey];
-        PRODUCT_MAP[mapKey] = {
+        var newEntry = {
           hctc:             niscItem || existing.hctc || vendorPart,
           vendor:           vendorVal || existing.vendor || "",
           name:             nameVal   || existing.name  || "",
@@ -6017,23 +6037,31 @@ function prodBulkUpload(file) {
           requires_fsan:    requiresFsan,
           history_only:     historyOnly
         };
-        if (isNew) added++; else updated++;
+
+        if (isNew) {
+          diff.added.push({ key: mapKey, entry: newEntry });
+        } else {
+          var changes = [];
+          _PROD_DIFF_FIELDS.forEach(function(f) {
+            var oldVal = String(existing[f.key] || "");
+            var newVal = String(newEntry[f.key] || "");
+            if (oldVal !== newVal) changes.push({ field: f.label, old: existing[f.key], now: newEntry[f.key] });
+          });
+          if (changes.length) {
+            diff.updated.push({ key: mapKey, entry: newEntry, changes: changes });
+          } else {
+            diff.unchanged++;
+          }
+        }
       });
 
-      appData.product_map = PRODUCT_MAP;
-      $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
-      prodRenderList();
-
-      var msg = "Done: " + added + " added, " + updated + " updated" +
-        (skipped ? ", " + skipped + " skipped (blank key)" : "") + ". Click Export Master JSON to save.";
-      if (statusEl) statusEl.textContent = msg;
-      var banner = $("prodUploadSuccessBanner");
-      if (banner) banner.classList.remove("hidden");
+      if (statusEl) statusEl.textContent = "";
+      prodShowUploadDiff(diff);
     } catch(err) {
       if (statusEl) statusEl.textContent = "Error: " + err.message;
       alert("Could not parse product file: " + err.message);
+      $("prodUploadFile").value = "";
     }
-    $("prodUploadFile").value = "";
   };
 
   if (isCSV) reader.readAsText(file); else reader.readAsArrayBuffer(file);
@@ -6555,7 +6583,188 @@ document.addEventListener("click", function(e) {
 bcLoadBarcodeMap();
 bcLoadBatchDraft();
 
+// ── Zone clear buttons ─────────────────────────────────────────────
+
+function updateClearBtns() {
+  function show(id, condition) {
+    var b = $(id);
+    if (b) b.style.display = condition ? "" : "none";
+  }
+  var histLoaded = $("historyDropZone") && $("historyDropZone").classList.contains("loaded");
+  var srcLoaded  = $("sourceDropZone")  && $("sourceDropZone").classList.contains("loaded");
+  var bcLoaded   = $("bcImportZone")    && $("bcImportZone").classList.contains("loaded");
+  show("clearMasterDataBtn",     histLoaded);
+  show("clearSourceDataBtn",     srcLoaded);
+  show("clearProductCatalogBtn", Object.keys(PRODUCT_MAP).length > 0);
+  show("clearBarcodeImportBtn",  bcLoaded || Object.keys(BARCODE_MAP).length > 0);
+}
+
+function clearMasterData() {
+  if (!confirm("Clear all master data (products, history, barcodes) from memory?\n\nExported files are not affected.")) return;
+  Object.keys(PRODUCT_MAP).forEach(function(k) { delete PRODUCT_MAP[k]; });
+  history.records = [];
+  Object.keys(BARCODE_MAP).forEach(function(k) { delete BARCODE_MAP[k]; });
+  appData.product_map = PRODUCT_MAP;
+  appData.history = history;
+  appData.barcode_map = BARCODE_MAP;
+  TimDB.remove(TIM_MASTER_CACHE_KEY).catch(function(){});
+  TimDB.remove(BC_STORAGE_KEY).catch(function(){});
+  $("mapPreview").value = "{}";
+  setDropState("historyDropZone", "historyDropStatus", false, "Waiting for upload");
+  setDropState("bcImportZone", "bcImportStatus", false, "Waiting for upload");
+  var hs = $("historyStatus"); if (hs) hs.textContent = "";
+  var br = $("bcImportResult"); if (br) br.textContent = "";
+  updateSidebarStatus(1, null);
+  prodRenderList();
+  if (lastLoadedRows.length) processRows(lastLoadedRows);
+  else renderAll();
+}
+
+function clearSourceData() {
+  if (!confirm("Clear the loaded source file and current batch?\n\nHistory is kept.")) return;
+  lastLoadedRows = [];
+  currentBatch = [];
+  blindQueue = [];
+  clearBatchDraft();
+  $("sourceFile").value = "";
+  setDropState("sourceDropZone", "sourceDropStatus", false, "Waiting for upload");
+  updateSidebarStatus(2, null);
+  renderAll();
+  renderBlindQueue();
+}
+
+function clearProductCatalog() {
+  var count = Object.keys(PRODUCT_MAP).length;
+  if (!count) return;
+  if (!confirm("Clear all " + count + " product(s) from the catalog?\n\nHistory records are kept. Exported files are not affected.")) return;
+  Object.keys(PRODUCT_MAP).forEach(function(k) { delete PRODUCT_MAP[k]; });
+  appData.product_map = PRODUCT_MAP;
+  timSaveMasterCache();
+  $("mapPreview").value = "{}";
+  var statusEl = $("prodUploadStatus"); if (statusEl) statusEl.textContent = "";
+  var banner = $("prodUploadSuccessBanner"); if (banner) banner.style.display = "none";
+  prodRenderList();
+  if (lastLoadedRows.length) processRows(lastLoadedRows);
+  else renderAll();
+}
+
+function clearBarcodeImport() {
+  var count = Object.keys(BARCODE_MAP).length;
+  if (!confirm("Clear all " + count + " barcode mapping(s) from memory?\n\nExported files are not affected.")) return;
+  Object.keys(BARCODE_MAP).forEach(function(k) { delete BARCODE_MAP[k]; });
+  appData.barcode_map = BARCODE_MAP;
+  TimDB.remove(BC_STORAGE_KEY).catch(function(){});
+  setDropState("bcImportZone", "bcImportStatus", false, "Waiting for upload");
+  var res = $("bcImportResult"); if (res) res.textContent = "";
+}
+
+// ── Product upload diff ────────────────────────────────────────────
+
+var _prodPendingDiff = null;
+var _PROD_DIFF_FIELDS = [
+  { key: "name",             label: "Name" },
+  { key: "vendor",           label: "Vendor" },
+  { key: "tracking_type",    label: "Tracking" },
+  { key: "odoo_external_id", label: "Odoo External ID" },
+  { key: "hctc",             label: "NISC Item #" },
+  { key: "requires_fsan",    label: "Requires FSAN" },
+  { key: "history_only",     label: "History Only" }
+];
+
+function prodShowUploadDiff(diff) {
+  _prodPendingDiff = diff;
+  var parts = [];
+  if (diff.added.length)   parts.push(diff.added.length + " new");
+  if (diff.updated.length) parts.push(diff.updated.length + " updated");
+  if (diff.unchanged)      parts.push(diff.unchanged + " unchanged");
+  if (diff.skipped)        parts.push(diff.skipped + " skipped (blank key)");
+  var sumEl = $("prodDiffSummary");
+  if (sumEl) sumEl.textContent = parts.join(", ") + ".";
+
+  var html = "";
+  if (!diff.added.length && !diff.updated.length) {
+    html = '<p style="text-align:center;color:#64748b;padding:32px 24px;">No changes detected — all rows already match the catalog.</p>';
+  } else {
+    if (diff.added.length) {
+      html += '<span class="diff-section-label">' + diff.added.length + ' New Product' + (diff.added.length !== 1 ? 's' : '') + '</span>';
+      html += '<table class="diff-table"><thead><tr><th>Key</th><th>Name</th><th>Vendor</th><th>Tracking</th><th>Odoo External ID</th></tr></thead><tbody>';
+      diff.added.forEach(function(r) {
+        html += '<tr><td style="font-weight:600;color:#166534;">' + escapeHtml(r.key) +
+          '</td><td>' + escapeHtml(r.entry.name || '') +
+          '</td><td>' + escapeHtml(r.entry.vendor || '') +
+          '</td><td>' + escapeHtml(r.entry.tracking_type || '') +
+          '</td><td style="font-size:11px;color:#64748b;">' + escapeHtml(r.entry.odoo_external_id || '') + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    if (diff.updated.length) {
+      html += '<span class="diff-section-label">' + diff.updated.length + ' Updated Product' + (diff.updated.length !== 1 ? 's' : '') + '</span>';
+      html += '<table class="diff-table"><thead><tr><th>Key</th><th>Field</th><th>Before</th><th>After</th></tr></thead><tbody>';
+      diff.updated.forEach(function(r) {
+        r.changes.forEach(function(c, i) {
+          html += '<tr>';
+          if (i === 0) html += '<td rowspan="' + r.changes.length + '" style="font-weight:600;vertical-align:top;padding-top:9px;">' + escapeHtml(r.key) + '</td>';
+          html += '<td style="color:#475569;">' + escapeHtml(c.field) + '</td>' +
+            '<td><span class="diff-old-val">' + escapeHtml(String(c.old == null ? "" : c.old)) + '</span></td>' +
+            '<td class="diff-new-val">' + escapeHtml(String(c.now == null ? "" : c.now)) + '</td></tr>';
+        });
+      });
+      html += '</tbody></table>';
+    }
+  }
+
+  var content = $("prodDiffContent");
+  if (content) content.innerHTML = html;
+  var modal = $("prodDiffModal");
+  if (modal) modal.classList.remove("hidden");
+}
+
+function prodApplyUpload() {
+  if (!_prodPendingDiff) return;
+  var diff = _prodPendingDiff;
+  diff.added.forEach(function(r)   { PRODUCT_MAP[r.key] = r.entry; });
+  diff.updated.forEach(function(r) { PRODUCT_MAP[r.key] = r.entry; });
+  appData.product_map = PRODUCT_MAP;
+  $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+  prodRenderList();
+  var msg = "Done: " + diff.added.length + " added, " + diff.updated.length + " updated" +
+    (diff.skipped ? ", " + diff.skipped + " skipped (blank key)" : "") + ". Click Export Master JSON to save.";
+  var statusEl = $("prodUploadStatus"); if (statusEl) statusEl.textContent = msg;
+  var banner = $("prodUploadSuccessBanner"); if (banner) banner.style.display = "flex";
+  var modal = $("prodDiffModal"); if (modal) modal.classList.add("hidden");
+  _prodPendingDiff = null;
+  $("prodUploadFile").value = "";
+  if (lastLoadedRows.length) processRows(lastLoadedRows);
+}
+
+function prodCancelUpload() {
+  _prodPendingDiff = null;
+  var modal = $("prodDiffModal"); if (modal) modal.classList.add("hidden");
+  $("prodUploadFile").value = "";
+  var statusEl = $("prodUploadStatus"); if (statusEl) statusEl.textContent = "Upload cancelled.";
+}
+
 </script>
+  <!-- Product Upload Diff Modal -->
+  <div id="prodDiffModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:860px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">Review Product Changes</h2>
+          <p id="prodDiffSummary" class="small" style="margin:4px 0 0;color:#475569;"></p>
+        </div>
+        <button onclick="prodCancelUpload()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:55vh;overflow:auto;padding:0;">
+        <div id="prodDiffContent"></div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="prodCancelUpload()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="prodApplyUpload()" style="margin:0;">Apply Changes</button>
+      </div>
+    </div>
+  </div>
+
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js');
