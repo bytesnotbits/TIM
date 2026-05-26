@@ -5942,11 +5942,12 @@ function prodRenderList() {
       ? (map.reel_direction === "two_way" ? " 2-way" : " 1-way") : "";
     var trackingLabel = trackingType === "serial" ? "Serial" : trackingType === "reel" ? ("Reel" + reelSuffix) : "None";
     var pill = '<span class="tracking-pill ' + escapeHtml(trackingType) + '">' + trackingLabel + "</span>";
+    var safeKey = key.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var actions =
       '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0 3px 0 0;" ' +
-        'onclick="prodEditProduct(' + JSON.stringify(key) + ')">Edit</button>' +
+        'onclick="prodEditProduct(\'' + safeKey + '\')">Edit</button>' +
       '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0;" ' +
-        'onclick="prodShowItemHistory(' + JSON.stringify(key) + ')">History</button>';
+        'onclick="prodShowItemHistory(\'' + safeKey + '\')">History</button>';
     return "<tr>" +
       "<td>" + escapeHtml(key) + "</td>" +
       "<td>" + escapeHtml(map.hctc || "") + "</td>" +
