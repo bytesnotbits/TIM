@@ -237,6 +237,10 @@ The goal is to evolve this tool based on reality, not assumptions.
     .dropdown-menu button.danger { color: #dc2626; }
     .dropdown-menu button:disabled { color: #94a3b8; background: transparent; cursor: not-allowed; }
 
+    /* ── Save toast ── */
+    .prod-save-toast { position:fixed; bottom:24px; right:24px; background:#166534; color:#fff; padding:7px 16px; border-radius:8px; font-size:13px; font-weight:700; z-index:9999; opacity:0; transform:translateY(6px); transition:opacity .18s,transform .18s; pointer-events:none; }
+    .prod-save-toast.show { opacity:1; transform:translateY(0); }
+
     /* ── Zone clear buttons ── */
     .zone-clear-btn { font-size: 11px; font-weight: 600; color: #b45309; background: none; border: 1px solid #d97706; border-radius: 5px; padding: 2px 9px; margin: 5px 0 0; cursor: pointer; display: none; }
     .zone-clear-btn:hover { background: #fff7ed; }
@@ -5936,29 +5940,7 @@ function prodRenderList() {
   }
 
   tbody.innerHTML = filtered.map(function(key) {
-    var map = PRODUCT_MAP[key] || {};
-    var trackingType = getTrackingType(map);
-    var reelSuffix = trackingType === "reel" && map.reel_direction
-      ? (map.reel_direction === "two_way" ? " 2-way" : " 1-way") : "";
-    var trackingLabel = trackingType === "serial" ? "Serial" : trackingType === "reel" ? ("Reel" + reelSuffix) : "None";
-    var pill = '<span class="tracking-pill ' + escapeHtml(trackingType) + '">' + trackingLabel + "</span>";
-    var safeKey = key.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    var actions =
-      '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0 3px 0 0;" ' +
-        'onclick="prodEditProduct(\'' + safeKey + '\')">Edit</button>' +
-      '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0;" ' +
-        'onclick="prodShowItemHistory(\'' + safeKey + '\')">History</button>';
-    return "<tr>" +
-      "<td>" + escapeHtml(key) + "</td>" +
-      "<td>" + escapeHtml(map.hctc || "") + "</td>" +
-      "<td>" + escapeHtml(map.name || map.description || "") + "</td>" +
-      "<td>" + escapeHtml(map.vendor || "") + "</td>" +
-      "<td>" + pill + "</td>" +
-      "<td style='font-size:11px;word-break:break-all;'>" + escapeHtml(map.odoo_external_id || map.external_id || "") + "</td>" +
-      "<td style='text-align:center;'>" + (map.requires_fsan ? "Yes" : "") + "</td>" +
-      "<td style='text-align:center;'>" + (map.history_only ? "Yes" : "") + "</td>" +
-      "<td style='white-space:nowrap;'>" + actions + "</td>" +
-      "</tr>";
+    return '<tr data-prodkey="' + escapeHtml(key) + '">' + buildCatalogRowCells(key, PRODUCT_MAP[key] || {}) + "</tr>";
   }).join("");
   updateClearBtns();
 }
@@ -6615,6 +6597,56 @@ document.addEventListener("click", function(e) {
 bcLoadBarcodeMap();
 bcLoadBatchDraft();
 
+// ── Catalog row helpers ────────────────────────────────────────────
+
+function buildCatalogRowCells(key, map) {
+  var trackingType = getTrackingType(map);
+  var reelSuffix = trackingType === "reel" && map.reel_direction
+    ? (map.reel_direction === "two_way" ? " 2-way" : " 1-way") : "";
+  var trackingLabel = trackingType === "serial" ? "Serial" : trackingType === "reel" ? ("Reel" + reelSuffix) : "None";
+  var pill = '<span class="tracking-pill ' + escapeHtml(trackingType) + '">' + trackingLabel + "</span>";
+  var safeKey = key.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  var actions =
+    '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0 3px 0 0;" ' +
+      'onclick="prodEditProduct(\'' + safeKey + '\')">Edit</button>' +
+    '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0;" ' +
+      'onclick="prodShowItemHistory(\'' + safeKey + '\')">History</button>';
+  return "<td>" + escapeHtml(key) + "</td>" +
+    "<td>" + escapeHtml(map.hctc || "") + "</td>" +
+    "<td>" + escapeHtml(map.name || map.description || "") + "</td>" +
+    "<td>" + escapeHtml(map.vendor || "") + "</td>" +
+    "<td>" + pill + "</td>" +
+    "<td style='font-size:11px;word-break:break-all;'>" + escapeHtml(map.odoo_external_id || map.external_id || "") + "</td>" +
+    "<td style='text-align:center;'>" + (map.requires_fsan ? "Yes" : "") + "</td>" +
+    "<td style='text-align:center;'>" + (map.history_only ? "Yes" : "") + "</td>" +
+    "<td style='white-space:nowrap;'>" + actions + "</td>";
+}
+
+function prodRenderOneRow(key) {
+  var tbody = $("prodCatalogBody");
+  if (!tbody) return;
+  var map = PRODUCT_MAP[key];
+  if (!map) return; // filtered out or deleted — no action needed
+  var rows = tbody.getElementsByTagName("tr");
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].getAttribute("data-prodkey") === key) {
+      rows[i].innerHTML = buildCatalogRowCells(key, map);
+      return;
+    }
+  }
+  // Row not currently visible (filtered) — no DOM work needed
+}
+
+var _prodSaveToastTimer = null;
+function prodShowSaveToast(msg) {
+  var toast = $("prodSaveToast");
+  if (!toast) return;
+  toast.textContent = msg || "✓ Saved";
+  toast.classList.add("show");
+  clearTimeout(_prodSaveToastTimer);
+  _prodSaveToastTimer = setTimeout(function() { toast.classList.remove("show"); }, 1500);
+}
+
 // ── Zone clear buttons ─────────────────────────────────────────────
 
 function updateClearBtns() {
@@ -6827,6 +6859,9 @@ function prodSaveEdit() {
   var externalId   = $("prodEditOdooId").value.trim();
   var nameVal      = $("prodEditName").value.trim();
   var reelDir      = trackingType === "reel" ? ($("prodEditReelDir").value || "one_way") : null;
+  // Capture batch-critical fields before overwriting
+  var prevTracking = existing.tracking_type;
+  var prevHctc     = existing.hctc;
   // Merge: preserve any fields not surfaced in this form (e.g. reel_ids)
   PRODUCT_MAP[_prodEditKey] = Object.assign({}, existing, {
     hctc:             $("prodEditHctc").value.trim() || _prodEditKey,
@@ -6843,17 +6878,25 @@ function prodSaveEdit() {
   });
   appData.product_map = PRODUCT_MAP;
 
-  // Close modal immediately so the user isn't waiting on re-renders
-  $("prodEditModal").classList.add("hidden");
   var savedKey = _prodEditKey;
-  _prodEditKey = null;
+  var newEntry = PRODUCT_MAP[savedKey];
 
-  // Defer all heavy work until after the browser paints the closed modal
+  // Only reprocess the batch if fields that affect row validation actually changed
+  var batchNeedsReprocess = lastLoadedRows.length > 0 &&
+    (prevTracking !== newEntry.tracking_type || prevHctc !== newEntry.hctc);
+
+  // Close modal and show feedback immediately
+  $("prodEditModal").classList.add("hidden");
+  _prodEditKey = null;
+  prodShowSaveToast();
+
+  // Patch just the one table row — no full re-render
+  prodRenderOneRow(savedKey);
+
+  // Defer only the storage write and optional batch reprocess
   setTimeout(function() {
-    $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
     timSaveMasterCache();
-    prodRenderList();
-    if (lastLoadedRows.length) processRows(lastLoadedRows);
+    if (batchNeedsReprocess) processRows(lastLoadedRows);
   }, 0);
 }
 
@@ -6947,6 +6990,8 @@ function prodCancelEdit() {
       </div>
     </div>
   </div>
+
+<div id="prodSaveToast" class="prod-save-toast"></div>
 
 <script>
   if ('serviceWorker' in navigator) {
