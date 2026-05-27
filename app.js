@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.03";
+const APP_VERSION = "v1.30.10";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1839,6 +1839,14 @@ function invCreateEvent(eventType, data) {
 }
 
 // -- Session management ---------------------------------------------
+function invResetSessionState() {
+  invEvents     = [];
+  invExceptions = [];
+  invRecounts   = [];
+  invSettings   = {};
+  invSequence   = 0;
+}
+
 function invStartNewSession() {
   var uInp = $("timUsernameInput");
   // Persist input value to localStorage in case oninput never fired (autofill, etc.)
@@ -1872,11 +1880,7 @@ function invStartNewSession() {
     status:          "active",
     sequenceCounter: 0
   };
-  invEvents     = [];
-  invExceptions = [];
-  invRecounts   = [];
-  invSettings   = {};
-  invSequence   = 0;
+  invResetSessionState();
 
   var nameInput = $("invSessionNameInput");
   if (nameInput) nameInput.value = "";
@@ -1916,11 +1920,7 @@ function invClearSession() {
                "Export a backup JSON first if you need to keep the data.")) return;
   var clearedId = invSession.sessionId;
   invSession    = null;
-  invEvents     = [];
-  invExceptions = [];
-  invRecounts   = [];
-  invSettings   = {};
-  invSequence   = 0;
+  invResetSessionState();
   TimDB.remove(INV_STORAGE_KEY).catch(function(){});
   var bar = $("invAutosaveBar");
   if (bar) bar.classList.add("hidden");
@@ -2864,21 +2864,6 @@ function invClearLocation() {
   setTimeout(function() { $("invScanInput").focus(); }, 50);
 }
 
-function invUpdateLocationInput(val) {
-  invCurrentLocation = (val || "").trim().toUpperCase();
-  var display = $("invLocationDisplay");
-  var bar     = $("invLocBarValue");
-  if (bar) bar.textContent = invCurrentLocation || "None";
-  if (!display) return;
-  if (invCurrentLocation) {
-    display.textContent = invCurrentLocation;
-    display.className = "inv-location-value";
-  } else {
-    display.textContent = "None — scan a LOC barcode or type below to set";
-    display.className = "inv-location-none";
-  }
-}
-
 // ===================================================================
 // SCAN MODE TOGGLE
 // ===================================================================
@@ -3624,8 +3609,6 @@ function invCloseReelInline() {
   }
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
-
-function invCloseReelModal() { invCloseReelInline(); } // legacy alias
 
 function invDiscardReelEntry() {
   var scanned  = invReelModalScannedValue;
