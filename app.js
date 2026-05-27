@@ -764,7 +764,7 @@ function escapeHtml(v) {
 function renderHistory(records = history.records || []) {
   const cols = ["imported_at","source_type","rma_number","vendor","sale_order","customer_po","ship_date","calix_product","hctc","odoo_external_id","serial","fsan","mac_address","status"];
   const head = `<tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>`;
-  const body = records.slice(0, 500).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(r[c])}</td>`).join("")}</tr>`).join("");
+  const body = records.slice().reverse().slice(0, 500).map(r => `<tr>${cols.map(c => `<td>${escapeHtml(r[c])}</td>`).join("")}</tr>`).join("");
   $("historyTable").innerHTML = head + body;
 }
 function renderUnknownProducts() {
@@ -1576,6 +1576,7 @@ function timInitUsername() {
 // -- Audio feedback -------------------------------------------------
 var _timAudioCtx = null;
 function _timAudioCtx_get() {
+  if (_timAudioCtx && _timAudioCtx.state === "closed") _timAudioCtx = null;
   if (!_timAudioCtx) {
     try { _timAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
   }
@@ -4685,8 +4686,8 @@ function bcProcessBarcodeScan() {
   if (existingItem) {
     var pm = findProductMapMatch(existingItem);
     var desc = pm ? (getMapDescription(pm.entry) || existingItem) : existingItem;
-    bcShowFeedback("ok", "Known: " + existingItem + (desc && desc !== existingItem ? " — " + desc : ""));
-    bcAddToBatch(raw, existingItem, desc);
+    bcShowFeedback("ok", "Known: " + existingItem + (desc && desc !== existingItem ? " — " + desc : "") + " (logged, excluded from export)");
+    bcAddToBatch(raw, existingItem, desc, true);
     timBeep("ok");
     if (inp) inp.focus();
     return;
@@ -4750,17 +4751,22 @@ function bcCancelUnknown() {
   if (scanInp) { scanInp.value = ""; scanInp.focus(); }
 }
 
-function bcAddToBatch(barcode, itemNumber, description) {
+function bcAddToBatch(barcode, itemNumber, description, alreadyKnown) {
   var bcKey = normKey(barcode);
   var existing = bcBatch.find(function(r) { return normKey(r.barcode) === bcKey; });
   if (existing) {
     existing.itemNumber = itemNumber;
     existing.description = description;
     existing.timestamp = new Date().toISOString();
+    if (alreadyKnown !== undefined) existing.alreadyKnown = !!alreadyKnown;
   } else {
-    bcBatch.push({ barcode: barcode, itemNumber: itemNumber, description: description || "", timestamp: new Date().toISOString() });
+    bcBatch.push({ barcode: barcode, itemNumber: itemNumber, description: description || "", timestamp: new Date().toISOString(), alreadyKnown: !!alreadyKnown });
   }
   bcRenderBatch();
+}
+
+function bcIncludeKnown(idx) {
+  if (bcBatch[idx]) { bcBatch[idx].alreadyKnown = false; bcRenderBatch(); }
 }
 
 function bcRemoveFromBatch(idx) {
@@ -4779,12 +4785,17 @@ function bcRenderBatch() {
     return;
   }
   tbody.innerHTML = bcBatch.map(function(r, i) {
-    return '<tr>' +
+    var known = r.alreadyKnown;
+    var rowStyle = known ? ' style="opacity:0.55;"' : '';
+    var knownBadge = known ? ' <span style="font-size:10px;background:#e2e8f0;color:#64748b;border-radius:3px;padding:1px 5px;vertical-align:middle;">known</span>' : '';
+    var actionBtns = (known ? '<button class="secondary" style="padding:3px 10px;font-size:12px;margin:0 4px 0 0;" onclick="bcIncludeKnown(' + i + ')">Include</button>' : '') +
+      '<button class="danger" style="padding:3px 10px;font-size:12px;margin:0;" onclick="bcRemoveFromBatch(' + i + ')">Remove</button>';
+    return '<tr' + rowStyle + '>' +
       '<td style="font-family:monospace;font-size:13px;">' + escapeHtml(r.barcode) + '</td>' +
-      '<td><strong>' + escapeHtml(r.itemNumber) + '</strong></td>' +
+      '<td><strong>' + escapeHtml(r.itemNumber) + '</strong>' + knownBadge + '</td>' +
       '<td>' + escapeHtml(r.description || "") + '</td>' +
       '<td style="white-space:nowrap;color:#6b7280;font-size:12px;">' + new Date(r.timestamp).toLocaleTimeString() + '</td>' +
-      '<td><button class="danger" style="padding:3px 10px;font-size:12px;margin:0;" onclick="bcRemoveFromBatch(' + i + ')">Remove</button></td>' +
+      '<td style="white-space:nowrap;">' + actionBtns + '</td>' +
       '</tr>';
   }).join("");
 }
@@ -4802,10 +4813,19 @@ function bcClearBatch() {
 function bcExportAndSave() {
   if (!bcBatch.length) { alert("No barcodes in the current batch to export."); return; }
 
+  var exportBatch = bcBatch.filter(function(r) { return !r.alreadyKnown; });
+  var skippedCount = bcBatch.length - exportBatch.length;
+
+  if (!exportBatch.length) {
+    bcShowFeedback("warn", "All " + bcBatch.length + " barcode(s) are already known — nothing new to export. Use 'Include' on any row to force-add it.");
+    timBeep("warn");
+    return;
+  }
+
   // Group by item number preserving insertion order
   var grouped = {};
   var itemOrder = [];
-  bcBatch.forEach(function(r) {
+  exportBatch.forEach(function(r) {
     var k = normKey(r.itemNumber);
     if (!grouped[k]) { grouped[k] = []; itemOrder.push(k); }
     grouped[k].push(r);
@@ -4830,15 +4850,17 @@ function bcExportAndSave() {
   var date = new Date().toISOString().slice(0, 10);
   downloadText("TIM_Barcodes_" + date + ".csv", lines.join("\n"), "text/csv");
 
-  // Commit to persistent BARCODE_MAP
-  var count = bcBatch.length;
-  bcBatch.forEach(function(r) { BARCODE_MAP[normKey(r.barcode)] = r.itemNumber; });
+  // Commit new barcodes to persistent BARCODE_MAP (already-known entries are already there)
+  var count = exportBatch.length;
+  exportBatch.forEach(function(r) { BARCODE_MAP[normKey(r.barcode)] = r.itemNumber; });
   appData.barcode_map = BARCODE_MAP;
   bcSaveBarcodeMapToStorage();
 
   bcBatch = [];
   bcRenderBatch();
-  bcShowFeedback("ok", count + " barcode(s) saved to TIM’s database and exported to Odoo CSV.");
+  var msg = count + " barcode(s) saved to TIM’s database and exported to Odoo CSV.";
+  if (skippedCount) msg += " " + skippedCount + " already-known barcode(s) were skipped.";
+  bcShowFeedback("ok", msg);
   timBeep("ok");
 }
 
