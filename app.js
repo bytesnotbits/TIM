@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.15";
+const APP_VERSION = "v1.30.16";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4609,11 +4609,11 @@ timLoadMasterCache();
 timInitUsername();
 renderInvSessionUI();
 
-// Unlock Web Audio on first user gesture (required by Safari + Chrome autoplay policy)
+// Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
-  function _unlock() { timUnlockAudio(); document.removeEventListener("pointerdown", _unlock); document.removeEventListener("keydown", _unlock); }
-  document.addEventListener("pointerdown", _unlock);
-  document.addEventListener("keydown", _unlock);
+  function _unlock() { timUnlockAudio(); }
+  document.addEventListener("pointerdown", _unlock, { passive: true });
+  document.addEventListener("keydown", _unlock, { passive: true });
 })();
 
 
@@ -4784,12 +4784,13 @@ function bcRenderBatch() {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px;">No barcodes in batch. Scan a barcode to start.</td></tr>';
     return;
   }
-  tbody.innerHTML = bcBatch.map(function(r, i) {
+  tbody.innerHTML = bcBatch.slice().reverse().map(function(r, i) {
+    var origIdx = bcBatch.length - 1 - i;
     var known = r.alreadyKnown;
     var rowStyle = known ? ' style="opacity:0.55;"' : '';
     var knownBadge = known ? ' <span style="font-size:10px;background:#e2e8f0;color:#64748b;border-radius:3px;padding:1px 5px;vertical-align:middle;">known</span>' : '';
-    var actionBtns = (known ? '<button class="secondary" style="padding:3px 10px;font-size:12px;margin:0 4px 0 0;" onclick="bcIncludeKnown(' + i + ')">Include</button>' : '') +
-      '<button class="danger" style="padding:3px 10px;font-size:12px;margin:0;" onclick="bcRemoveFromBatch(' + i + ')">Remove</button>';
+    var actionBtns = (known ? '<button class="secondary" style="padding:3px 10px;font-size:12px;margin:0 4px 0 0;" onclick="bcIncludeKnown(' + origIdx + ')">Include</button>' : '') +
+      '<button class="danger" style="padding:3px 10px;font-size:12px;margin:0;" onclick="bcRemoveFromBatch(' + origIdx + ')">Remove</button>';
     return '<tr' + rowStyle + '>' +
       '<td style="font-family:monospace;font-size:13px;">' + escapeHtml(r.barcode) + '</td>' +
       '<td><strong>' + escapeHtml(r.itemNumber) + '</strong>' + knownBadge + '</td>' +
