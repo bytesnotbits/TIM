@@ -6462,7 +6462,7 @@ function bcExportAndSave() {
     grouped[k].push(r);
   });
 
-  var lines = [["id","default_code","name","template_multi_barcode_ids"].map(csvEscape).join(",")];
+  var lines = [["id","default_code","name","template_multi_barcode_ids/name"].map(csvEscape).join(",")];
   itemOrder.forEach(function(k) {
     var items = grouped[k];
     var pm = findProductMapMatch(items[0].itemNumber);
@@ -6471,7 +6471,7 @@ function bcExportAndSave() {
     items.forEach(function(r, i) {
       lines.push([
         i === 0 ? odooId : "",
-        r.itemNumber,
+        i === 0 ? r.itemNumber : "",
         i === 0 ? desc : "",
         r.barcode
       ].map(csvEscape).join(","));
