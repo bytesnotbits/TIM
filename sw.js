@@ -1,8 +1,10 @@
-const CACHE = 'tim-v2';
+const CACHE = 'tim-v3';
 const PRECACHE = [
   'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
   'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js',
-  './manifest.json'
+  './manifest.json',
+  './styles.css',
+  './app.js'
 ];
 
 self.addEventListener('install', e => {
@@ -21,21 +23,10 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  const isHtml = url.pathname.endsWith('.html') || url.pathname.endsWith('/');
+  const isCdn = url.hostname !== self.location.hostname;
 
-  if (isHtml) {
-    // Network-first for HTML — always get the latest version; fall back to cache offline
-    e.respondWith(
-      fetch(e.request).then(res => {
-        if (res.ok) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => caches.match(e.request))
-    );
-  } else {
-    // Cache-first for CDN assets and other static files
+  if (isCdn) {
+    // Cache-first for CDN assets — version-locked, safe to serve stale
     e.respondWith(
       caches.match(e.request).then(cached => {
         if (cached) return cached;
@@ -47,6 +38,17 @@ self.addEventListener('fetch', e => {
           return res;
         }).catch(() => cached);
       })
+    );
+  } else {
+    // Network-first for all local files (HTML, CSS, JS) — always fetch latest; fall back to cache when offline
+    e.respondWith(
+      fetch(e.request).then(res => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(e.request))
     );
   }
 });
