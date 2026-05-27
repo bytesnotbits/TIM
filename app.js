@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.12";
+const APP_VERSION = "v1.30.13";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5010,6 +5010,22 @@ function updateClearBtns() {
   show("clearSourceDataBtn",     srcLoaded);
   show("clearProductCatalogBtn", Object.keys(PRODUCT_MAP).length > 0);
   show("clearBarcodeImportBtn",  bcLoaded || Object.keys(BARCODE_MAP).length > 0);
+}
+
+function clearAllData() {
+  if (!confirm("Clear ALL app data and start fresh?\n\nThis will permanently delete:\n• Active batch and receiving data\n• Inventory sessions\n• Master data (products, history, barcodes)\n• Your username\n\nThis cannot be undone.")) return;
+  Promise.all([
+    TimDB.remove(BATCH_DRAFT_KEY),
+    TimDB.remove(INV_STORAGE_KEY),
+    TimDB.remove(TIM_MASTER_CACHE_KEY),
+    TimDB.remove(BC_STORAGE_KEY),
+    TimDB.remove(BC_BATCH_DRAFT_KEY)
+  ]).catch(function(){}).then(function() {
+    try { localStorage.removeItem(TIM_USERNAME_KEY); } catch(e) {}
+    try { localStorage.removeItem("tim_active_tab"); } catch(e) {}
+    try { localStorage.removeItem("tim_sidebar_collapsed"); } catch(e) {}
+    location.reload();
+  });
 }
 
 function clearMasterData() {
