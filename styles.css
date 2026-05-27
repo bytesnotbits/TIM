@@ -56,6 +56,9 @@ h2 { margin-top: 28px; }
 .sidebar-admin-content { padding: 10px 8px calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 6px; }
 .sidebar.collapsed .sidebar-admin-content { display: none; }
 .sidebar-admin-btn { width: 100%; margin: 0; font-size: 12px; padding: 7px 10px; }
+.sidebar-admin-btn-danger { background: #7f1d1d; color: #fca5a5; border-color: transparent; }
+.sidebar-admin-btn-danger:hover { background: #991b1b; }
+.sidebar-setup-svg-danger { color: #fca5a5; }
 .sidebar-admin-status { font-size: 11px; color: #64748b; line-height: 1.4; }
 .sidebar-admin-icon-area { display: none; padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px)); text-align: center; }
 .sidebar.collapsed .sidebar-admin-icon-area { display: block; }
