@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.10";
+const APP_VERSION = "v1.30.12";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1527,12 +1527,15 @@ async function checkForUpdate() {
       status.innerHTML = "Update available (v" + remoteVer + "). <a href='#' id='applyUpdateLink' style='color:#2563eb;font-weight:700;'>Reload now</a>";
       $("applyUpdateLink").addEventListener("click", async e => {
         e.preventDefault();
-        // Purge cached index.html so the reload fetches fresh
-        const cacheNames = await caches.keys();
-        await Promise.all(cacheNames.map(name =>
-          caches.open(name).then(c => c.delete(location.origin + location.pathname))
-        ));
-        location.reload(true);
+        try {
+          // Tell any waiting SW to activate immediately
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          // Clear SW cache so reload is guaranteed to hit the network
+          const cacheNames = await caches.keys();
+          await Promise.all(cacheNames.map(n => caches.delete(n)));
+        } catch(_) {}
+        location.reload();
       });
     } else {
       status.style.color = "#64748b";
