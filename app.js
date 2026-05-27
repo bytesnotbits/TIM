@@ -1511,8 +1511,8 @@ async function checkForUpdate() {
       if (reg) await reg.update();
     }
 
-    // Fetch index.html fresh from the network, bypassing SW cache via query string
-    const res = await fetch("./index.html?_=" + Date.now(), { cache: "no-store" });
+    // Fetch app.js fresh from the network, bypassing SW cache via query string
+    const res = await fetch("./app.js?_=" + Date.now(), { cache: "no-store" });
     if (!res.ok) throw new Error("Network response " + res.status);
     const text = await res.text();
 
