@@ -563,8 +563,10 @@
       </div>
       <div id="invSummaryCollapse" class="collapsible-body">
         <p class="small">Derived from active events — recalculated automatically after each scan. Voided events are excluded.</p>
-        <div style="margin-bottom:10px;">
+        <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
           <button id="invExportSummaryBtn" onclick="exportInvSummaryXlsx()" disabled>Export Summary XLSX</button>
+          <button id="invExportOdooAdjXlsxBtn" onclick="exportInvOdooAdjustmentXlsx()" disabled title="Export Odoo Inventory Adjustment XLSX — one row per serial, bulk item, or reel. Columns: product_id/id, product_id/default_code, location_id/complete_name, lot_id/name, inventory_quantity.">Export Odoo Adj. XLSX</button>
+          <button id="invExportOdooAdjCsvBtn" onclick="exportInvOdooAdjustmentCsv()" disabled title="Export Odoo Inventory Adjustment CSV — one row per serial, bulk item, or reel. Columns: product_id/id, product_id/default_code, location_id/complete_name, lot_id/name, inventory_quantity.">Export Odoo Adj. CSV</button>
         </div>
         <div class="scroll">
           <table>
