@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.22";
+const APP_VERSION = "v1.30.23";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2256,6 +2256,10 @@ function renderInvSummary() {
   var rows = Object.keys(map).sort().map(function(k) { return map[k]; });
 
   if (exportBtn) exportBtn.disabled = !rows.length || !invSession;
+  var odooXlsxBtn = $("invExportOdooAdjXlsxBtn");
+  var odooCsvBtn  = $("invExportOdooAdjCsvBtn");
+  if (odooXlsxBtn) odooXlsxBtn.disabled = !rows.length || !invSession;
+  if (odooCsvBtn)  odooCsvBtn.disabled  = !rows.length || !invSession;
 
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>';
@@ -4132,6 +4136,84 @@ function exportInvSummaryXlsx() {
   });
   var wb = invMakeXlsx(headers, rows, "Summary");
   XLSX.writeFile(wb, "inv-summary-" + new Date().toISOString().slice(0,10) + ".xlsx");
+}
+
+// ===================================================================
+// ODOO INVENTORY ADJUSTMENT EXPORT
+// Columns match Odoo stock.quant CSV import format.
+// Serial-tracked items → one row per serial (lot_id/name = serial).
+// Bulk/box items       → one row per item+location (no lot, total qty).
+// Reel items           → one row per reel (lot_id/name = reel number, qty = 1).
+// ===================================================================
+
+function buildOdooAdjustmentRows(events) {
+  var headers = ["product_id/id", "product_id/default_code", "location_id/barcode", "lot_id/name", "inventory_quantity"];
+  var rows = [];
+
+  function pmFields(itemNumber) {
+    var pm = findProductMapMatch(itemNumber || "");
+    return {
+      extId:   (pm && pm.entry) ? (getMapExternalId(pm.entry) || "") : "",
+      defCode: (pm && pm.entry && pm.entry.default_code) ? pm.entry.default_code : (itemNumber || "")
+    };
+  }
+
+  // Serialized device scans — one row per active event
+  events.forEach(function(evt) {
+    if (evt.status === "voided" || evt.eventType === "void_event") return;
+    if (evt.eventType !== "serialized_device_scan") return;
+    var f = pmFields(evt.itemNumber);
+    var lotName = evt.serial || evt.fsan || evt.scannedValue || "";
+    rows.push([f.extId, f.defCode, evt.location || "", lotName, 1]);
+  });
+
+  // Bulk quantity counts and box scans — aggregate by item + location
+  var bulkMap = {};
+  events.forEach(function(evt) {
+    if (evt.status === "voided" || evt.eventType === "void_event") return;
+    if (evt.eventType !== "bulk_quantity_count" && evt.eventType !== "box_scan") return;
+    var key = (evt.itemNumber || "") + "\x00" + (evt.location || "");
+    if (!bulkMap[key]) {
+      var f2 = pmFields(evt.itemNumber);
+      bulkMap[key] = { extId: f2.extId, defCode: f2.defCode, loc: evt.location || "", qty: 0 };
+    }
+    bulkMap[key].qty += (evt.eventType === "box_scan")
+      ? (evt.resolvedDeviceCount || evt.qty || 1)
+      : (evt.qty || 1);
+  });
+  Object.keys(bulkMap).sort().forEach(function(k) {
+    var r = bulkMap[k];
+    rows.push([r.extId, r.defCode, r.loc, "", r.qty]);
+  });
+
+  // Cable reel counts — one row per reel (lot-tracked, qty = 1 reel unit)
+  events.forEach(function(evt) {
+    if (evt.status === "voided" || evt.eventType === "void_event") return;
+    if (evt.eventType !== "cable_reel_count") return;
+    var f3 = pmFields(evt.itemNumber);
+    var lotName3 = evt.reelNumber || evt.scannedValue || "";
+    rows.push([f3.extId, f3.defCode, evt.location || "", lotName3, 1]);
+  });
+
+  return { headers: headers, rows: rows };
+}
+
+function exportInvOdooAdjustmentXlsx() {
+  if (!requireInvSession()) return;
+  var result = buildOdooAdjustmentRows(invEvents);
+  if (!result.rows.length) { alert("No countable events to export."); return; }
+  var wb = invMakeXlsx(result.headers, result.rows, "Inventory Adjustment");
+  XLSX.writeFile(wb, "odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+}
+
+function exportInvOdooAdjustmentCsv() {
+  if (!requireInvSession()) return;
+  var result = buildOdooAdjustmentRows(invEvents);
+  if (!result.rows.length) { alert("No countable events to export."); return; }
+  var lines = [result.headers.map(csvEscape).join(",")].concat(
+    result.rows.map(function(r) { return r.map(csvEscape).join(","); })
+  );
+  downloadText("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".csv", lines.join("\r\n"), "text/csv");
 }
 
 // -- Scan input keyboard handler -----------------------------------
