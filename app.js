@@ -3409,7 +3409,9 @@ function invOpenReelModal(reelNumber, notes, location) {
       setAndMark("invReelOuterB", prev.outerSeqB);
     }
   } else {
-    $("invReelSpanType").value = "single";
+    var mapMatch = findProductMapMatch(itemNum);
+    var rd = mapMatch && mapMatch.entry ? mapMatch.entry.reel_direction : null;
+    $("invReelSpanType").value = (rd === "two_way") ? "two_way" : "single";
   }
 
   var notesEl = $("invReelNotes");
@@ -3443,6 +3445,26 @@ function invOpenReelModal(reelNumber, notes, location) {
       }
     }
   }, 50);
+}
+
+function invReelUpdateSpanTypeFromContext() {
+  var itemNum = $("invReelItemNumber") ? $("invReelItemNumber").value.trim().toUpperCase() : "";
+  var reelNum = $("invReelNumber")     ? $("invReelNumber").value.trim().toUpperCase()     : "";
+  var spanSel = $("invReelSpanType");
+  if (!spanSel) return;
+
+  var prev = invGetReelHistory(itemNum, reelNum);
+  if (prev) {
+    spanSel.value = (prev.spanType === "two_way") ? "two_way" : "single";
+  } else if (itemNum) {
+    var match = findProductMapMatch(itemNum);
+    var rd = match && match.entry ? match.entry.reel_direction : null;
+    spanSel.value = (rd === "two_way") ? "two_way" : "single";
+  } else {
+    spanSel.value = "single";
+  }
+
+  invReelSpanTypeChange();
 }
 
 function invReelSpanTypeChange() {
