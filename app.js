@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.18";
+const APP_VERSION = "v1.30.19";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3395,6 +3395,16 @@ function invOpenReelModal(reelNumber, notes, location) {
   // Pre-populate from the last known entry for this reel, marking pre-filled fields
   var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
   var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
+
+  // Reverse lookup: if item is blank but reel is known, find item from master events
+  if (!itemNum && reelNum) {
+    var master = invFindReelMaster(reelNum);
+    if (master && master.itemNumber) {
+      itemNum = master.itemNumber.trim().toUpperCase();
+      if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
+    }
+  }
+
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
     var setAndMark = function(id, val) {
@@ -3448,10 +3458,21 @@ function invOpenReelModal(reelNumber, notes, location) {
 }
 
 function invReelUpdateSpanTypeFromContext() {
-  var itemNum = $("invReelItemNumber") ? $("invReelItemNumber").value.trim().toUpperCase() : "";
-  var reelNum = $("invReelNumber")     ? $("invReelNumber").value.trim().toUpperCase()     : "";
+  var itemField = $("invReelItemNumber");
+  var reelField = $("invReelNumber");
+  var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
+  var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
   var spanSel = $("invReelSpanType");
   if (!spanSel) return;
+
+  // Reverse lookup: if item is blank but reel is known, find item from master events
+  if (!itemNum && reelNum) {
+    var master = invFindReelMaster(reelNum);
+    if (master && master.itemNumber) {
+      itemNum = master.itemNumber.trim().toUpperCase();
+      if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
+    }
+  }
 
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
@@ -3523,16 +3544,33 @@ function invReelUpdateHistoryPanel(itemNum, reelNum, currentFt) {
     "</tr>";
 }
 
+function invFindReelMaster(reelNum) {
+  var k2 = normKey(reelNum || "");
+  if (!k2) return null;
+  var all = (appData.inventory_events || []).concat(invEvents);
+  var matches = all.filter(function(e) {
+    return e.eventType === "cable_reel_count" &&
+           e.status    !== "voided"           &&
+           normKey(e.reelNumber || "") === k2;
+  });
+  if (!matches.length) return null;
+  matches.sort(function(a, b) { return (a.timestamp || "") < (b.timestamp || "") ? -1 : 1; });
+  return matches[matches.length - 1];
+}
+
 function invGetReelHistory(itemNum, reelNum) {
   var k1 = normKey(itemNum || "");
   var k2 = normKey(reelNum || "");
-  var matches = invEvents.filter(function(e) {
+  var all = (appData.inventory_events || []).concat(invEvents);
+  var matches = all.filter(function(e) {
     return e.eventType === "cable_reel_count" &&
            e.status    !== "voided"           &&
            normKey(e.itemNumber || "") === k1  &&
            normKey(e.reelNumber  || "") === k2;
   });
-  return matches.length ? matches[matches.length - 1] : null;
+  if (!matches.length) return null;
+  matches.sort(function(a, b) { return (a.timestamp || "") < (b.timestamp || "") ? -1 : 1; });
+  return matches[matches.length - 1];
 }
 
 function invSubmitReelEntry(silent) {
