@@ -92,6 +92,7 @@
           <button class="sidebar-inv-btn sidebar-inv-btn-recount" id="invRecountBtn" onclick="invStartRecount()" disabled style="grid-column:1/-1;">&#8635; Start Recount</button>
           <button class="sidebar-inv-btn sidebar-inv-btn-secondary" onclick="invExportBackup()">&#8595; Export</button>
           <label class="sidebar-inv-label-btn">&#8593; Import<input id="invImportFile" type="file" accept=".json" style="display:none;" onchange="invImportBackup(this)" /></label>
+          <label class="sidebar-inv-label-btn" style="grid-column:1/-1;">&#8593; Import Reels CSV<input id="invReelsCsvFile" type="file" accept=".csv" style="display:none;" onchange="invImportReelsCsv(this)" /></label>
           <button class="sidebar-inv-btn sidebar-inv-btn-danger"  id="invClearBtn"   onclick="invClearSession()" disabled>&#10005; Clear</button>
         </div>
       </div>
@@ -1192,6 +1193,8 @@
   </div>
 
   <!-- Product Upload Diff Modal -->
+  <div id="invCsvImportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true"></div>
+
   <div id="prodDiffModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:860px;">
       <div class="modal-header">
