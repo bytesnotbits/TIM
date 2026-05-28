@@ -1,4 +1,4 @@
-const CACHE = 'tim-v3';
+const CACHE = 'tim-v4';
 const PRECACHE = [
   'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
   'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js',
@@ -22,6 +22,7 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  if (!e.request.url.startsWith('http')) return;
   const url = new URL(e.request.url);
   const isCdn = url.hostname !== self.location.hostname;
 
