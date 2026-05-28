@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.20";
+const APP_VERSION = "v1.30.21";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1654,6 +1654,7 @@ let invSequence = 0;
 let invAutosavePending = false;
 let invAutosaveTimer = null;
 let invTabOpenedOnce = false;
+let _invAutoRestoreStarted = false;
 let invCurrentLocation = "";
 let invNotesModalEventId = null;
 let invScanMode = "auto";          // "auto" | "serial" | "reel" | "item"
@@ -1760,7 +1761,7 @@ function toggleCollapsible(bodyId, headerId, chevronId) {
 }
 
 function invShowStorageHint() {
-  if (invSession) return;
+  if (invSession || _invAutoRestoreStarted) return;
   var bar = $("invAutosaveBar");
   if (!bar) return;
   if (!invStorageAvailable()) {
@@ -1890,6 +1891,36 @@ function invStartNewSession() {
   if (nameInput) nameInput.value = "";
   invAutosave();
   renderInvSessionUI();
+}
+
+function invAutoRestoreSession() {
+  if (invSession || !invStorageAvailable()) return;
+  _invAutoRestoreStarted = true;
+  TimDB.get(INV_STORAGE_KEY).then(function(saved) {
+    if (!saved || !saved.session) {
+      _invAutoRestoreStarted = false;
+      invShowStorageHint();
+      return;
+    }
+    invSession    = saved.session;
+    invEvents     = saved.events     || [];
+    invExceptions = saved.exceptions || [];
+    invRecounts   = saved.recounts   || [];
+    invSettings   = saved.settings   || {};
+    invSequence   = invSession.sequenceCounter || 0;
+    invSession.status    = "active";
+    invSession.updatedAt = invNow();
+    renderInvSessionUI();
+    var bar = $("invAutosaveBar");
+    if (bar) {
+      bar.classList.remove("hidden");
+      bar.classList.remove("unsaved");
+      var txt = $("invAutosaveText");
+      if (txt) txt.textContent = "Session auto-restored: “" +
+        (invSession.sessionName || invSession.sessionId) + "” — " +
+        invEvents.length + " event(s). Last saved " + invFormatDateTime(saved.savedAt) + ".";
+    }
+  }).catch(function() { _invAutoRestoreStarted = false; });
 }
 
 function invResumeSession() {
@@ -4668,6 +4699,7 @@ try {
 timLoadMasterCache();
 timInitUsername();
 renderInvSessionUI();
+invAutoRestoreSession();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
