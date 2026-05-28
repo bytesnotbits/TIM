@@ -5293,3 +5293,283 @@ function prodCancelEdit() {
   $("prodEditModal").classList.add("hidden");
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// CSV REEL IMPORT
+// ═══════════════════════════════════════════════════════════════════════
+
+var _csvImportPending = null;
+
+function invImportReelsCsv(inputEl) {
+  var file = inputEl.files[0];
+  if (!file) return;
+  inputEl.value = "";
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var rows = _parseReelCsv(e.target.result);
+      // Skip header row if present
+      if (rows.length && /sku|reel/i.test(rows[0][0])) rows = rows.slice(1);
+      var parsed = _analyzeReelCsvRows(rows);
+      _csvImportPending = parsed;
+      _showCsvImportModal(parsed);
+    } catch(err) {
+      alert("Error parsing CSV: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function _parseReelCsv(text) {
+  var rows = [], row = [], field = "", inQ = false;
+  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (i + 1 < text.length && text[i + 1] === '"') { field += '"'; i++; }
+        else { inQ = false; }
+      } else {
+        field += ch;
+      }
+    } else {
+      if      (ch === '"') { inQ = true; }
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\n') {
+        row.push(field); field = "";
+        if (row.some(function(f) { return f !== ""; })) rows.push(row);
+        row = [];
+      } else {
+        field += ch;
+      }
+    }
+  }
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    if (row.some(function(f) { return f !== ""; })) rows.push(row);
+  }
+  return rows;
+}
+
+// columns: SKU(0), Reels No(1), Description(2), Inner Seq(3), Outer Seq(4), Qty(5), Last Updated(6), Notes(7)
+function _analyzeReelCsvRows(rows) {
+  var result = [];
+  rows.forEach(function(cols) {
+    if (cols.length < 2) return;
+    var itemNum = normKey(cols[0] || "");
+    var reelNum = normKey(cols[1] || "");
+    if (!itemNum || !reelNum) return;
+
+    var desc = (cols[2] || "").trim().replace(/^\[[^\]]+\]\s*/, "");
+    var innerRaw = (cols[3] || "").trim();
+    var outerRaw = (cols[4] || "").trim();
+    var qty      = parseFloat((cols[5] || "").trim()) || 0;
+    var dateRaw  = (cols[6] || "").trim();
+    var notes    = (cols[7] || "").trim();
+
+    var innerA = innerRaw !== "" ? parseFloat(innerRaw) : null;
+    var outerA = outerRaw !== "" ? parseFloat(outerRaw) : null;
+    var ftA    = (innerA !== null && outerA !== null) ? Math.abs(outerA - innerA) : qty;
+
+    var mapEntry = PRODUCT_MAP[itemNum];
+    var spanType = (mapEntry && mapEntry.reel_direction === "two_way") ? "two_way" : "single";
+
+    var csvDate = null;
+    if (dateRaw) {
+      var d = new Date(dateRaw.replace(" ", "T"));
+      if (!isNaN(d.getTime())) csvDate = d;
+    }
+
+    // Find most recent existing master event for this reel
+    var k1 = normKey(itemNum), k2 = normKey(reelNum);
+    var masterMatches = (appData.inventory_events || []).filter(function(e) {
+      return e.eventType === "cable_reel_count" &&
+             e.status    !== "voided"           &&
+             normKey(e.itemNumber || "") === k1  &&
+             normKey(e.reelNumber  || "") === k2;
+    }).sort(function(a, b) {
+      return (b.timestamp || "") > (a.timestamp || "") ? 1 : -1;
+    });
+    var existingEvent = masterMatches.length ? masterMatches[0] : null;
+
+    // Skip reels already in the active session — don't interfere
+    var hasActiveEvent = invEvents.some(function(e) {
+      return e.eventType === "cable_reel_count" &&
+             e.status    !== "voided"           &&
+             normKey(e.itemNumber || "") === k1  &&
+             normKey(e.reelNumber  || "") === k2;
+    });
+
+    var action;
+    if (hasActiveEvent) {
+      action = "skip_active";
+    } else if (!existingEvent) {
+      action = "add";
+    } else {
+      var existDate = new Date(existingEvent.timestamp);
+      var existQty  = existingEvent.totalAvailableFt || existingEvent.qty || 0;
+      if (csvDate && !isNaN(existDate.getTime())) {
+        if      (csvDate > existDate) { action = "update"; }
+        else if (csvDate < existDate) { action = "skip_older"; }
+        else    { action = qty < existQty ? "update" : "skip_equal"; }
+      } else {
+        action = qty < existQty ? "update" : "skip_nodate";
+      }
+    }
+
+    result.push({
+      itemNum: itemNum, reelNum: reelNum, desc: desc,
+      innerA: innerA, outerA: outerA, ftA: ftA,
+      spanType: spanType, totalFt: qty, qty: qty,
+      csvDate: csvDate, dateRaw: dateRaw, notes: notes,
+      action: action, existingEvent: existingEvent
+    });
+  });
+  return result;
+}
+
+function _showCsvImportModal(parsed) {
+  var counts = {};
+  parsed.forEach(function(r) { counts[r.action] = (counts[r.action] || 0) + 1; });
+  var nAdd    = counts.add    || 0;
+  var nUpdate = counts.update || 0;
+  var nSkip   = (counts.skip_older || 0) + (counts.skip_equal || 0) + (counts.skip_nodate || 0);
+  var nActive = counts.skip_active || 0;
+  var nAction = nAdd + nUpdate;
+
+  var html = '<div class="modal" style="max-width:440px;">'
+    + '<div class="modal-header">'
+    +   '<h2 style="margin:0;font-size:16px;">Import Reels from CSV</h2>'
+    +   '<button onclick="invCancelCsvImport()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;line-height:1;">&times;</button>'
+    + '</div>'
+    + '<div class="modal-body" style="font-size:13px;">'
+    +   '<p style="margin:0 0 14px;">Parsed <strong>' + parsed.length + '</strong> reels from CSV.</p>'
+    +   '<div style="display:grid;grid-template-columns:1fr 1fr' + (nActive ? ' 1fr' : '') + ';gap:8px;margin-bottom:14px;">'
+    +     _csvStatCard(nAdd,    "New",     "#f0fdf4","#86efac","#166534","#15803d")
+    +     _csvStatCard(nUpdate, "Updates", "#fef9c3","#fde047","#854d0e","#92400e")
+    +     _csvStatCard(nSkip,   "Skipped", "#f1f5f9","#cbd5e1","#475569","#334155")
+    +     (nActive ? _csvStatCard(nActive, "Active Session","#fef2f2","#fca5a5","#991b1b","#991b1b") : "")
+    +   '</div>';
+
+  if (nSkip > 0) {
+    html += '<p style="font-size:12px;color:#64748b;margin:0 0 8px;">'
+          + nSkip + ' reel(s) skipped — existing records are more recent or have lower quantity.</p>';
+  }
+  if (nActive > 0) {
+    html += '<p style="font-size:12px;color:#dc2626;margin:0 0 8px;">'
+          + nActive + ' reel(s) skipped — already recorded in the active session.</p>';
+  }
+
+  if (nAction === 0) {
+    html += '<p style="color:#dc2626;font-weight:600;margin:8px 0 0;">Nothing to import — all records are already up to date.</p>'
+          + '</div>'
+          + '<div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">'
+          +   '<button class="secondary" onclick="invCancelCsvImport()">Close</button>'
+          + '</div>';
+  } else {
+    html += '<p style="font-size:12px;color:#475569;margin:0;">Imports are written to master data. '
+          + 'An updated master JSON will be downloaded — replace your Step 1 file after importing.</p>'
+          + '</div>'
+          + '<div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">'
+          +   '<button class="secondary" onclick="invCancelCsvImport()" style="margin:0;">Cancel</button>'
+          +   '<button onclick="invConfirmCsvImport()" style="margin:0;background:#166534;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;">'
+          +     'Import ' + nAction + ' Reel' + (nAction !== 1 ? 's' : '')
+          +   '</button>'
+          + '</div>';
+  }
+
+  html += '</div>';
+  var modal = $("invCsvImportModal");
+  if (modal) { modal.innerHTML = html; modal.classList.remove("hidden"); }
+}
+
+function _csvStatCard(n, label, bg, border, labelColor, numColor) {
+  return '<div style="background:' + bg + ';border:1px solid ' + border + ';border-radius:6px;padding:8px 10px;">'
+       +   '<div style="font-size:10px;color:' + labelColor + ';font-weight:700;text-transform:uppercase;letter-spacing:.05em;">' + label + '</div>'
+       +   '<div style="font-size:22px;font-weight:700;color:' + numColor + ';">' + n + '</div>'
+       + '</div>';
+}
+
+function invCancelCsvImport() {
+  _csvImportPending = null;
+  var modal = $("invCsvImportModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function invConfirmCsvImport() {
+  var parsed = _csvImportPending;
+  if (!parsed) return;
+
+  var toImport = parsed.filter(function(r) { return r.action === "add" || r.action === "update"; });
+  if (!toImport.length) { invCancelCsvImport(); return; }
+
+  var now       = invNow();
+  var dateStr   = now.slice(0, 10);
+  var sessionId = "csv_import_" + Date.now();
+
+  var importSession = {
+    sessionId:       sessionId,
+    sessionName:     "Reel CSV Import " + dateStr,
+    createdAt:       now,
+    updatedAt:       now,
+    closedAt:        now,
+    status:          "closed",
+    sequenceCounter: toImport.length
+  };
+
+  // Void superseded events for "update" rows
+  toImport.filter(function(r) { return r.action === "update" && r.existingEvent; })
+    .forEach(function(r) {
+      var idx = appData.inventory_events.indexOf(r.existingEvent);
+      if (idx >= 0) appData.inventory_events[idx].status = "voided";
+    });
+
+  // Build and push new events
+  toImport.forEach(function(r, i) {
+    var ts  = r.csvDate ? r.csvDate.toISOString() : now;
+    var evt = {
+      eventId:          invGenerateId("evt"),
+      timestamp:        ts,
+      sequence:         i + 1,
+      eventType:        "cable_reel_count",
+      status:           "active",
+      sessionId:        sessionId,
+      notes:            r.notes || "",
+      messages:         [],
+      scanType:         "reel_number",
+      scannedValue:     r.reelNum,
+      itemNumber:       r.itemNum,
+      description:      r.desc,
+      reelNumber:       r.reelNum,
+      location:         "",
+      spanType:         r.spanType,
+      innerSeqA:        r.innerA,
+      outerSeqA:        r.outerA,
+      availableFtA:     r.ftA,
+      totalAvailableFt: r.totalFt,
+      qty:              r.totalFt
+    };
+    if (r.spanType === "two_way") {
+      evt.innerSeqB    = null;
+      evt.outerSeqB    = null;
+      evt.availableFtB = 0;
+    }
+    appData.inventory_events.push(evt);
+  });
+
+  appData.inventory_sessions.push(importSession);
+
+  invCancelCsvImport();
+
+  downloadText(
+    "Calix_Odoo_Converter_source_data.json",
+    JSON.stringify(buildExportPayload(), null, 2),
+    "application/json"
+  );
+
+  alert(
+    "Import complete: " + toImport.length + " reel(s) imported.\n\n" +
+    "The updated master JSON has been downloaded.\n" +
+    "Replace your existing Step 1 file with it to make the import permanent."
+  );
+}
+
