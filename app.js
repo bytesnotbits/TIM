@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.02";
+const APP_VERSION = "v1.32.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1601,9 +1601,13 @@ function timBeep(type) {
     g.gain.exponentialRampToValueAtTime(0.001, t + delay + dur);
     osc.start(t + delay); osc.stop(t + delay + dur);
   }
-  if      (type === "ok")    { tone(880, 0.08, 0.25, "sine"); }
-  else if (type === "warn")  { tone(440, 0.12, 0.18, "sine"); }
-  else if (type === "error") { tone(200, 0.06, 0.18, "square", 0); tone(200, 0.06, 0.18, "square", 0.1); }
+  if      (type === "ok")         { tone(880, 0.08, 0.25, "sine"); }
+  else if (type === "serialized") { tone(660, 0.07, 0.22, "sine"); tone(990, 0.09, 0.22, "sine", 0.08); }
+  else if (type === "reel")       { tone(880, 0.07, 0.22, "sine"); tone(550, 0.10, 0.20, "sine", 0.08); }
+  else if (type === "bulk")       { tone(720, 0.10, 0.20, "triangle"); }
+  else if (type === "location")   { tone(1100, 0.06, 0.20, "sine"); tone(770, 0.08, 0.18, "sine", 0.07); }
+  else if (type === "warn")       { tone(440, 0.12, 0.18, "sine"); }
+  else if (type === "error")      { tone(200, 0.06, 0.18, "square", 0); tone(200, 0.06, 0.18, "square", 0.1); }
 }
 
 // -- Activity feed --------------------------------------------------
@@ -1611,8 +1615,8 @@ var invActivityLog = [];
 var INV_ACTIVITY_MAX = 8;
 var _invActivityIcons = { ok:"✓", warn:"⚠", error:"✗", info:"i", location:"⊙", mode:"⇄" };
 
-function invAddActivity(type, message, detail) {
-  timBeep(type);
+function invAddActivity(type, message, detail, beepType) {
+  timBeep(beepType || type);
   invActivityLog.unshift({ type: type, message: message, detail: detail || "", time: new Date() });
   if (invActivityLog.length > INV_ACTIVITY_MAX) invActivityLog.length = INV_ACTIVITY_MAX;
   renderInvActivityFeed();
@@ -2631,11 +2635,11 @@ function invCreateExceptionEvent(scannedValue, scanType, problem, suggestedActio
 }
 
 // -- Scan feedback -------------------------------------------------
-function invSetScanFeedback(message, type, activityDetail) {
+function invSetScanFeedback(message, type, activityDetail, beepType) {
   var fb = $("invScanFeedback");
   if (fb) { fb.textContent = message; fb.className = "inv-scan-feedback " + (type || "info"); }
   if (type === "ok" || type === "warn" || type === "error") {
-    invAddActivity(type, message, activityDetail || "");
+    invAddActivity(type, message, activityDetail || "", beepType);
   }
 }
 
@@ -2707,7 +2711,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
   var ids = [];
   if (serial) ids.push("S/N: " + serial);
   if (fsan)   ids.push("FSAN: " + fsan);
-  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : ""), "ok");
+  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : ""), "ok", "", "serialized");
   return true;
 }
 
@@ -2767,7 +2771,7 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
   invSetScanFeedback(
     "Box " + boxId + ": " + counted + " of " + boxDevices.length + " device(s) counted." +
     (counted < boxDevices.length ? " " + (boxDevices.length - counted) + " duplicate(s) flagged." : ""),
-    counted === boxDevices.length ? "ok" : "warn");
+    counted === boxDevices.length ? "ok" : "warn", "", counted > 0 ? "serialized" : "");
   return true;
 }
 
@@ -2830,7 +2834,7 @@ function invHandleBulkCount(itemNumber, qty, notes, location) {
     "Counted " + qty + "x " + itemNumber + (description ? " (" + description + ")" : "") + "." +
     (!mm ? "  WARNING: item not in product map — exception created." : ""),
     mm ? "ok" : "warn",
-    locDetail);
+    locDetail, mm ? "bulk" : "");
   return true;
 }
 
@@ -3252,7 +3256,7 @@ function invProcessScan() {
     invSetLocation(rawValue);
     var fb = $("invScanFeedback");
     if (fb) { fb.textContent = "Location → " + rawValue; fb.className = "inv-scan-feedback ok"; }
-    invAddActivity("location", "Location → " + rawValue);
+    invAddActivity("location", "Location → " + rawValue, "", "location");
     $("invScanInput").value = "";
     invUpdateDetectedBadge("");
     setTimeout(function() { $("invScanInput").focus(); }, 50);
@@ -3668,7 +3672,7 @@ function invSubmitReelEntry(silent) {
     invSetScanFeedback(
       "Reel " + reelNumber + " (" + itemNumber + "): " +
       eventData.totalAvailableFt.toLocaleString() + " ft recorded" +
-      (spanType === "two_way" ? " (two spans)" : "") + ".", "ok");
+      (spanType === "two_way" ? " (two spans)" : "") + ".", "ok", "", "reel");
   }
   invCloseReelInline();
   $("invScanInput").value = "";
