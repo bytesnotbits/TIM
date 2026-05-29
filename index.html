@@ -359,6 +359,13 @@
       <span id="invLocationDisplay" style="display:none;"></span>
       <span id="invScanLocation" style="display:none;"></span>
 
+      <!-- Reel ID conflict banner: shown when a reel-tracked item number also appears as a reel number in scan history -->
+      <div id="invReelIdConflictBanner" style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:10px 16px;margin-bottom:12px;display:none;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:15px;flex-shrink:0;">&#9888;</span>
+        <span id="invReelIdConflictText" style="flex:1;font-size:13px;color:#78350f;min-width:200px;"></span>
+        <button onclick="invDismissReelIdConflictBanner()" style="background:none;border:1px solid #d97706;border-radius:6px;padding:5px 12px;font-size:13px;color:#92400e;cursor:pointer;white-space:nowrap;">Dismiss</button>
+      </div>
+
       <div class="inv-scan-panel">
 
         <!-- Mode Toggle -->
@@ -490,6 +497,8 @@
                 <b style="font-size:13px;color:#166534;">Cable Reel Entry</b>
                 <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invDiscardReelEntry()">Discard / Clear</button>
               </div>
+              <!-- Scan-time reel ID conflict note -->
+              <div id="invReelConflictNote" style="display:none;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:12px;color:#92400e;"></div>
               <div class="inv-reel-inline-grid">
                 <label>Item Number *
                   <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.03";
+const APP_VERSION = "v1.32.04";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -862,6 +862,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   else renderAll();
   prodRenderList();
+  checkReelItemConflicts();
   timSaveMasterCache();
 }
 
@@ -1651,6 +1652,7 @@ function renderInvActivityFeed() {
 // -- State ----------------------------------------------------------
 let invSession = null;
 let invEvents = [];
+var invReelIdConflicts = [];
 let invExceptions = [];
 let invRecounts = [];
 let invSettings = {};
@@ -1864,6 +1866,8 @@ function invResetSessionState() {
   invRecounts   = [];
   invSettings   = {};
   invSequence   = 0;
+  invReelIdConflicts = [];
+  renderReelIdConflictBanner();
 }
 
 function invStartNewSession() {
@@ -1925,6 +1929,7 @@ function invAutoRestoreSession() {
     invSession.status    = "active";
     invSession.updatedAt = invNow();
     renderInvSessionUI();
+    checkReelItemConflicts();
     var bar = $("invAutosaveBar");
     if (bar) {
       bar.classList.remove("hidden");
@@ -1953,6 +1958,7 @@ function invResumeSession() {
     invSession.updatedAt = invNow();
     invAutosave();
     renderInvSessionUI();
+    checkReelItemConflicts();
     alert("Resumed: " + invSession.sessionId +
           " — " + invEvents.length + " event(s), sequence at #" + invSequence + ".");
   }).catch(function() {
@@ -2024,6 +2030,7 @@ function invImportBackup(input) {
       invSession.status = "active";
       invAutosave();
       renderInvSessionUI();
+      checkReelItemConflicts();
       alert("Imported: " + invSession.sessionId + " with " + invEvents.length + " event(s).");
     } catch(err) {
       alert("Could not import backup: " + err.message);
@@ -2931,7 +2938,7 @@ function invSetScanMode(mode) {
     btn.className = "inv-mode-btn" + (m === mode ? " " + modeActiveClass[mode] : "");
   });
   // Wire hidden override select so existing invProcessScan logic picks it up
-  var overrideMap = { auto: "", serial: "", reel: "reel_number", item: "item_number" };
+  var overrideMap = { auto: "", serial: "", reel: "", item: "item_number" };
   var override = $("invScanTypeOverride");
   if (override) override.value = overrideMap[mode] || "";
   // Update placeholder for user guidance
@@ -3250,6 +3257,10 @@ function invProcessScan() {
   if (invScanMode === "item" && !override && scanType !== "location") {
     scanType = "item_number";
   }
+  // In reel mode with no override, unknown scans default to reel_number
+  if (invScanMode === "reel" && !override && scanType === "unknown") {
+    scanType = "reel_number";
+  }
 
   // Location scan: update sticky location and return
   if (scanType === "location") {
@@ -3272,6 +3283,14 @@ function invProcessScan() {
   } else if (scanType === "box_id") {
     ok = invHandleBoxScan(rawValue, contextItem, notes, invCurrentLocation);
   } else if (scanType === "item_number") {
+    // In reel mode, item number scans prefill the reel entry item field
+    // In auto mode, reel-tracked products open the reel entry panel instead of bulk counting
+    var _reelRouteMatch = invScanMode === "reel" ? true
+      : (function() { var m = findProductMapMatch(rawValue); return m && m.entry && m.entry.tracking_type === "reel"; }());
+    if (_reelRouteMatch) {
+      invPrefillReelItemNumber(rawValue, notes, invCurrentLocation);
+      return;
+    }
     ok = invHandleBulkCount(rawValue, qty, notes, invCurrentLocation);
   } else if (scanType === "barcode") {
     var resolvedItem = BARCODE_MAP[normKey(rawValue)];
@@ -3408,10 +3427,102 @@ function renderInvExceptions() {
 
 var invReelModalScannedValue = "";
 
+// ── Reel ID conflict detection ─────────────────────────────────────────────
+// Checks whether any reel-tracked item number in the product map also appears
+// as a reelNumber in scan event history. Called after product map or session
+// events change so operators see the problem before scanning begins.
+function checkReelItemConflicts() {
+  var reelItems = Object.keys(PRODUCT_MAP).filter(function(k) {
+    return PRODUCT_MAP[k] && PRODUCT_MAP[k].tracking_type === "reel";
+  });
+  if (!reelItems.length) {
+    invReelIdConflicts = [];
+    renderReelIdConflictBanner();
+    return;
+  }
+  var usedAsReel = {};
+  (invEvents || []).concat(appData.inventory_events || []).forEach(function(e) {
+    if (e.eventType === "cable_reel_count" && e.reelNumber) {
+      usedAsReel[normKey(e.reelNumber)] = true;
+    }
+  });
+  invReelIdConflicts = reelItems.filter(function(k) { return usedAsReel[normKey(k)]; });
+  renderReelIdConflictBanner();
+}
+
+function renderReelIdConflictBanner() {
+  var banner = $("invReelIdConflictBanner");
+  if (!banner) return;
+  if (!invReelIdConflicts.length) { banner.style.display = "none"; return; }
+  var textEl = $("invReelIdConflictText");
+  if (textEl) {
+    var quoted = invReelIdConflicts.map(function(c) { return "“" + c + "”"; });
+    textEl.textContent = invReelIdConflicts.length === 1
+      ? quoted[0] + " is both a reel-tracked item number and a reel number in scan history — verify your reel numbering convention."
+      : quoted.join(", ") + " appear as both reel-tracked item numbers and reel numbers in scan history — verify your reel numbering convention.";
+  }
+  banner.style.display = "flex";
+}
+
+function invDismissReelIdConflictBanner() {
+  var banner = $("invReelIdConflictBanner");
+  if (banner) banner.style.display = "none";
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 function invHandleReelScan(reelNumber, notes, location) {
   // Auto-save any current inline entry before populating the new reel
   invAutoSaveReelInline();
   invOpenReelModal(reelNumber, notes, location);
+}
+
+// Called when an item-number scan resolves to a reel-tracked product (auto mode)
+// or any item-number scan in cable reel mode. Prefills the item field and waits
+// for a reel number scan to complete the entry.
+function invPrefillReelItemNumber(itemNumber, notes, location) {
+  var rip = $("invReelInlinePanel");
+  if (rip) { rip.classList.remove("hidden"); rip.dataset.location = location || ""; }
+
+  var itemField = $("invReelItemNumber");
+  if (itemField) { itemField.value = itemNumber; itemField.classList.remove("inv-reel-prefilled"); }
+
+  var mapMatch = findProductMapMatch(itemNumber);
+  var rd = mapMatch && mapMatch.entry ? mapMatch.entry.reel_direction : null;
+  var spanSel = $("invReelSpanType");
+  if (spanSel) spanSel.value = (rd === "two_way") ? "two_way" : "single";
+  invReelSpanTypeChange();
+  invCalcReelFt();
+
+  setTimeout(function() {
+    var reelField = $("invReelNumber");
+    if (reelField) { invKeypadTargetEl = reelField; reelField.focus(); }
+    invQtyKeypadRefreshReelTarget();
+  }, 50);
+
+  var ctx = $("invQtyKeypadContext");
+  if (ctx) ctx.textContent = "Item: " + itemNumber + " · Scan reel number.";
+
+  // Scan-time secondary guard: warn if this value has also been recorded as a reel number
+  var conflictNote = $("invReelConflictNote");
+  if (conflictNote) {
+    var seenAsReel = invEvents.some(function(e) {
+      return e.eventType === "cable_reel_count" && normKey(e.reelNumber || "") === normKey(itemNumber);
+    });
+    if (seenAsReel) {
+      conflictNote.textContent = "⚠️ “" + itemNumber + "” has been recorded as a reel number in this session — confirm this is the item number, not the reel number.";
+      conflictNote.style.display = "block";
+    } else {
+      conflictNote.style.display = "none";
+    }
+  }
+
+  var fb = $("invScanFeedback");
+  if (fb) { fb.textContent = "Item: " + itemNumber + " — scan reel number."; fb.className = "inv-scan-feedback ok"; }
+  invAddActivity("ok", "Reel item: " + itemNumber, "", "reel");
+
+  var inp = $("invScanInput");
+  if (inp) inp.value = "";
+  setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 100);
 }
 
 function invAutoSaveReelInline() {
@@ -3689,6 +3800,7 @@ function invClearReelFields() {
   var notes = $("invReelNotes"); if (notes) notes.value = "";
   var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
+  var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
   invReelModalScannedValue = "";
   // Pre-fill item # from sticky context if set
   var ctxItem = $("invScanItem");
@@ -3888,6 +4000,8 @@ function invStartRecount() {
     sequenceCounter: 0
   };
   invEvents = [];
+  invReelIdConflicts = [];
+  renderReelIdConflictBanner();
 
   var infoEl = $("invRecountParentInfo");
   if (infoEl) infoEl.textContent = "Linked to: " + invRecountParentId;
@@ -4529,6 +4643,7 @@ function timLoadMasterCache() {
       $("historyStatus").textContent = pCount + " products, " + hCount + " history records (restored from local cache — load master JSON to refresh).";
       updateSidebarStatus(1, hCount);
       prodRenderList();
+      checkReelItemConflicts();
     }
     return hadData;
   }).catch(function() { return false; });
@@ -5497,6 +5612,7 @@ function prodApplyUpload() {
   appData.product_map = PRODUCT_MAP;
   $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
   prodRenderList();
+  checkReelItemConflicts();
   var msg = "Done: " + diff.added.length + " added, " + diff.updated.length + " updated" +
     (diff.skipped ? ", " + diff.skipped + " skipped (blank key)" : "") + ". Click Export Master JSON to save.";
   var statusEl = $("prodUploadStatus"); if (statusEl) statusEl.textContent = msg;
