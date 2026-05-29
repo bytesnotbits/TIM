@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.01";
+const APP_VERSION = "v1.32.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1737,6 +1737,14 @@ function updateSidebarStatus(step, rows) {
     dot.classList.remove("loaded");
     count.classList.remove("loaded");
     count.textContent = "";
+  }
+  if (step === 1) {
+    var label = $("sideStatus1Label");
+    if (label) {
+      label.textContent = (rows !== null && rows >= 0)
+        ? rows + " history records loaded."
+        : "Not loaded — go to Data Import tab.";
+    }
   }
 }
 
