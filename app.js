@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.07";
+const APP_VERSION = "v1.32.08";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2969,7 +2969,7 @@ function invSetScanMode(mode) {
     var applyBtn = $("invQtyKeyApplyBtn"); if (applyBtn) applyBtn.textContent = "✓ Apply";
     var lbl = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "Qty:";
     var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
-    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
+    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
     if (rip) rip.classList.add("hidden");
 
   } else if (mode === "reel") {
@@ -3002,7 +3002,7 @@ function invSetScanMode(mode) {
     var applyBtn = $("invQtyKeyApplyBtn"); if (applyBtn) applyBtn.textContent = "✓ Apply";
     var lbl = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "Qty:";
     var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
-    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
+    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
   }
 
   renderInvStatusBar();
@@ -3050,7 +3050,7 @@ function invHideQtyKeypad() {
     var display = $("invQtyDisplay");
     if (display) { display.textContent = "1"; display.className = "inv-qty-display"; }
     var ctx = $("invQtyKeypadContext");
-    if (ctx) ctx.textContent = "Scan an item to begin.";
+    if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
   }
 }
 
@@ -3179,7 +3179,7 @@ function invQtyKeySkip() {
     invQtyKeypadRefreshReelTarget();
   } else {
     invQtyRefreshDisplay();
-    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
+    var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
   }
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
@@ -3322,7 +3322,7 @@ function invProcessScan() {
       invLastBulkEventId = null;
       invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
       var disp = $("invQtyDisplay"); if (disp) { disp.textContent = "1"; disp.className = "inv-qty-display"; }
-      var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin.";
+      var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
     }
   }
   invUpdateDetectedBadge("");
