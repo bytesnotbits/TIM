@@ -287,6 +287,8 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-btn-line { display: flex; gap: 8px; }
 .inv-scan-main-input { flex: 1; padding: 10px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 22px; font-family: monospace; font-weight: 600; }
 .inv-scan-main-input:focus { border-color: #1d4ed8; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
+@keyframes scan-ready-flash { 0%,50% { outline:3px solid #16a34a; outline-offset:2px; box-shadow:0 0 0 5px rgba(22,163,74,.2); } 100% { outline:none; box-shadow:none; } }
+.inv-scan-main-input.scan-ready { animation:scan-ready-flash 0.75s ease-out forwards; }
 .inv-detected-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1e40af; margin: 4px 4px 4px 0; }
 .inv-detected-badge.unknown { background: #f1f5f9; color: #64748b; }
 .inv-detected-badge.exception { background: #fef2f2; color: #991b1b; }
@@ -340,6 +342,10 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-qty-keypad { background:#f8fafc; border:2px solid #e2e8f0; border-radius:12px; padding:11px 12px 10px; margin-top:0; }
 .inv-qty-keypad.mode-qty  { background:#eff6ff; border-color:#93c5fd; }
 .inv-qty-keypad.mode-reel { background:#f0fdf4; border-color:#86efac; }
+.inv-qty-keypad.qty-active { border-color:#1d4ed8; box-shadow:0 0 0 3px rgba(59,130,246,.22); }
+.inv-qty-keypad.qty-active .inv-qty-keypad-context { background:#eff6ff; border-color:#93c5fd; color:#1d4ed8; font-weight:600; }
+@keyframes qty-display-pulse { 50% { box-shadow:0 0 0 4px rgba(59,130,246,.35); } }
+.inv-qty-display.qty-active { border-color:#1d4ed8; animation:qty-display-pulse 1s ease-in-out infinite; }
 .inv-qty-keypad-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
 .inv-qty-keypad-title { font-size:12px; font-weight:700; color:#475569; text-transform:uppercase; letter-spacing:.05em; }
 .inv-qty-keypad-context { font-size:11px; color:#475569; margin-bottom:8px; padding:5px 8px; background:white; border:1px solid #e5e7eb; border-radius:6px; line-height:1.35; min-height:28px; }

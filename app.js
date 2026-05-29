@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.08";
+const APP_VERSION = "v1.32.09";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3171,7 +3171,33 @@ function invQtyKeyClear() {
   invQtyRefreshDisplay();
 }
 
+function invEnterQtyMode() {
+  var kp = $("invQtyKeypad");
+  if (kp) kp.classList.add("qty-active");
+  var disp = $("invQtyDisplay");
+  if (disp) disp.classList.add("qty-active");
+  var ctx = $("invQtyKeypadContext");
+  if (ctx) ctx.textContent = "⌨  Ready for quantity — type digits, then Enter";
+  var si = $("invScanInput");
+  if (si) si.blur();
+}
+
+function invExitQtyMode() {
+  var kp = $("invQtyKeypad");
+  if (kp) kp.classList.remove("qty-active");
+  var disp = $("invQtyDisplay");
+  if (disp) disp.classList.remove("qty-active");
+  var si = $("invScanInput");
+  if (si) {
+    si.classList.remove("scan-ready");
+    void si.offsetWidth;
+    si.classList.add("scan-ready");
+    setTimeout(function() { si.classList.remove("scan-ready"); }, 750);
+  }
+}
+
 function invQtyKeySkip() {
+  invExitQtyMode();
   invLastBulkEventId = null;
   invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   if (invScanMode === "reel") {
@@ -3207,6 +3233,7 @@ function invQtyKeyApply() {
     (evt.description ? " (" + evt.description + ")" : "") + ".", "ok");
 
   // Reset for next item — keypad stays visible in item mode
+  invExitQtyMode();
   invLastBulkEventId = null;
   invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   invQtyRefreshDisplay();
@@ -4481,6 +4508,9 @@ function invProcessOdooQuantCsv(text, fileName) {
       if (e.key === "Enter") {
         e.preventDefault();
         invProcessScan();
+      } else if (e.key === "Tab" && invLastBulkEventId && invQtyKeypadMode === "qty") {
+        e.preventDefault();
+        invEnterQtyMode();
       }
     });
   }
