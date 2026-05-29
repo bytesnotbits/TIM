@@ -129,6 +129,19 @@
         </div>
       </div>
 
+      <!-- Quants Baseline status (load via Data Import tab) -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus3Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus3Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Quants Baseline</div>
+          <p class="sidebar-p">Odoo on-hand quantities for gap analysis.</p>
+        </div>
+      </div>
+
     </div><!-- /sidebar-setup-scroll -->
 
     <!-- Admin section -->
@@ -226,7 +239,24 @@
         <button id="invClearQuantMapBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearOdooQuantMap()">Clear loaded data</button>
       </div>
 
-      <!-- 4. Product Catalog Upload -->
+      <!-- 4. Quants Baseline -->
+      <div class="card import-card">
+        <div class="import-card-when">Pre-count &amp; Recount · Load before each inventory cycle</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#d97706;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
+          Quants Baseline
+        </h3>
+        <p class="small">Load the current Odoo on-hand quantities to enable gap analysis before finalizing a count and to provide the expected baseline during recounts. In Odoo, go to <strong>Inventory → Products → Quants</strong>, select all, and export as CSV. Importing a new file updates any matching records and leaves the rest untouched.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Inventory → Products → Quants → Export)</div>
+        <div id="invQuantsBaselineZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Quants CSV here, or click to browse</div>
+          <input type="file" accept=".csv" onchange="invImportQuantsBaseline(this.files[0]);this.value='';" />
+          <span id="invQuantsBaselineStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="invQuantsBaselineClearBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearQuantsBaseline()">Clear loaded data</button>
+      </div>
+
+      <!-- 5. Product Catalog Upload -->
       <div class="card import-card">
         <div class="import-card-when">Occasional · When adding or updating products</div>
         <h3 class="import-card-title">
@@ -714,6 +744,105 @@
             </table>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Gap Analysis -->
+    <div class="card" id="invGapAnalysisCard">
+      <div class="collapsible-header" id="invGapAnalysisHeader" onclick="toggleCollapsible('invGapAnalysisCollapse','invGapAnalysisHeader','invGapAnalysisChevron')">
+        <h2 style="margin:0;">Gap Analysis <span id="invGapBadge" class="small" style="font-weight:400;"></span></h2>
+        <svg id="invGapAnalysisChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="invGapAnalysisCollapse" class="collapsible-body" style="display:none;">
+        <p class="small">Compare this session's scans against the Quants baseline to find missing, unexpected, or mismatched items before finalizing.</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+          <button id="invRunGapBtn" onclick="invRunGapAnalysis()">Run Variance Report</button>
+          <span id="invGapRunAt" class="small" style="color:#94a3b8;"></span>
+        </div>
+        <div id="invGapResults" style="display:none;">
+          <!-- Summary bar -->
+          <div id="invGapSummaryBar" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+
+          <!-- Serialized gaps -->
+          <div id="invGapSerialSection" style="margin-bottom:14px;">
+            <div class="collapsible-header" id="invGapSerialHeader" onclick="toggleCollapsible('invGapSerialBody','invGapSerialHeader','invGapSerialChevron')" style="padding:8px 0;border-bottom:1px solid #e2e8f0;">
+              <b id="invGapSerialTitle" style="font-size:13px;">Serialized</b>
+              <svg id="invGapSerialChevron" class="collapsible-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div id="invGapSerialBody" class="collapsible-body" style="display:none;padding-top:8px;">
+              <div class="scroll"><table id="invGapSerialTable"><tbody></tbody></table></div>
+            </div>
+          </div>
+
+          <!-- Bulk gaps -->
+          <div id="invGapBulkSection" style="margin-bottom:14px;">
+            <div class="collapsible-header" id="invGapBulkHeader" onclick="toggleCollapsible('invGapBulkBody','invGapBulkHeader','invGapBulkChevron')" style="padding:8px 0;border-bottom:1px solid #e2e8f0;">
+              <b id="invGapBulkTitle" style="font-size:13px;">Bulk</b>
+              <svg id="invGapBulkChevron" class="collapsible-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div id="invGapBulkBody" class="collapsible-body" style="display:none;padding-top:8px;">
+              <div class="scroll"><table id="invGapBulkTable"><tbody></tbody></table></div>
+            </div>
+          </div>
+
+          <!-- Reel gaps -->
+          <div id="invGapReelSection" style="margin-bottom:4px;">
+            <div class="collapsible-header" id="invGapReelHeader" onclick="toggleCollapsible('invGapReelBody','invGapReelHeader','invGapReelChevron')" style="padding:8px 0;border-bottom:1px solid #e2e8f0;">
+              <b id="invGapReelTitle" style="font-size:13px;">Reels</b>
+              <svg id="invGapReelChevron" class="collapsible-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div id="invGapReelBody" class="collapsible-body" style="display:none;padding-top:8px;">
+              <div class="scroll"><table id="invGapReelTable"><tbody></tbody></table></div>
+            </div>
+          </div>
+
+          <!-- Create recount from gap results -->
+          <div id="rcFromGapBtn" style="display:none;margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0;">
+            <button onclick="rcOpenCreateFromGaps()" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;">&#43; Create Recount Session from These Gaps</button>
+            <p class="small" style="margin:6px 0 0;color:#64748b;">Creates a new recount session pre-loaded with all gaps above, ready for NISC qty entry and physical recount.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 3: Recount Sessions -->
+    <div class="card" id="rcSessionsCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;">
+        <h2 style="margin:0;">Recount Sessions</h2>
+        <button onclick="rcShowCreate(false)" id="rcNewBtn" class="secondary">+ New Session</button>
+      </div>
+      <p class="small" style="margin:8px 0 0;">Post-submission recount tracking. Create sessions from gap analysis results or manually, enter NISC expected quantities, and drive physical recounts.</p>
+
+      <!-- Create form (hidden until activated) -->
+      <div id="rcCreateForm" class="hidden" style="margin-top:14px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+        <h3 style="margin:0 0 12px;font-size:15px;">New Recount Session</h3>
+        <div style="display:grid;gap:10px;max-width:480px;">
+          <label>Session Name *
+            <input id="rcCreateName" type="text" placeholder="Recount #1 – May 2026" />
+          </label>
+          <label>Counter(s) <span class="small" style="color:#94a3b8;">comma-separated</span>
+            <input id="rcCreateCounters" type="text" placeholder="Joe Herring, Maria Smith" />
+          </label>
+          <label>Parent Inventory Session
+            <input id="rcCreateParent" type="text" readonly style="background:#f1f5f9;color:#64748b;cursor:default;" />
+          </label>
+          <div id="rcCreateGapSummary" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 12px;font-size:13px;"></div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="rcConfirmCreate()">Create Session</button>
+            <button class="secondary" onclick="rcCancelCreate()">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session list (default view) -->
+      <div id="rcListView" style="margin-top:12px;">
+        <div id="rcSessionList"></div>
+      </div>
+
+      <!-- Session detail view -->
+      <div id="rcDetailView" class="hidden" style="margin-top:12px;">
+        <button class="secondary" onclick="rcShowList()" style="margin-bottom:14px;font-size:13px;">&#8592; Back to Sessions</button>
+        <div id="rcDetailContent"></div>
       </div>
     </div>
 
@@ -1289,6 +1418,40 @@
       </div>
     </div>
   </div>
+
+<!-- Recount Workflow Modal -->
+<div id="rcWorkflowModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:540px;">
+    <div class="modal-header">
+      <div>
+        <h2 id="rcWfTitle" style="margin:0;font-size:17px;">Physical Recount</h2>
+        <p id="rcWfSubtitle" class="small" style="margin:4px 0 0;color:#475569;"></p>
+      </div>
+      <button onclick="rcCloseWorkflow()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+    </div>
+    <div class="modal-body" id="rcWfBody" style="padding:18px;"></div>
+    <div style="padding:12px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+      <button class="secondary" onclick="rcCloseWorkflow()" style="margin:0;">Cancel</button>
+      <button id="rcWfConfirmBtn" onclick="rcWorkflowConfirm()" style="margin:0;">Confirm Recount</button>
+    </div>
+  </div>
+</div>
+
+<div id="rcMovementModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-header">
+      <div>
+        <h2 id="rcMvTitle" style="margin:0;font-size:17px;">Movement Records</h2>
+        <p id="rcMvSubtitle" class="small" style="margin:4px 0 0;color:#475569;"></p>
+      </div>
+      <button onclick="rcCloseMovementPanel()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+    </div>
+    <div class="modal-body" id="rcMvBody" style="padding:18px;max-height:72vh;overflow-y:auto;"></div>
+    <div style="padding:12px 18px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;">
+      <button class="secondary" onclick="rcCloseMovementPanel()" style="margin:0;">Close</button>
+    </div>
+  </div>
+</div>
 
 <div id="prodSaveToast" class="prod-save-toast"></div>
 

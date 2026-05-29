@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.09";
+const APP_VERSION = "v2.00.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8,7 +8,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {} };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [] };
 let PRODUCT_MAP = appData.product_map;
 let BARCODE_MAP = appData.barcode_map;
 let history = appData.history;
@@ -844,6 +844,14 @@ function loadSourceData(parsed, fileName = "selected JSON") {
 
   if (Array.isArray(parsed.inventory_sessions)) appData.inventory_sessions = parsed.inventory_sessions;
   if (Array.isArray(parsed.inventory_events))   appData.inventory_events   = parsed.inventory_events;
+  if (Array.isArray(parsed.odoo_quants) && parsed.odoo_quants.length) {
+    appData.odoo_quants = parsed.odoo_quants;
+    invQuantsBaseline = parsed.odoo_quants;
+    invRenderQuantsBaselineStatus();
+  }
+  if (Array.isArray(parsed.recount_sessions))  appData.recount_sessions  = parsed.recount_sessions;
+  if (Array.isArray(parsed.recount_movements)) appData.recount_movements = parsed.recount_movements;
+  if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -1715,8 +1723,8 @@ function switchTab(name) {
   if (name === "inventory" && !invTabOpenedOnce) {
     invTabOpenedOnce = true;
     invShowStorageHint();
-    // Initialize keypad display state on first open
     invSetScanMode(invScanMode || "auto");
+    rcLoadStorage();
   }
   if (name === "products") prodRenderList();
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
@@ -4496,6 +4504,166 @@ function invProcessOdooQuantCsv(text, fileName) {
   if (statusEl) statusEl.textContent = loaded + " record" + (loaded !== 1 ? "s" : "") + " loaded from " + (fileName || "file") + ".";
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// QUANTS BASELINE — Odoo on-hand expected quantities for gap analysis
+// ═══════════════════════════════════════════════════════════════════════
+
+var invQuantsBaseline = [];
+var invQuantsBaselineImportedAt = null;
+const INV_QUANTS_BASELINE_KEY = "tim_odoo_quants_baseline_v1";
+
+function invRenderQuantsBaselineStatus() {
+  var count = invQuantsBaseline.length;
+  var clearBtn = $("invQuantsBaselineClearBtn");
+  if (!count) {
+    setDropState("invQuantsBaselineZone", "invQuantsBaselineStatus", false, "Waiting for upload");
+    updateSidebarStatus(3, null);
+    if (clearBtn) clearBtn.style.display = "none";
+  } else {
+    var msg = count.toLocaleString() + " quant record" + (count !== 1 ? "s" : "") + " loaded";
+    if (invQuantsBaselineImportedAt) msg += " · " + new Date(invQuantsBaselineImportedAt).toLocaleDateString();
+    setDropState("invQuantsBaselineZone", "invQuantsBaselineStatus", true, msg);
+    updateSidebarStatus(3, count);
+    if (clearBtn) clearBtn.style.display = "";
+  }
+}
+
+function invSaveQuantsBaseline() {
+  TimDB.set(INV_QUANTS_BASELINE_KEY, { quants: invQuantsBaseline, importedAt: invQuantsBaselineImportedAt }).catch(function(){});
+  appData.odoo_quants = invQuantsBaseline;
+}
+
+function invLoadQuantsBaseline() {
+  return TimDB.get(INV_QUANTS_BASELINE_KEY).then(function(saved) {
+    if (saved && Array.isArray(saved.quants) && saved.quants.length) {
+      invQuantsBaseline = saved.quants;
+      invQuantsBaselineImportedAt = saved.importedAt || null;
+      appData.odoo_quants = invQuantsBaseline;
+      invRenderQuantsBaselineStatus();
+    }
+  }).catch(function(){});
+}
+
+function invClearQuantsBaseline() {
+  invQuantsBaseline = [];
+  invQuantsBaselineImportedAt = null;
+  appData.odoo_quants = [];
+  TimDB.remove(INV_QUANTS_BASELINE_KEY).catch(function(){});
+  invRenderQuantsBaselineStatus();
+}
+
+function invImportQuantsBaseline(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try { invProcessQuantsBaselineCsv(e.target.result, file.name); }
+    catch(err) { alert("Quants baseline import failed: " + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+function invProcessQuantsBaselineCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+
+  function colIdx() {
+    var names = Array.prototype.slice.call(arguments);
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i].toLowerCase().trim();
+      var idx = header.findIndex(function(h) { return h.trim().toLowerCase() === n; });
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+
+  var idIdx       = colIdx("id");
+  var prodIdx     = colIdx("product_id");
+  var locIdx      = colIdx("location_id");
+  var lotIdx      = colIdx("lot_id");
+  var qtyIdx      = colIdx("quantity");
+  var invQtyIdx   = colIdx("inventory_quantity");
+  var dateIdx     = colIdx("accounting_date");
+
+  if (idIdx === -1)   throw new Error("Column 'id' not found. Export Quants from Odoo: Inventory → Products → Quants.");
+  if (prodIdx === -1) throw new Error("Column 'product_id' not found.");
+  if (locIdx === -1)  throw new Error("Column 'location_id' not found.");
+  if (qtyIdx === -1)  throw new Error("Column 'quantity' not found.");
+
+  // Build map of existing quants keyed by itemNumber||locationId||lotId for upsert
+  var existingMap = {};
+  invQuantsBaseline.forEach(function(q) {
+    existingMap[q.itemNumber + "||" + q.locationId + "||" + q.lotId] = true;
+  });
+
+  // Parse [itemNumber] description format from product_id
+  function parseProductId(raw) {
+    var m = raw.match(/^\[([^\]]+)\]\s*(.*)/);
+    if (m) return { itemNumber: m[1].trim(), description: m[2].trim() };
+    return { itemNumber: raw.trim(), description: "" };
+  }
+
+  var newRows = [];
+  var importedAt = new Date().toISOString();
+
+  for (var i = 1; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var cells = bcParseCsvRow(line);
+
+    var quantId     = (idIdx     >= 0 ? cells[idIdx]     : "").trim();
+    var rawProd     = (prodIdx   >= 0 ? cells[prodIdx]   : "").trim();
+    var locationId  = (locIdx    >= 0 ? cells[locIdx]    : "").trim();
+    var lotId       = (lotIdx    >= 0 ? cells[lotIdx]    : "").trim();
+    var odooQty     = qtyIdx     >= 0 ? (parseFloat(cells[qtyIdx])    || 0) : 0;
+    var inventoryQty = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx]) || 0) : 0;
+    var accountingDate = (dateIdx >= 0 ? cells[dateIdx] : "").trim();
+
+    if (!quantId || !rawProd) continue;
+
+    var prod = parseProductId(rawProd);
+    newRows.push({
+      quantId:        quantId,
+      itemNumber:     prod.itemNumber,
+      description:    prod.description,
+      locationId:     locationId,
+      lotId:          lotId,
+      odooQty:        odooQty,
+      inventoryQty:   inventoryQty,
+      accountingDate: accountingDate,
+      importedAt:     importedAt
+    });
+  }
+
+  if (!newRows.length)
+    throw new Error("No valid rows found. Verify this is an Odoo Quants export with 'id', 'product_id', 'location_id', and 'quantity' columns.");
+
+  // Upsert: replace existing entries whose itemNumber+locationId+lotId match any incoming row,
+  // then append all incoming rows (deduplicated by quantId)
+  var incomingKeys = {};
+  var incomingByQuantId = {};
+  newRows.forEach(function(r) {
+    incomingKeys[r.itemNumber + "||" + r.locationId + "||" + r.lotId] = true;
+    incomingByQuantId[r.quantId] = r;
+  });
+
+  // Keep existing rows not touched by this import
+  var kept = invQuantsBaseline.filter(function(q) {
+    return !incomingKeys[q.itemNumber + "||" + q.locationId + "||" + q.lotId];
+  });
+
+  invQuantsBaseline = kept.concat(newRows);
+  invQuantsBaselineImportedAt = importedAt;
+  invSaveQuantsBaseline();
+  invRenderQuantsBaselineStatus();
+
+  var statusEl = $("invQuantsBaselineStatus");
+  if (statusEl) {
+    statusEl.textContent = newRows.length.toLocaleString() + " record" + (newRows.length !== 1 ? "s" : "") +
+      " imported from " + (fileName || "file") + ". Total baseline: " + invQuantsBaseline.length.toLocaleString() + " records.";
+  }
+}
+
 // -- Scan input keyboard handler -----------------------------------
 // Script runs at end of body so DOM is already available here.
 (function() {
@@ -4695,7 +4863,10 @@ function buildExportPayload() {
     inventory_events: (appData.inventory_events || []).filter(function(e) {
       return !e.timestamp || e.timestamp >= cutoffISO;
     }),
-    barcode_map: BARCODE_MAP
+    barcode_map: BARCODE_MAP,
+    odoo_quants: appData.odoo_quants || [],
+    recount_sessions:  appData.recount_sessions  || [],
+    recount_movements: appData.recount_movements || []
   };
 }
 
@@ -5001,6 +5172,1375 @@ function prodExportMasterJson() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// GAP ANALYSIS — Phase 2: pre-submission comparison vs Quants baseline
+// ═══════════════════════════════════════════════════════════════════════
+
+function invRunGapAnalysis() {
+  if (!invSession) { alert("Start an inventory session first."); return; }
+  if (!invQuantsBaseline.length) { alert("Load a Quants baseline first (Setup → Quants Baseline)."); return; }
+
+  var report = invBuildGapReport();
+  invRenderGapReport(report);
+
+  var resultsEl = $("invGapResults");
+  if (resultsEl) resultsEl.style.display = "";
+
+  // Auto-expand the card
+  var body = $("invGapAnalysisCollapse");
+  var hdr  = $("invGapAnalysisHeader");
+  if (body && body.style.display === "none") {
+    toggleCollapsible("invGapAnalysisCollapse", "invGapAnalysisHeader", "invGapAnalysisChevron");
+  }
+
+  var runAt = $("invGapRunAt");
+  if (runAt) runAt.textContent = "Run at " + invFormatTime(new Date().toISOString());
+}
+
+function invBuildGapReport() {
+  var activeEvents = invEvents.filter(function(e) {
+    return e.status !== "voided" && e.eventType !== "void_event";
+  });
+
+  // Counted reels: normKey(reelNumber) → event
+  var countedReels = {};
+  // Counted serials: normKey(defCode+"||"+loc+"||"+lotName) → event
+  var countedSerials = {};
+  // Counted bulk: normKey(defCode+"||"+loc) → {defCode, loc, qty, description}
+  var countedBulk = {};
+
+  activeEvents.forEach(function(e) {
+    var f = (function(itemNumber) {
+      var pm = findProductMapMatch(itemNumber || "");
+      return (pm && pm.entry && pm.entry.default_code) ? pm.entry.default_code : (itemNumber || "");
+    })(e.itemNumber);
+    var defCode = normKey(f);
+    var loc     = normKey(e.location || "");
+
+    if (e.eventType === "cable_reel_count") {
+      var rn = normKey(e.reelNumber || e.scannedValue || "");
+      if (rn) countedReels[rn] = e;
+    } else if (e.eventType === "serialized_device_scan") {
+      var lot = normKey(e.serial || e.fsan || e.scannedValue || "");
+      countedSerials[defCode + "||" + loc + "||" + lot] = e;
+    } else if (e.eventType === "bulk_quantity_count" || e.eventType === "box_scan") {
+      var bk = defCode + "||" + loc;
+      if (!countedBulk[bk]) {
+        countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "" };
+      }
+      countedBulk[bk].qty += (e.eventType === "box_scan")
+        ? (e.resolvedDeviceCount || e.qty || 1)
+        : (e.qty || 1);
+    }
+  });
+
+  var serialGaps = [];
+  var bulkGaps   = [];
+  var reelGaps   = [];
+
+  // Track which counted items matched a quant
+  var matchedSerials = {};
+  var matchedBulk    = {};
+  var matchedReels   = {};
+
+  invQuantsBaseline.forEach(function(q) {
+    var defCode = normKey(q.itemNumber);
+    var loc     = normKey(q.locationId);
+
+    if (!q.lotId) {
+      // ── Bulk quant ──
+      var bk      = defCode + "||" + loc;
+      matchedBulk[bk] = true;
+      var counted = countedBulk[bk];
+      if (!counted) {
+        bulkGaps.push({ gapType: "not_counted", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: null });
+      } else if (counted.qty !== q.odooQty) {
+        bulkGaps.push({ gapType: "qty_mismatch", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: counted.qty });
+      }
+    } else {
+      var lotNorm = normKey(q.lotId);
+      if (countedReels[lotNorm]) {
+        // ── Reel quant ──
+        matchedReels[lotNorm] = true;
+        var reelEvt  = countedReels[lotNorm];
+        var countedFt = reelEvt.totalAvailableFt != null ? reelEvt.totalAvailableFt : 0;
+        if (Math.abs(countedFt - q.odooQty) > 0.5) {
+          reelGaps.push({ gapType: "footage_diff", reelNumber: q.lotId, itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooFt: q.odooQty, countedFt: countedFt });
+        }
+      } else {
+        // ── Serialized quant (or uncounted reel) ──
+        var sKey = defCode + "||" + loc + "||" + lotNorm;
+        matchedSerials[sKey] = true;
+        if (!countedSerials[sKey]) {
+          serialGaps.push({ gapType: "missing", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId });
+        }
+      }
+    }
+  });
+
+  // Counted serials with no matching quant
+  Object.keys(countedSerials).forEach(function(key) {
+    if (!matchedSerials[key]) {
+      var e = countedSerials[key];
+      serialGaps.push({ gapType: "unexpected", itemNumber: e.itemNumber || "", description: e.description || "", serial: e.serial || e.fsan || e.scannedValue || "", location: e.location || "" });
+    }
+  });
+
+  // Counted bulk with no matching quant
+  Object.keys(countedBulk).forEach(function(bk) {
+    if (!matchedBulk[bk]) {
+      var r = countedBulk[bk];
+      bulkGaps.push({ gapType: "not_in_quants", itemNumber: r.defCode, description: r.description, location: r.loc, odooQty: null, countedQty: r.qty });
+    }
+  });
+
+  // Counted reels with no matching quant
+  Object.keys(countedReels).forEach(function(rn) {
+    if (!matchedReels[rn]) {
+      var e = countedReels[rn];
+      reelGaps.push({ gapType: "not_in_quants", reelNumber: e.reelNumber || e.scannedValue || rn, itemNumber: e.itemNumber || "", description: e.description || "", location: e.location || "", countedFt: e.totalAvailableFt });
+    }
+  });
+
+  return { serialGaps: serialGaps, bulkGaps: bulkGaps, reelGaps: reelGaps };
+}
+
+function invRenderGapReport(report) {
+  var totalGaps = report.serialGaps.length + report.bulkGaps.length + report.reelGaps.length;
+
+  // Badge on header
+  var badge = $("invGapBadge");
+  if (badge) {
+    if (totalGaps === 0) {
+      badge.textContent = "— no gaps found";
+      badge.style.color = "#16a34a";
+    } else {
+      badge.textContent = "— " + totalGaps + " gap" + (totalGaps !== 1 ? "s" : "");
+      badge.style.color = "#b45309";
+    }
+  }
+
+  // Summary bar chips
+  var bar = $("invGapSummaryBar");
+  if (bar) {
+    function chip(label, count, color) {
+      return '<span style="display:inline-flex;align-items:center;gap:5px;background:' + (count ? "#fef3c7" : "#f0fdf4") + ';border:1px solid ' + (count ? "#fcd34d" : "#bbf7d0") + ';border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:' + (count ? "#92400e" : "#166534") + ';">' +
+        '<span>' + label + '</span><span style="font-size:14px;">' + count + '</span></span>';
+    }
+    var missingSerial   = report.serialGaps.filter(function(g){ return g.gapType === "missing"; }).length;
+    var unexpectedSerial = report.serialGaps.filter(function(g){ return g.gapType === "unexpected"; }).length;
+    var bulkMismatch    = report.bulkGaps.filter(function(g){ return g.gapType === "qty_mismatch"; }).length;
+    var bulkNotCounted  = report.bulkGaps.filter(function(g){ return g.gapType === "not_counted"; }).length;
+    var bulkExtra       = report.bulkGaps.filter(function(g){ return g.gapType === "not_in_quants"; }).length;
+    var reelFtDiff      = report.reelGaps.filter(function(g){ return g.gapType === "footage_diff"; }).length;
+    var reelExtra       = report.reelGaps.filter(function(g){ return g.gapType === "not_in_quants"; }).length;
+    bar.innerHTML =
+      chip("Missing serials", missingSerial) +
+      chip("Unexpected serials", unexpectedSerial) +
+      chip("Bulk qty mismatch", bulkMismatch) +
+      chip("Bulk not counted", bulkNotCounted) +
+      chip("Bulk not in quants", bulkExtra) +
+      chip("Reel footage diff", reelFtDiff) +
+      chip("Reels not in quants", reelExtra);
+  }
+
+  // Serialized table
+  var serialTitle = $("invGapSerialTitle");
+  if (serialTitle) serialTitle.textContent = "Serialized (" + report.serialGaps.length + " gap" + (report.serialGaps.length !== 1 ? "s" : "") + ")";
+  var serialTbl = $("invGapSerialTable");
+  if (serialTbl) {
+    if (!report.serialGaps.length) {
+      serialTbl.outerHTML = '<table id="invGapSerialTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No serialized gaps</td></tr></tbody></table>';
+    } else {
+      var rows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Serial / FSAN</th><th>Location</th></tr></thead><tbody>' +
+        report.serialGaps.map(function(g) {
+          var typeLabel = g.gapType === "missing" ? '<span style="color:#b91c1c;font-weight:600;">Missing</span>' : '<span style="color:#d97706;font-weight:600;">Unexpected</span>';
+          return '<tr><td>' + typeLabel + '</td><td>' + escapeHtml(g.itemNumber) + '</td><td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td><td style="font-family:monospace;">' + escapeHtml(g.serial) + '</td><td>' + escapeHtml(g.location) + '</td></tr>';
+        }).join("") + '</tbody>';
+      serialTbl.outerHTML = '<table id="invGapSerialTable">' + rows + '</table>';
+    }
+  }
+
+  // Bulk table
+  var bulkTitle = $("invGapBulkTitle");
+  if (bulkTitle) bulkTitle.textContent = "Bulk (" + report.bulkGaps.length + " gap" + (report.bulkGaps.length !== 1 ? "s" : "") + ")";
+  var bulkTbl = $("invGapBulkTable");
+  if (bulkTbl) {
+    if (!report.bulkGaps.length) {
+      bulkTbl.outerHTML = '<table id="invGapBulkTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No bulk gaps</td></tr></tbody></table>';
+    } else {
+      var bulkTypeLabel = { qty_mismatch: '<span style="color:#d97706;font-weight:600;">Qty mismatch</span>', not_counted: '<span style="color:#b91c1c;font-weight:600;">Not counted</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>' };
+      var brows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Qty</th><th>Counted Qty</th><th>Diff</th></tr></thead><tbody>' +
+        report.bulkGaps.map(function(g) {
+          var diff = (g.odooQty != null && g.countedQty != null) ? (g.countedQty - g.odooQty) : "—";
+          var diffStyle = (typeof diff === "number" && diff !== 0) ? (diff > 0 ? "color:#16a34a;" : "color:#b91c1c;") : "";
+          var diffStr = typeof diff === "number" ? (diff > 0 ? "+" + diff : String(diff)) : diff;
+          return '<tr>' +
+            '<td>' + (bulkTypeLabel[g.gapType] || g.gapType) + '</td>' +
+            '<td>' + escapeHtml(g.itemNumber) + '</td>' +
+            '<td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td>' +
+            '<td>' + escapeHtml(g.location) + '</td>' +
+            '<td style="text-align:right;">' + (g.odooQty != null ? g.odooQty : "—") + '</td>' +
+            '<td style="text-align:right;">' + (g.countedQty != null ? g.countedQty : "—") + '</td>' +
+            '<td style="text-align:right;' + diffStyle + '">' + diffStr + '</td>' +
+            '</tr>';
+        }).join("") + '</tbody>';
+      bulkTbl.outerHTML = '<table id="invGapBulkTable">' + brows + '</table>';
+    }
+  }
+
+  // Reel table
+  var reelTitle = $("invGapReelTitle");
+  if (reelTitle) reelTitle.textContent = "Reels (" + report.reelGaps.length + " gap" + (report.reelGaps.length !== 1 ? "s" : "") + ")";
+  var reelTbl = $("invGapReelTable");
+  if (reelTbl) {
+    if (!report.reelGaps.length) {
+      reelTbl.outerHTML = '<table id="invGapReelTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No reel gaps</td></tr></tbody></table>';
+    } else {
+      var reelTypeLabel = { footage_diff: '<span style="color:#d97706;font-weight:600;">Footage diff</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>' };
+      var rrows = '<thead><tr><th>Type</th><th>Reel #</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Ft</th><th>Counted Ft</th></tr></thead><tbody>' +
+        report.reelGaps.map(function(g) {
+          return '<tr>' +
+            '<td>' + (reelTypeLabel[g.gapType] || g.gapType) + '</td>' +
+            '<td style="font-family:monospace;">' + escapeHtml(g.reelNumber || "") + '</td>' +
+            '<td>' + escapeHtml(g.itemNumber) + '</td>' +
+            '<td style="max-width:180px;white-space:normal;">' + escapeHtml(g.description) + '</td>' +
+            '<td>' + escapeHtml(g.location) + '</td>' +
+            '<td style="text-align:right;">' + (g.odooFt != null ? g.odooFt : "—") + '</td>' +
+            '<td style="text-align:right;">' + (g.countedFt != null ? g.countedFt : "—") + '</td>' +
+            '</tr>';
+        }).join("") + '</tbody>';
+      reelTbl.outerHTML = '<table id="invGapReelTable">' + rrows + '</table>';
+    }
+  }
+
+  // Auto-expand sections that have gaps
+  if (report.serialGaps.length) {
+    var sb = $("invGapSerialBody");
+    if (sb && sb.style.display === "none") toggleCollapsible("invGapSerialBody", "invGapSerialHeader", "invGapSerialChevron");
+  }
+  if (report.bulkGaps.length) {
+    var bb = $("invGapBulkBody");
+    if (bb && bb.style.display === "none") toggleCollapsible("invGapBulkBody", "invGapBulkHeader", "invGapBulkChevron");
+  }
+  if (report.reelGaps.length) {
+    var rb = $("invGapReelBody");
+    if (rb && rb.style.display === "none") toggleCollapsible("invGapReelBody", "invGapReelHeader", "invGapReelChevron");
+  }
+
+  // Show/hide the "Create Recount Session" button based on whether there are gaps
+  var rcFromGapBtn = $("rcFromGapBtn");
+  if (rcFromGapBtn) rcFromGapBtn.style.display = totalGaps > 0 ? "" : "none";
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 3 — RECOUNT SESSIONS (DATA MODEL + SESSION CREATION)
+// ═══════════════════════════════════════════════════════════════════════
+
+const RC_STORAGE_KEY = "tim_recount_v1";
+
+let rcSessions        = [];    // array of recount_session objects
+let rcMovements       = [];    // array of recount_movement objects (Phase 5)
+let rcView            = "list"; // "list" | "create" | "detail"
+let rcActiveId        = null;  // recountId of session shown in detail view
+let rcCreateGapItems  = null;  // pre-populated items from a gap report
+
+// ── Persistence ────────────────────────────────────────────────────
+
+function rcSaveStorage() {
+  TimDB.set(RC_STORAGE_KEY, { sessions: rcSessions, movements: rcMovements, savedAt: invNow() }).catch(function(){});
+  appData.recount_sessions  = rcSessions;
+  appData.recount_movements = rcMovements;
+}
+
+function rcLoadStorage() {
+  return TimDB.get(RC_STORAGE_KEY).then(function(saved) {
+    if (saved) {
+      rcSessions  = Array.isArray(saved.sessions)  ? saved.sessions  : [];
+      rcMovements = Array.isArray(saved.movements) ? saved.movements : [];
+      appData.recount_sessions  = rcSessions;
+      appData.recount_movements = rcMovements;
+    }
+    rcRenderCard();
+  }).catch(function() { rcRenderCard(); });
+}
+
+// Called after master JSON is loaded into appData
+function rcLoadFromAppData() {
+  if (Array.isArray(appData.recount_sessions))  rcSessions  = appData.recount_sessions;
+  if (Array.isArray(appData.recount_movements)) rcMovements = appData.recount_movements;
+  rcSaveStorage();
+  rcRenderCard();
+}
+
+// ── ID generators ──────────────────────────────────────────────────
+
+function rcGenSessionId() {
+  var d = new Date().toISOString().slice(0, 16).replace(/[T:-]/g, "");
+  return "rc_" + d + "_" + Math.random().toString(36).slice(2, 5);
+}
+
+function rcGenItemId() {
+  return "rci_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5);
+}
+
+// ── Open "create session" from gap report button ───────────────────
+
+function rcOpenCreateFromGaps() {
+  var report = invBuildGapReport();
+  var totalGaps = report.serialGaps.length + report.bulkGaps.length + report.reelGaps.length;
+  if (!totalGaps) { alert("The variance report shows no gaps."); return; }
+
+  rcCreateGapItems = {
+    serialized: report.serialGaps.map(function(g) {
+      return { rcItemId: rcGenItemId(), itemNumber: g.itemNumber || "", description: g.description || "", location: g.location || "", gapType: g.gapType, serial: g.serial || "", niscExpectedQty: null, status: "pending" };
+    }),
+    bulk: report.bulkGaps.map(function(g) {
+      return { rcItemId: rcGenItemId(), itemNumber: g.itemNumber || "", description: g.description || "", location: g.location || "", gapType: g.gapType, odooQty: g.odooQty != null ? g.odooQty : null, countedQty: g.countedQty != null ? g.countedQty : null, niscExpectedQty: null, status: "pending" };
+    }),
+    reels: report.reelGaps.map(function(g) {
+      return { rcItemId: rcGenItemId(), reelNumber: g.reelNumber || "", itemNumber: g.itemNumber || "", description: g.description || "", location: g.location || "", gapType: g.gapType, odooFt: g.odooFt != null ? g.odooFt : null, countedFt: g.countedFt != null ? g.countedFt : null, niscExpectedQty: null, status: "pending" };
+    })
+  };
+
+  // Scroll to and open the Recount Sessions card
+  var card = $("rcSessionsCard");
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+  rcShowCreate(true);
+}
+
+// ── View transitions ───────────────────────────────────────────────
+
+function rcShowCreate(fromGaps) {
+  rcView = "create";
+  rcRenderCard();
+
+  // Auto-fill name
+  var n = $("rcCreateName");
+  if (n) {
+    var num = rcSessions.length + 1;
+    var mo  = new Date().toLocaleString("default", { month: "long", year: "numeric" });
+    n.value = "Recount #" + num + " – " + mo;
+    setTimeout(function(){ if (n) { n.focus(); n.select(); } }, 50);
+  }
+  var co = $("rcCreateCounters");
+  if (co && !co.value) co.value = timGetUsername() || "";
+
+  var par = $("rcCreateParent");
+  if (par) par.value = invSession ? (invSession.sessionName || invSession.sessionId) : "(no active inventory session)";
+
+  var gapSum = $("rcCreateGapSummary");
+  if (gapSum) {
+    if (fromGaps && rcCreateGapItems) {
+      var s = rcCreateGapItems.serialized.length;
+      var b = rcCreateGapItems.bulk.length;
+      var r = rcCreateGapItems.reels.length;
+      gapSum.style.display = "";
+      gapSum.innerHTML = "<b>Pre-populating from variance report:</b> " + s + " serialized, " + b + " bulk, " + r + " reel gap" + (r !== 1 ? "s" : "") + " — " + (s + b + r) + " items total.";
+    } else {
+      gapSum.style.display = "none";
+      rcCreateGapItems = null;
+    }
+  }
+}
+
+function rcCancelCreate() {
+  rcCreateGapItems = null;
+  rcView = "list";
+  rcRenderCard();
+}
+
+function rcConfirmCreate() {
+  var nameEl = $("rcCreateName");
+  var name = nameEl ? nameEl.value.trim() : "";
+  if (!name) { alert("Enter a session name."); if (nameEl) nameEl.focus(); return; }
+
+  var countersRaw = $("rcCreateCounters") ? $("rcCreateCounters").value.trim() : "";
+  var counters = countersRaw ? countersRaw.split(",").map(function(s){ return s.trim(); }).filter(Boolean) : [];
+
+  var parentId = invSession ? invSession.sessionId : null;
+  var cycleId  = invSession ? (invSession.cycleId || invSession.sessionId) : null;
+  var items    = rcCreateGapItems || { serialized: [], bulk: [], reels: [] };
+
+  var session = {
+    recountId:   rcGenSessionId(),
+    recountName: name,
+    cycleId:     cycleId,
+    parentId:    parentId,
+    counters:    counters,
+    createdAt:   invNow(),
+    status:      "active",
+    closedAt:    null,
+    items:       items
+  };
+
+  rcSessions.push(session);
+  rcCreateGapItems = null;
+  rcSaveStorage();
+
+  rcActiveId = session.recountId;
+  rcView = "detail";
+  rcRenderCard();
+}
+
+function rcShowList() {
+  rcView    = "list";
+  rcActiveId = null;
+  rcRenderCard();
+}
+
+function rcShowDetail(recountId) {
+  rcView    = "detail";
+  rcActiveId = recountId;
+  rcRenderCard();
+}
+
+// ── Card rendering ─────────────────────────────────────────────────
+
+function rcRenderCard() {
+  var createForm = $("rcCreateForm");
+  var listView   = $("rcListView");
+  var detailView = $("rcDetailView");
+  if (!listView) return;
+
+  if (rcView === "create") {
+    if (createForm) createForm.classList.remove("hidden");
+    listView.classList.add("hidden");
+    if (detailView) detailView.classList.add("hidden");
+    // rcShowCreate fills fields — called separately
+  } else if (rcView === "detail") {
+    if (createForm) createForm.classList.add("hidden");
+    listView.classList.add("hidden");
+    if (detailView) { detailView.classList.remove("hidden"); rcRenderDetail(); }
+  } else {
+    if (createForm) createForm.classList.add("hidden");
+    listView.classList.remove("hidden");
+    if (detailView) detailView.classList.add("hidden");
+    rcRenderList();
+  }
+}
+
+function rcRenderList() {
+  var el = $("rcSessionList");
+  if (!el) return;
+  if (!rcSessions.length) {
+    el.innerHTML = '<div style="color:#94a3b8;padding:20px;text-align:center;border:1px dashed #c7d2fe;border-radius:8px;margin-top:10px;">No recount sessions yet. Run the <b>Variance Report</b> above and click <b>Create Recount Session</b>, or click <b>+ New Session</b> to create one manually.</div>';
+    return;
+  }
+  el.innerHTML = rcSessions.slice().reverse().map(function(s) {
+    var total = s.items.serialized.length + s.items.bulk.length + s.items.reels.length;
+    var pending = [].concat(s.items.serialized, s.items.bulk, s.items.reels).filter(function(i){ return i.status === "pending"; }).length;
+    var date  = s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "";
+    var statusBadge = s.status === "active"
+      ? '<span style="background:#dbeafe;color:#1d4ed8;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Active</span>'
+      : '<span style="background:#f1f5f9;color:#64748b;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Closed</span>';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;">' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-weight:600;font-size:14px;">' + escapeHtml(s.recountName) + '</div>' +
+        '<div class="small" style="color:#64748b;margin-top:2px;">' + date +
+          (s.counters.length ? ' &bull; ' + escapeHtml(s.counters.join(', ')) : '') +
+          ' &bull; ' + (total - pending) + '/' + total + ' addressed' +
+        '</div>' +
+      '</div>' +
+      statusBadge +
+      '<button class="secondary" onclick="rcShowDetail(\'' + s.recountId + '\')" style="padding:5px 12px;font-size:13px;">View</button>' +
+    '</div>';
+  }).join("");
+}
+
+function rcRenderDetail() {
+  var el = $("rcDetailContent");
+  if (!el) return;
+  var session = rcSessions.find(function(s){ return s.recountId === rcActiveId; });
+  if (!session) { el.innerHTML = "<p>Session not found.</p>"; return; }
+
+  var total   = session.items.serialized.length + session.items.bulk.length + session.items.reels.length;
+  var pending = [].concat(session.items.serialized, session.items.bulk, session.items.reels).filter(function(i){ return i.status === "pending"; }).length;
+
+  var html = "";
+
+  // Session header info
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">' +
+    '<div>' +
+      '<h3 style="margin:0 0 4px;">' + escapeHtml(session.recountName) + '</h3>' +
+      '<div class="small" style="color:#64748b;">' +
+        'Created ' + (session.createdAt ? new Date(session.createdAt).toLocaleString() : '') +
+        (session.counters.length ? ' &bull; ' + escapeHtml(session.counters.join(', ')) : '') +
+      '</div>' +
+      (session.parentId ? '<div class="small" style="color:#6366f1;margin-top:2px;">Parent session: ' + escapeHtml(session.parentId) + '</div>' : '') +
+    '</div>' +
+    '<div style="text-align:right;white-space:nowrap;display:flex;flex-direction:column;align-items:flex-end;gap:6px;">' +
+      '<span class="small" style="color:#475569;">' + (total - pending) + '/' + total + ' addressed</span>' +
+      '<button onclick="rcExportXlsx(\'' + session.recountId + '\')" style="font-size:12px;padding:4px 12px;">&#8595; Export XLSX</button>' +
+    '</div>' +
+  '</div>';
+
+  // Three discrepancy type sections
+  html += rcRenderDiscrepancySection(session, "serialized");
+  html += rcRenderDiscrepancySection(session, "bulk");
+  html += rcRenderDiscrepancySection(session, "reels");
+
+  // Manual add row
+  html += '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;">' +
+    '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">Add Item Manually</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">' +
+      '<label style="font-size:12px;margin:0;">Item #<br><input id="rcManualItemNum" type="text" placeholder="e.g. 6131" style="width:130px;" /></label>' +
+      '<label style="font-size:12px;margin:0;">Location (opt.)<br><input id="rcManualLoc" type="text" placeholder="e.g. W367/S/3800" style="width:160px;" /></label>' +
+      '<label style="font-size:12px;margin:0;">Type<br><select id="rcManualType" style="width:120px;"><option value="bulk">Bulk</option><option value="serialized">Serialized</option><option value="reels">Reel</option></select></label>' +
+      '<button class="secondary" onclick="rcAddManualItem()" style="align-self:flex-end;">+ Add</button>' +
+    '</div>' +
+  '</div>';
+
+  el.innerHTML = html;
+}
+
+function rcRenderDiscrepancySection(session, type) {
+  var items   = session.items[type] || [];
+  var label   = type === "serialized" ? "Serialized" : type === "bulk" ? "Bulk" : "Reels";
+  var sid     = session.recountId.slice(-6);
+  var colId   = "rcSec_" + type + "_" + sid;
+  var hdrId   = "rcSecHdr_" + type + "_" + sid;
+  var chvId   = "rcSecChv_" + type + "_" + sid;
+
+  var html = '<div style="margin-bottom:8px;">' +
+    '<div class="collapsible-header" id="' + hdrId + '" onclick="toggleCollapsible(\'' + colId + '\',\'' + hdrId + '\',\'' + chvId + '\')" style="padding:8px 0;border-bottom:1px solid #e2e8f0;">' +
+      '<b style="font-size:13px;">' + label + ' <span style="font-weight:400;color:#64748b;">(' + items.length + ')</span></b>' +
+      '<svg id="' + chvId + '" class="collapsible-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>' +
+    '</div>' +
+    '<div id="' + colId + '" class="collapsible-body" style="padding-top:8px;">';
+
+  if (!items.length) {
+    html += '<div style="color:#94a3b8;font-size:13px;padding:6px 0;">No ' + label.toLowerCase() + ' discrepancies.</div>';
+  } else {
+    html += '<div class="scroll"><table style="font-size:13px;">';
+    if (type === "serialized") {
+      var gapLabelMap = { missing: '<span style="color:#b91c1c;font-weight:600;">Missing</span>', unexpected: '<span style="color:#d97706;font-weight:600;">Unexpected</span>', manual: '<span style="color:#64748b;">Manual</span>' };
+      html += '<thead><tr><th>Status</th><th>Gap Type</th><th>Item</th><th>Description</th><th>Serial / FSAN</th><th>Location</th><th>NISC Qty</th><th>Resolution</th><th>Recount</th><th>Movements</th><th></th></tr></thead><tbody>';
+      items.forEach(function(item) {
+        var statusBadge = item.status === "complete"
+          ? '<span style="background:#dcfce7;color:#166534;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Done&nbsp;(' + (item.recountedSerials ? item.recountedSerials.length : 0) + ')</span>'
+          : '<span style="background:#fef9c3;color:#854d0e;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Pending</span>';
+        var mvCount = (item.movementIds || []).length;
+        html += '<tr>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td>' + (gapLabelMap[item.gapType] || escapeHtml(item.gapType || "")) + '</td>' +
+          '<td>' + escapeHtml(item.itemNumber) + '</td>' +
+          '<td style="max-width:180px;white-space:normal;">' + escapeHtml(item.description) + '</td>' +
+          '<td style="font-family:monospace;">' + escapeHtml(item.serial || "") + '</td>' +
+          '<td>' + escapeHtml(item.location) + '</td>' +
+          '<td><input type="number" min="0" placeholder="—" value="' + (item.niscExpectedQty != null ? item.niscExpectedQty : "") + '" style="width:68px;" onchange="rcSetNiscQty(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'serialized\',this.value)" /></td>' +
+          '<td>' + rcResolutionSelect(session.recountId, item.rcItemId, 'serialized', item.resolutionStatus) + '</td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'serialized\')">Recount</button></td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;' + (mvCount ? 'background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;' : '') + '" onclick="rcOpenMovementPanel(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'serialized\')">' + (mvCount ? 'Movements (' + mvCount + ')' : 'Movements') + '</button></td>' +
+          '<td><button class="secondary danger" title="Remove" style="padding:2px 7px;font-size:11px;" onclick="rcDeleteItem(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'serialized\')">&#215;</button></td>' +
+          '</tr>';
+      });
+    } else if (type === "bulk") {
+      var bulkLabelMap = { qty_mismatch: '<span style="color:#d97706;font-weight:600;">Qty mismatch</span>', not_counted: '<span style="color:#b91c1c;font-weight:600;">Not counted</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>', manual: '<span style="color:#64748b;">Manual</span>' };
+      html += '<thead><tr><th>Status</th><th>Gap Type</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Qty</th><th>Counted Qty</th><th>NISC Qty</th><th>Resolution</th><th>Recount</th><th>Movements</th><th></th></tr></thead><tbody>';
+      items.forEach(function(item) {
+        var statusBadge = item.status === "complete"
+          ? '<span style="background:#dcfce7;color:#166534;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Done&nbsp;(' + item.recountedQty + ')</span>'
+          : '<span style="background:#fef9c3;color:#854d0e;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Pending</span>';
+        var mvCount = (item.movementIds || []).length;
+        html += '<tr>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td>' + (bulkLabelMap[item.gapType] || escapeHtml(item.gapType || "")) + '</td>' +
+          '<td>' + escapeHtml(item.itemNumber) + '</td>' +
+          '<td style="max-width:180px;white-space:normal;">' + escapeHtml(item.description) + '</td>' +
+          '<td>' + escapeHtml(item.location) + '</td>' +
+          '<td style="text-align:right;">' + (item.odooQty != null ? item.odooQty : "—") + '</td>' +
+          '<td style="text-align:right;">' + (item.countedQty != null ? item.countedQty : "—") + '</td>' +
+          '<td><input type="number" min="0" placeholder="—" value="' + (item.niscExpectedQty != null ? item.niscExpectedQty : "") + '" style="width:68px;" onchange="rcSetNiscQty(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'bulk\',this.value)" /></td>' +
+          '<td>' + rcResolutionSelect(session.recountId, item.rcItemId, 'bulk', item.resolutionStatus) + '</td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'bulk\')">Recount</button></td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;' + (mvCount ? 'background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;' : '') + '" onclick="rcOpenMovementPanel(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'bulk\')">' + (mvCount ? 'Movements (' + mvCount + ')' : 'Movements') + '</button></td>' +
+          '<td><button class="secondary danger" title="Remove" style="padding:2px 7px;font-size:11px;" onclick="rcDeleteItem(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'bulk\')">&#215;</button></td>' +
+          '</tr>';
+      });
+    } else {
+      var reelLabelMap = { footage_diff: '<span style="color:#d97706;font-weight:600;">Footage diff</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>', manual: '<span style="color:#64748b;">Manual</span>' };
+      html += '<thead><tr><th>Status</th><th>Gap Type</th><th>Reel #</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Ft</th><th>Counted Ft</th><th>NISC Ft</th><th>Resolution</th><th>Recount</th><th>Movements</th><th></th></tr></thead><tbody>';
+      items.forEach(function(item) {
+        var statusBadge = item.status === "complete"
+          ? '<span style="background:#dcfce7;color:#166534;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Done&nbsp;(' + item.recountedFt + '&nbsp;ft)</span>'
+          : '<span style="background:#fef9c3;color:#854d0e;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:600;">Pending</span>';
+        var mvCount = (item.movementIds || []).length;
+        html += '<tr>' +
+          '<td>' + statusBadge + '</td>' +
+          '<td>' + (reelLabelMap[item.gapType] || escapeHtml(item.gapType || "")) + '</td>' +
+          '<td style="font-family:monospace;">' + escapeHtml(item.reelNumber || "") + '</td>' +
+          '<td>' + escapeHtml(item.itemNumber) + '</td>' +
+          '<td style="max-width:180px;white-space:normal;">' + escapeHtml(item.description) + '</td>' +
+          '<td>' + escapeHtml(item.location) + '</td>' +
+          '<td style="text-align:right;">' + (item.odooFt != null ? item.odooFt : "—") + '</td>' +
+          '<td style="text-align:right;">' + (item.countedFt != null ? item.countedFt : "—") + '</td>' +
+          '<td><input type="number" min="0" placeholder="—" value="' + (item.niscExpectedQty != null ? item.niscExpectedQty : "") + '" style="width:78px;" onchange="rcSetNiscQty(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'reels\',this.value)" /></td>' +
+          '<td>' + rcResolutionSelect(session.recountId, item.rcItemId, 'reels', item.resolutionStatus) + '</td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'reels\')">Recount</button></td>' +
+          '<td><button class="secondary" style="padding:2px 8px;font-size:11px;' + (mvCount ? 'background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;' : '') + '" onclick="rcOpenMovementPanel(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'reels\')">' + (mvCount ? 'Movements (' + mvCount + ')' : 'Movements') + '</button></td>' +
+          '<td><button class="secondary danger" title="Remove" style="padding:2px 7px;font-size:11px;" onclick="rcDeleteItem(\'' + session.recountId + '\',\'' + item.rcItemId + '\',\'reels\')">&#215;</button></td>' +
+          '</tr>';
+      });
+    }
+    html += '</tbody></table></div>';
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+// ── Item mutation functions ─────────────────────────────────────────
+
+function rcSetNiscQty(recountId, rcItemId, type, val) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var item = (session.items[type] || []).find(function(i){ return i.rcItemId === rcItemId; });
+  if (!item) return;
+  var n = parseFloat(val);
+  item.niscExpectedQty = (val === "" || isNaN(n)) ? null : n;
+  rcSaveStorage();
+}
+
+function rcDeleteItem(recountId, rcItemId, type) {
+  var session = rcSessions.find(function(s){ return s.recountId === rcActiveId; });
+  if (!session) return;
+  session.items[type] = (session.items[type] || []).filter(function(i){ return i.rcItemId !== rcItemId; });
+  rcSaveStorage();
+  rcRenderDetail();
+}
+
+function rcAddManualItem() {
+  if (!rcActiveId) return;
+  var session = rcSessions.find(function(s){ return s.recountId === rcActiveId; });
+  if (!session) return;
+
+  var itemNum = $("rcManualItemNum") ? $("rcManualItemNum").value.trim() : "";
+  var loc     = $("rcManualLoc")     ? $("rcManualLoc").value.trim()     : "";
+  var type    = $("rcManualType")    ? $("rcManualType").value           : "bulk";
+
+  if (!itemNum) { alert("Enter an item number."); if ($("rcManualItemNum")) $("rcManualItemNum").focus(); return; }
+
+  var pm = findProductMapMatch(itemNum);
+  var description = (pm && pm.entry) ? (pm.entry.name || pm.entry.description || "") : "";
+
+  var newItem;
+  if (type === "serialized") {
+    newItem = { rcItemId: rcGenItemId(), itemNumber: itemNum, description: description, location: loc, gapType: "manual", serial: "", niscExpectedQty: null, status: "pending" };
+  } else if (type === "reels") {
+    newItem = { rcItemId: rcGenItemId(), reelNumber: "", itemNumber: itemNum, description: description, location: loc, gapType: "manual", odooFt: null, countedFt: null, niscExpectedQty: null, status: "pending" };
+  } else {
+    newItem = { rcItemId: rcGenItemId(), itemNumber: itemNum, description: description, location: loc, gapType: "manual", odooQty: null, countedQty: null, niscExpectedQty: null, status: "pending" };
+  }
+
+  session.items[type].push(newItem);
+  rcSaveStorage();
+  if ($("rcManualItemNum")) $("rcManualItemNum").value = "";
+  if ($("rcManualLoc"))     $("rcManualLoc").value     = "";
+  rcRenderDetail();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 4 — PHYSICAL RECOUNT WORKFLOWS
+// ═══════════════════════════════════════════════════════════════════════
+
+var rcWfState = null; // { recountId, rcItemId, type, scannedSerials[] }
+
+function rcOpenWorkflow(recountId, rcItemId, type) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var item = (session.items[type] || []).find(function(i){ return i.rcItemId === rcItemId; });
+  if (!item) return;
+
+  rcWfState = { recountId: recountId, rcItemId: rcItemId, type: type, scannedSerials: [] };
+
+  var titleEl    = $("rcWfTitle");
+  var subtitleEl = $("rcWfSubtitle");
+  var bodyEl     = $("rcWfBody");
+  var confirmBtn = $("rcWfConfirmBtn");
+
+  var typeLabel = type === "serialized" ? "Serialized" : type === "bulk" ? "Bulk" : "Reel";
+  if (titleEl)    titleEl.textContent    = typeLabel + " Physical Recount";
+  if (subtitleEl) subtitleEl.textContent = escapeHtml(item.itemNumber) + (item.description ? " — " + item.description : "") + (item.location ? " · " + item.location : "");
+  if (confirmBtn) confirmBtn.textContent = "Confirm Recount";
+
+  if (bodyEl) {
+    if (type === "serialized") {
+      // Pre-load any previously scanned serials
+      var existing = item.recountedSerials || [];
+      rcWfState.scannedSerials = existing.slice();
+      bodyEl.innerHTML = rcWfBuildSerialBody(item);
+    } else if (type === "bulk") {
+      bodyEl.innerHTML = rcWfBuildBulkBody(item);
+    } else {
+      bodyEl.innerHTML = rcWfBuildReelBody(item);
+    }
+  }
+
+  var modal = $("rcWorkflowModal");
+  if (modal) modal.classList.remove("hidden");
+
+  setTimeout(function() {
+    if (type === "serialized") {
+      var si = $("rcWfScanInput"); if (si) { si.focus(); si.select(); }
+    } else if (type === "bulk") {
+      var qi = $("rcWfQtyInput"); if (qi) { qi.focus(); qi.select(); }
+    } else {
+      var ia = $("rcWfInnerA"); if (ia) { ia.focus(); ia.select(); }
+    }
+  }, 80);
+}
+
+function rcCloseWorkflow() {
+  var modal = $("rcWorkflowModal");
+  if (modal) modal.classList.add("hidden");
+  rcWfState = null;
+}
+
+// ── Serialized body ─────────────────────────────────────────────────────
+
+function rcWfBuildSerialBody(item) {
+  var listHtml = "";
+  if (rcWfState.scannedSerials.length) {
+    listHtml = rcWfState.scannedSerials.map(function(s, i) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid #f1f5f9;">' +
+        '<span style="font-family:monospace;font-size:13px;flex:1;">' + escapeHtml(s) + '</span>' +
+        '<button class="secondary danger" style="padding:1px 6px;font-size:11px;" onclick="rcWfRemoveSerial(' + i + ')">&#215;</button>' +
+        '</div>';
+    }).join("");
+  } else {
+    listHtml = '<div style="color:#94a3b8;font-size:13px;padding:6px 0;">No serials scanned yet.</div>';
+  }
+
+  return '<div style="margin-bottom:14px;">' +
+    '<p style="margin:0 0 10px;font-size:13px;color:#475569;">Scan all serials for this SKU. Each scan replaces the original count entry.</p>' +
+    '<div style="display:flex;gap:8px;margin-bottom:12px;">' +
+      '<input id="rcWfScanInput" type="text" placeholder="Scan serial / FSAN…" style="flex:1;" ' +
+        'onkeydown="rcWfScanKeydown(event)" />' +
+      '<button onclick="rcWfScanAdd()" style="margin:0;">Add</button>' +
+    '</div>' +
+    '<div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:6px;">' +
+      'Scanned: <span id="rcWfSerialCount">' + rcWfState.scannedSerials.length + '</span>' +
+    '</div>' +
+    '<div id="rcWfSerialList" style="max-height:220px;overflow-y:auto;">' + listHtml + '</div>' +
+  '</div>';
+}
+
+function rcWfScanKeydown(e) {
+  if (e.key === "Enter") { e.preventDefault(); rcWfScanAdd(); }
+}
+
+function rcWfScanAdd() {
+  var inp = $("rcWfScanInput");
+  if (!inp) return;
+  var val = sanitizeScannerValue(inp.value || "", { uppercase: true });
+  if (!val) { inp.focus(); return; }
+  if (rcWfState.scannedSerials.indexOf(val) !== -1) {
+    inp.value = "";
+    inp.placeholder = val + " already scanned";
+    setTimeout(function(){ inp.placeholder = "Scan serial / FSAN…"; }, 1800);
+    inp.focus();
+    return;
+  }
+  rcWfState.scannedSerials.push(val);
+  inp.value = "";
+  inp.focus();
+  rcWfRefreshSerialList();
+}
+
+function rcWfRemoveSerial(idx) {
+  rcWfState.scannedSerials.splice(idx, 1);
+  rcWfRefreshSerialList();
+  setTimeout(function(){ var si = $("rcWfScanInput"); if (si) si.focus(); }, 40);
+}
+
+function rcWfRefreshSerialList() {
+  var countEl = $("rcWfSerialCount");
+  var listEl  = $("rcWfSerialList");
+  if (countEl) countEl.textContent = rcWfState.scannedSerials.length;
+  if (!listEl) return;
+  if (!rcWfState.scannedSerials.length) {
+    listEl.innerHTML = '<div style="color:#94a3b8;font-size:13px;padding:6px 0;">No serials scanned yet.</div>';
+    return;
+  }
+  listEl.innerHTML = rcWfState.scannedSerials.map(function(s, i) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid #f1f5f9;">' +
+      '<span style="font-family:monospace;font-size:13px;flex:1;">' + escapeHtml(s) + '</span>' +
+      '<button class="secondary danger" style="padding:1px 6px;font-size:11px;" onclick="rcWfRemoveSerial(' + i + ')">&#215;</button>' +
+      '</div>';
+  }).join("");
+}
+
+// ── Bulk body ────────────────────────────────────────────────────────────
+
+function rcWfBuildBulkBody(item) {
+  var prev = item.recountedQty != null ? item.recountedQty : "";
+  return '<div>' +
+    '<p style="margin:0 0 12px;font-size:13px;color:#475569;">Enter the physical count quantity for this item/location.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;max-width:260px;">' +
+      (item.odooQty != null ? '<div style="font-size:13px;">Odoo qty: <b>' + item.odooQty + '</b></div>' : '') +
+      (item.countedQty != null ? '<div style="font-size:13px;">Previous count: <b>' + item.countedQty + '</b></div>' : '') +
+      (item.niscExpectedQty != null ? '<div style="font-size:13px;">NISC expected: <b>' + item.niscExpectedQty + '</b></div>' : '') +
+      '<label style="font-size:13px;font-weight:600;">New recount qty' +
+        '<input id="rcWfQtyInput" type="number" min="0" step="1" value="' + prev + '" ' +
+          'style="margin-top:6px;display:block;width:140px;" />' +
+      '</label>' +
+    '</div>' +
+  '</div>';
+}
+
+// ── Reel body ────────────────────────────────────────────────────────────
+
+function rcWfBuildReelBody(item) {
+  var prevInner = item.innerSeqA != null ? item.innerSeqA : "";
+  var prevOuter = item.outerSeqA != null ? item.outerSeqA : "";
+  var prevFt    = item.recountedFt != null ? item.recountedFt : "";
+  return '<div>' +
+    '<p style="margin:0 0 12px;font-size:13px;color:#475569;">Enter the sequence numbers from the reel. Footage = Outer − Inner.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:10px;max-width:280px;">' +
+      (item.reelNumber ? '<div style="font-size:13px;">Reel #: <b style="font-family:monospace;">' + escapeHtml(item.reelNumber) + '</b></div>' : '') +
+      (item.odooFt != null ? '<div style="font-size:13px;">Odoo footage: <b>' + item.odooFt + '</b></div>' : '') +
+      (item.countedFt != null ? '<div style="font-size:13px;">Previous count: <b>' + item.countedFt + '</b></div>' : '') +
+      (item.niscExpectedQty != null ? '<div style="font-size:13px;">NISC expected: <b>' + item.niscExpectedQty + ' ft</b></div>' : '') +
+      '<div style="display:flex;gap:12px;">' +
+        '<label style="font-size:13px;font-weight:600;">Inner sequence' +
+          '<input id="rcWfInnerA" type="number" min="0" step="1" value="' + prevInner + '" ' +
+            'style="margin-top:6px;display:block;width:120px;" oninput="rcWfCalcFt()" />' +
+        '</label>' +
+        '<label style="font-size:13px;font-weight:600;">Outer sequence' +
+          '<input id="rcWfOuterA" type="number" min="0" step="1" value="' + prevOuter + '" ' +
+            'style="margin-top:6px;display:block;width:120px;" oninput="rcWfCalcFt()" />' +
+        '</label>' +
+      '</div>' +
+      '<div id="rcWfFtDisplay" style="font-size:14px;font-weight:600;color:#1e40af;min-height:22px;">' +
+        (prevInner !== "" && prevOuter !== "" ? "Footage: " + Math.max(0, Number(prevOuter) - Number(prevInner)) + " ft" : "") +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function rcWfCalcFt() {
+  var inner = parseFloat(($("rcWfInnerA") || {}).value || "");
+  var outer = parseFloat(($("rcWfOuterA") || {}).value || "");
+  var el    = $("rcWfFtDisplay");
+  if (!el) return;
+  if (!isNaN(inner) && !isNaN(outer)) {
+    var ft = Math.max(0, outer - inner);
+    el.textContent = "Footage: " + ft + " ft";
+  } else {
+    el.textContent = "";
+  }
+}
+
+// ── Confirm ──────────────────────────────────────────────────────────────
+
+function rcWorkflowConfirm() {
+  if (!rcWfState) return;
+  var s = rcWfState;
+  var session = rcSessions.find(function(ss){ return ss.recountId === s.recountId; });
+  if (!session) return;
+  var item = (session.items[s.type] || []).find(function(i){ return i.rcItemId === s.rcItemId; });
+  if (!item) return;
+
+  if (s.type === "serialized") {
+    if (!rcWfState.scannedSerials.length) {
+      alert("Scan at least one serial before confirming.");
+      return;
+    }
+    item.recountedSerials = rcWfState.scannedSerials.slice();
+    item.status           = "complete";
+  } else if (s.type === "bulk") {
+    var qtyEl = $("rcWfQtyInput");
+    var qtyVal = qtyEl ? qtyEl.value.trim() : "";
+    if (qtyVal === "" || isNaN(parseFloat(qtyVal))) {
+      alert("Enter a valid quantity.");
+      if (qtyEl) qtyEl.focus();
+      return;
+    }
+    item.recountedQty = parseFloat(qtyVal);
+    item.status       = "complete";
+  } else {
+    var innerEl = $("rcWfInnerA");
+    var outerEl = $("rcWfOuterA");
+    var innerVal = innerEl ? innerEl.value.trim() : "";
+    var outerVal = outerEl ? outerEl.value.trim() : "";
+    if (innerVal === "" || outerVal === "" || isNaN(parseFloat(innerVal)) || isNaN(parseFloat(outerVal))) {
+      alert("Enter both inner and outer sequence numbers.");
+      if (innerEl) innerEl.focus();
+      return;
+    }
+    item.innerSeqA    = parseFloat(innerVal);
+    item.outerSeqA    = parseFloat(outerVal);
+    item.recountedFt  = Math.max(0, item.outerSeqA - item.innerSeqA);
+    item.status       = "complete";
+  }
+
+  rcSaveStorage();
+  rcCloseWorkflow();
+  rcRenderDetail();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 5 — MOVEMENT RECORDS & RESOLUTION STATUS
+// ═══════════════════════════════════════════════════════════════════════
+
+var rcMvState = null; // { recountId, rcItemId, type }
+
+var RC_RESOLUTION_OPTIONS = [
+  { value: "",                  label: "— unresolved —" },
+  { value: "confirmed_correct", label: "Confirmed Correct" },
+  { value: "adjusted_up",       label: "Adjusted Up" },
+  { value: "adjusted_down",     label: "Adjusted Down" },
+  { value: "product_movement",  label: "Product Movement" },
+  { value: "unable_to_locate",  label: "Unable to Locate" }
+];
+
+function rcResolutionSelect(recountId, rcItemId, type, currentVal) {
+  var val = currentVal || "";
+  var opts = RC_RESOLUTION_OPTIONS.map(function(o) {
+    return '<option value="' + o.value + '"' + (o.value === val ? ' selected' : '') + '>' + o.label + '</option>';
+  }).join("");
+  return '<select style="font-size:11px;width:140px;" onchange="rcSetResolution(\'' + recountId + '\',\'' + rcItemId + '\',\'' + type + '\',this.value)">' + opts + '</select>';
+}
+
+function rcSetResolution(recountId, rcItemId, type, val) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var item = (session.items[type] || []).find(function(i){ return i.rcItemId === rcItemId; });
+  if (!item) return;
+  item.resolutionStatus = val || null;
+  rcSaveStorage();
+}
+
+function rcGenMovementId() {
+  return "mv_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5);
+}
+
+// ── Movement panel open / close ─────────────────────────────────────────
+
+function rcOpenMovementPanel(recountId, rcItemId, type) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var item = (session.items[type] || []).find(function(i){ return i.rcItemId === rcItemId; });
+  if (!item) return;
+
+  rcMvState = { recountId: recountId, rcItemId: rcItemId, type: type };
+
+  var titleEl    = $("rcMvTitle");
+  var subtitleEl = $("rcMvSubtitle");
+  if (titleEl)    titleEl.textContent = "Movement Records";
+  if (subtitleEl) subtitleEl.textContent = item.itemNumber + (item.description ? " — " + item.description : "") + (item.location ? " · " + item.location : "");
+
+  rcRenderMovementPanel();
+  var modal = $("rcMovementModal");
+  if (modal) modal.classList.remove("hidden");
+}
+
+function rcCloseMovementPanel() {
+  var modal = $("rcMovementModal");
+  if (modal) modal.classList.add("hidden");
+  rcMvState = null;
+  // Re-render detail so movement count badges refresh
+  if (rcView === "detail") rcRenderDetail();
+}
+
+// ── Movement panel render ───────────────────────────────────────────────
+
+function rcRenderMovementPanel() {
+  var bodyEl = $("rcMvBody");
+  if (!bodyEl || !rcMvState) return;
+
+  var session = rcSessions.find(function(s){ return s.recountId === rcMvState.recountId; });
+  if (!session) return;
+  var item = (session.items[rcMvState.type] || []).find(function(i){ return i.rcItemId === rcMvState.rcItemId; });
+  if (!item) return;
+
+  var attachedIds = item.movementIds || [];
+  var attachedMvs = attachedIds.map(function(id){ return rcMovements.find(function(m){ return m.movementId === id; }); }).filter(Boolean);
+  var unattached  = rcMovements.filter(function(m){ return attachedIds.indexOf(m.movementId) === -1; });
+
+  var html = "";
+
+  // Attached movements list
+  html += '<div style="margin-bottom:18px;">';
+  html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">Attached Movements <span style="font-weight:400;color:#64748b;">(' + attachedMvs.length + ')</span></div>';
+  if (!attachedMvs.length) {
+    html += '<div style="color:#94a3b8;font-size:13px;padding:10px;border:1px dashed #cbd5e1;border-radius:6px;text-align:center;">No movements attached yet.</div>';
+  } else {
+    html += attachedMvs.map(function(m){ return rcRenderMovementCard(m, true); }).join("");
+  }
+  html += '</div>';
+
+  // Attach existing (only shown when there are unattached global movements)
+  if (unattached.length) {
+    html += '<div style="margin-bottom:18px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">';
+    html += '<div style="font-weight:600;font-size:13px;margin-bottom:8px;">Attach Existing Movement</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+    html += '<select id="rcMvAttachSelect" style="flex:1;min-width:220px;">';
+    html += unattached.map(function(m) {
+      var typeLabels = { fulfillment: "Fulfillment", transfer: "Transfer", return: "Return", JE: "Journal Entry", work_order: "Work Order", expense: "Expense", other: "Other" };
+      var label = escapeHtml((m.transactionNumber || "(no #)") + " — " + (typeLabels[m.transactionType] || m.transactionType || "") + " — " + (m.system || "") + (m.qtyMoved != null ? " (qty " + m.qtyMoved + ")" : ""));
+      return '<option value="' + m.movementId + '">' + label + '</option>';
+    }).join("");
+    html += '</select><button onclick="rcMvAttachExisting()" style="margin:0;white-space:nowrap;">Attach</button>';
+    html += '</div></div>';
+  }
+
+  // Create new movement form
+  html += '<div style="padding:14px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">';
+  html += '<div style="font-weight:600;font-size:13px;margin-bottom:12px;">Create New Movement Record</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+  html += '<label style="font-size:12px;font-weight:600;">Transaction / Order #<br><input id="rcMvTxNum" type="text" placeholder="SO-1234, JE-5678…" style="width:100%;margin-top:4px;" /></label>';
+  html += '<label style="font-size:12px;font-weight:600;">System<br><select id="rcMvSystem" style="width:100%;margin-top:4px;"><option value="Odoo">Odoo</option><option value="NISC">NISC</option></select></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Transaction Type<br><select id="rcMvTxType" style="width:100%;margin-top:4px;"><option value="fulfillment">Fulfillment</option><option value="transfer">Transfer</option><option value="return">Return</option><option value="JE">Journal Entry</option><option value="work_order">Work Order</option><option value="expense">Expense</option><option value="other">Other</option></select></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Qty Moved<br><input id="rcMvQty" type="number" step="any" placeholder="0" style="width:100%;margin-top:4px;" /></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Customer<br><input id="rcMvCustomer" type="text" placeholder="Customer name" style="width:100%;margin-top:4px;" /></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Responsible<br><input id="rcMvResponsible" type="text" placeholder="Employee name" style="width:100%;margin-top:4px;" /></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Date<br><input id="rcMvDate" type="date" style="width:100%;margin-top:4px;" /></label>';
+  html += '<label style="font-size:12px;font-weight:600;">Correctly Accounted?<br><select id="rcMvAccounted" style="width:100%;margin-top:4px;"><option value="unknown">Unknown</option><option value="yes">Yes</option><option value="no">No</option></select></label>';
+  html += '</div>';
+  html += '<label style="font-size:12px;font-weight:600;display:block;margin-top:10px;">Notes<br><textarea id="rcMvNotes" rows="2" placeholder="Optional notes…" style="width:100%;margin-top:4px;resize:vertical;box-sizing:border-box;"></textarea></label>';
+  html += '<div style="margin-top:12px;text-align:right;"><button onclick="rcMvCreateAndAttach()" style="margin:0;">Create &amp; Attach</button></div>';
+  html += '</div>';
+
+  bodyEl.innerHTML = html;
+}
+
+function rcRenderMovementCard(m, canDetach) {
+  var typeLabels = { fulfillment: "Fulfillment", transfer: "Transfer", return: "Return", JE: "Journal Entry", work_order: "Work Order", expense: "Expense", other: "Other" };
+  var acctColor = m.correctlyAccounted === "yes" ? "#166534" : m.correctlyAccounted === "no" ? "#b91c1c" : "#64748b";
+  var acctBg    = m.correctlyAccounted === "yes" ? "#dcfce7" : m.correctlyAccounted === "no" ? "#fee2e2" : "#f1f5f9";
+  var acctText  = m.correctlyAccounted === "yes" ? "Accounted ✓" : m.correctlyAccounted === "no" ? "NOT accounted" : "Acctg unknown";
+
+  var html = '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">';
+  html += '<div style="flex:1;">';
+  html += '<div style="font-weight:600;font-size:13px;">' + escapeHtml(m.transactionNumber || "(no transaction #)") + '</div>';
+  html += '<div class="small" style="color:#475569;margin-top:2px;">';
+  html += escapeHtml(m.system || "") + (m.transactionType ? " · " + escapeHtml(typeLabels[m.transactionType] || m.transactionType) : "");
+  if (m.qtyMoved != null) html += " · Qty " + m.qtyMoved;
+  if (m.date) html += " · " + escapeHtml(m.date);
+  html += '</div>';
+  if (m.customer || m.responsible) {
+    html += '<div class="small" style="color:#64748b;margin-top:2px;">';
+    if (m.customer) html += "Customer: " + escapeHtml(m.customer) + (m.responsible ? " " : "");
+    if (m.responsible) html += "Responsible: " + escapeHtml(m.responsible);
+    html += '</div>';
+  }
+  if (m.notes) html += '<div class="small" style="color:#64748b;font-style:italic;margin-top:2px;">' + escapeHtml(m.notes) + '</div>';
+  html += '</div>';
+  html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">';
+  html += '<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;background:' + acctBg + ';color:' + acctColor + ';">' + acctText + '</span>';
+  if (canDetach) {
+    html += '<button class="secondary danger" style="padding:2px 8px;font-size:11px;" onclick="rcMvDetach(\'' + m.movementId + '\')">Detach</button>';
+  }
+  html += '</div></div></div>';
+  return html;
+}
+
+// ── Attach existing ─────────────────────────────────────────────────────
+
+function rcMvAttachExisting() {
+  if (!rcMvState) return;
+  var sel = $("rcMvAttachSelect");
+  if (!sel || !sel.value) return;
+  var session = rcSessions.find(function(s){ return s.recountId === rcMvState.recountId; });
+  if (!session) return;
+  var item = (session.items[rcMvState.type] || []).find(function(i){ return i.rcItemId === rcMvState.rcItemId; });
+  if (!item) return;
+  if (!Array.isArray(item.movementIds)) item.movementIds = [];
+  if (item.movementIds.indexOf(sel.value) === -1) item.movementIds.push(sel.value);
+  rcSaveStorage();
+  rcRenderMovementPanel();
+}
+
+// ── Detach ──────────────────────────────────────────────────────────────
+
+function rcMvDetach(movementId) {
+  if (!rcMvState) return;
+  var session = rcSessions.find(function(s){ return s.recountId === rcMvState.recountId; });
+  if (!session) return;
+  var item = (session.items[rcMvState.type] || []).find(function(i){ return i.rcItemId === rcMvState.rcItemId; });
+  if (!item || !Array.isArray(item.movementIds)) return;
+  item.movementIds = item.movementIds.filter(function(id){ return id !== movementId; });
+  rcSaveStorage();
+  rcRenderMovementPanel();
+}
+
+// ── Create and attach ───────────────────────────────────────────────────
+
+function rcMvCreateAndAttach() {
+  if (!rcMvState) return;
+  var txNumEl = $("rcMvTxNum");
+  var txNum   = txNumEl ? txNumEl.value.trim() : "";
+  if (!txNum) { alert("Enter a transaction / order number."); if (txNumEl) txNumEl.focus(); return; }
+
+  var qtyRaw = $("rcMvQty") ? $("rcMvQty").value.trim() : "";
+  var qty    = qtyRaw !== "" ? parseFloat(qtyRaw) : null;
+
+  var mv = {
+    movementId:         rcGenMovementId(),
+    transactionNumber:  txNum,
+    system:             $("rcMvSystem")      ? $("rcMvSystem").value      : "Odoo",
+    transactionType:    $("rcMvTxType")      ? $("rcMvTxType").value      : "other",
+    qtyMoved:           (qty !== null && !isNaN(qty)) ? qty : null,
+    customer:           $("rcMvCustomer")    ? $("rcMvCustomer").value.trim()    : "",
+    responsible:        $("rcMvResponsible") ? $("rcMvResponsible").value.trim() : "",
+    date:               $("rcMvDate")        ? $("rcMvDate").value               : "",
+    correctlyAccounted: $("rcMvAccounted")   ? $("rcMvAccounted").value          : "unknown",
+    notes:              $("rcMvNotes")       ? $("rcMvNotes").value.trim()       : ""
+  };
+
+  rcMovements.push(mv);
+
+  // Attach to current item
+  var session = rcSessions.find(function(s){ return s.recountId === rcMvState.recountId; });
+  if (session) {
+    var item = (session.items[rcMvState.type] || []).find(function(i){ return i.rcItemId === rcMvState.rcItemId; });
+    if (item) {
+      if (!Array.isArray(item.movementIds)) item.movementIds = [];
+      item.movementIds.push(mv.movementId);
+    }
+  }
+
+  rcSaveStorage();
+  rcRenderMovementPanel();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PHASE 6 — RECOUNT XLSX EXPORT
+// Three-tab workbook: Serialized / Bulk / Reels
+// Each row includes: item info, discrepancy context, recount result,
+// resolution status, movements summary, and prior-count chain history.
+// ═══════════════════════════════════════════════════════════════════════
+
+function rcBuildChain(session) {
+  // Returns ordered array of { sessionId, sessionName, sessionType:"inventory"|"recount", closedAt }
+  // from oldest ancestor to this session, for display in the "Prior Count History" columns.
+  var chain = [];
+  var visited = new Set();
+
+  function walk(id) {
+    if (!id || visited.has(id)) return;
+    visited.add(id);
+    // Is it a recount session?
+    var rc = rcSessions.find(function(s){ return s.recountId === id; });
+    if (rc) {
+      walk(rc.parentId);
+      chain.push({ sessionId: rc.recountId, sessionName: rc.recountName, sessionType: "recount", closedAt: rc.closedAt || "" });
+      return;
+    }
+    // Is it an inventory session?
+    var inv = (appData.inventory_sessions || []).find(function(s){ return s.sessionId === id; });
+    if (inv) {
+      chain.push({ sessionId: inv.sessionId, sessionName: inv.sessionName || inv.sessionId, sessionType: "inventory", closedAt: inv.closedAt || "" });
+    }
+  }
+
+  // Walk from parentId; this session itself is the current recount being exported
+  walk(session.parentId);
+  return chain;
+}
+
+function rcChainHistoryForItem(chain, item, type) {
+  // For each session in the chain, find the most recent count for this item and return a summary string.
+  // Returns array of strings, one per chain entry, in chain order.
+  var allEvents = appData.inventory_events || [];
+  return chain.map(function(node) {
+    if (node.sessionType === "inventory") {
+      if (type === "serialized") {
+        var evts = allEvents.filter(function(e){
+          return e.sessionId === node.sessionId && e.status !== "voided" &&
+                 (e.itemNumber === item.itemNumber || e.defCode === item.itemNumber) &&
+                 (e.serial || e.fsan);
+        });
+        if (!evts.length) return "—";
+        return evts.map(function(e){ return e.serial || e.fsan || ""; }).join(", ");
+      }
+      if (type === "bulk") {
+        var evts = allEvents.filter(function(e){
+          return e.sessionId === node.sessionId && e.status !== "voided" &&
+                 (e.itemNumber === item.itemNumber || e.defCode === item.itemNumber) &&
+                 e.location === item.location && e.qty != null;
+        });
+        if (!evts.length) return "—";
+        var total = evts.reduce(function(s,e){ return s + (e.qty||0); }, 0);
+        return String(total);
+      }
+      if (type === "reels") {
+        var evts = allEvents.filter(function(e){
+          return e.sessionId === node.sessionId && e.status !== "voided" &&
+                 e.eventType === "cable_reel_count" &&
+                 normKey(e.reelNumber || "") === normKey(item.reelNumber || "");
+        });
+        if (!evts.length) return "—";
+        var last = evts[evts.length - 1];
+        return (last.totalAvailableFt != null ? last.totalAvailableFt + " ft" : "—");
+      }
+    }
+    if (node.sessionType === "recount") {
+      var rcSess = rcSessions.find(function(s){ return s.recountId === node.sessionId; });
+      if (!rcSess) return "—";
+      var rcItems = rcSess.items[type] || [];
+      var match = rcItems.find(function(i){ return i.rcItemId === item.rcItemId || (
+        type === "reels" ? normKey(i.reelNumber||"") === normKey(item.reelNumber||"") :
+        (i.itemNumber === item.itemNumber && (type === "serialized" ? (i.serial||"") === (item.serial||"") : i.location === item.location))
+      ); });
+      if (!match || match.status !== "complete") return "—";
+      if (type === "serialized") return (match.recountedSerials || []).join(", ") || "—";
+      if (type === "bulk")       return match.recountedQty != null ? String(match.recountedQty) : "—";
+      if (type === "reels")      return match.recountedFt  != null ? match.recountedFt + " ft" : "—";
+    }
+    return "—";
+  });
+}
+
+function rcMovementsSummary(item) {
+  if (!item.movementIds || !item.movementIds.length) return "";
+  return item.movementIds.map(function(mid) {
+    var m = rcMovements.find(function(mv){ return mv.movementId === mid; });
+    if (!m) return mid;
+    var parts = [m.transactionNumber];
+    if (m.system)          parts.push(m.system);
+    if (m.transactionType) parts.push(m.transactionType);
+    if (m.qtyMoved != null) parts.push("qty:" + m.qtyMoved);
+    if (m.date)            parts.push(m.date);
+    if (m.correctlyAccounted && m.correctlyAccounted !== "unknown") parts.push("accounted:" + m.correctlyAccounted);
+    return parts.join(" | ");
+  }).join("\n");
+}
+
+function rcResolutionLabel(val) {
+  var map = {
+    confirmed_correct: "Confirmed Correct",
+    adjusted_up:       "Adjusted Up",
+    adjusted_down:     "Adjusted Down",
+    product_movement:  "Product Movement",
+    unable_to_locate:  "Unable to Locate"
+  };
+  return map[val] || val || "";
+}
+
+function rcAutoColWidths(headers, rows) {
+  return headers.map(function(h, i) {
+    var max = h.length;
+    rows.forEach(function(r) {
+      var cell = r[i] == null ? "" : String(r[i]);
+      // For multi-line cells use the longest line
+      cell.split("\n").forEach(function(line){ if (line.length > max) max = line.length; });
+    });
+    return { wch: Math.min(max + 2, 60) };
+  });
+}
+
+function rcExportXlsx(recountId) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) { alert("Recount session not found."); return; }
+
+  var chain = rcBuildChain(session);
+  var chainNames = chain.map(function(n){ return n.sessionName + (n.closedAt ? " (" + n.closedAt.slice(0,10) + ")" : ""); });
+
+  var wb = XLSX.utils.book_new();
+
+  // ── SERIALIZED SHEET ─────────────────────────────────────────────────
+  (function() {
+    var baseHeaders = ["Item #","Description","Serial / FSAN","Location","Gap Type",
+                       "NISC Expected Qty","Recount Serials","Resolution","Movements"];
+    var histHeaders = chainNames.map(function(n){ return "History: " + n; });
+    var headers = baseHeaders.concat(histHeaders);
+
+    var rows = (session.items.serialized || []).map(function(item) {
+      var recsStr = item.recountedSerials ? item.recountedSerials.join("\n") : "";
+      var hist    = rcChainHistoryForItem(chain, item, "serialized");
+      return [
+        item.itemNumber   || "",
+        item.description  || "",
+        item.serial       || "",
+        item.location     || "",
+        item.gapType      || "",
+        item.niscExpectedQty != null ? item.niscExpectedQty : "",
+        recsStr,
+        rcResolutionLabel(item.resolutionStatus),
+        rcMovementsSummary(item)
+      ].concat(hist);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+    ws["!cols"] = rcAutoColWidths(headers, rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Serialized");
+  })();
+
+  // ── BULK SHEET ───────────────────────────────────────────────────────
+  (function() {
+    var baseHeaders = ["Item #","Description","Location","Gap Type",
+                       "Odoo Qty","Counted Qty","NISC Expected Qty","Recount Qty","Variance","Resolution","Movements"];
+    var histHeaders = chainNames.map(function(n){ return "History: " + n; });
+    var headers = baseHeaders.concat(histHeaders);
+
+    var rows = (session.items.bulk || []).map(function(item) {
+      var recQty  = item.recountedQty != null ? item.recountedQty : null;
+      var baseQty = item.odooQty      != null ? item.odooQty      : null;
+      var variance = (recQty != null && baseQty != null) ? (recQty - baseQty) : "";
+      var hist = rcChainHistoryForItem(chain, item, "bulk");
+      return [
+        item.itemNumber    || "",
+        item.description   || "",
+        item.location      || "",
+        item.gapType       || "",
+        item.odooQty    != null ? item.odooQty    : "",
+        item.countedQty != null ? item.countedQty : "",
+        item.niscExpectedQty != null ? item.niscExpectedQty : "",
+        recQty != null ? recQty : "",
+        variance,
+        rcResolutionLabel(item.resolutionStatus),
+        rcMovementsSummary(item)
+      ].concat(hist);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+    ws["!cols"] = rcAutoColWidths(headers, rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Bulk");
+  })();
+
+  // ── REELS SHEET ──────────────────────────────────────────────────────
+  (function() {
+    var baseHeaders = ["Reel #","Item #","Description","Location","Gap Type",
+                       "Odoo Ft","Counted Ft","NISC Expected Ft","Recount Inner","Recount Outer","Recount Ft","Variance","Resolution","Movements"];
+    var histHeaders = chainNames.map(function(n){ return "History: " + n; });
+    var headers = baseHeaders.concat(histHeaders);
+
+    var rows = (session.items.reels || []).map(function(item) {
+      var recFt   = item.recountedFt != null ? item.recountedFt : null;
+      var baseOdoo = item.odooFt    != null ? item.odooFt    : null;
+      var variance = (recFt != null && baseOdoo != null) ? (recFt - baseOdoo) : "";
+      var hist = rcChainHistoryForItem(chain, item, "reels");
+      return [
+        item.reelNumber    || "",
+        item.itemNumber    || "",
+        item.description   || "",
+        item.location      || "",
+        item.gapType       || "",
+        item.odooFt     != null ? item.odooFt     : "",
+        item.countedFt  != null ? item.countedFt  : "",
+        item.niscExpectedQty != null ? item.niscExpectedQty : "",
+        item.innerSeqA  != null ? item.innerSeqA  : "",
+        item.outerSeqA  != null ? item.outerSeqA  : "",
+        recFt != null ? recFt : "",
+        variance,
+        rcResolutionLabel(item.resolutionStatus),
+        rcMovementsSummary(item)
+      ].concat(hist);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+    ws["!cols"] = rcAutoColWidths(headers, rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Reels");
+  })();
+
+  var safeName = (session.recountName || recountId).replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+  XLSX.writeFile(wb, "recount-" + safeName + "-" + new Date().toISOString().slice(0,10) + ".xlsx");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // SESSION FINALIZE
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -5067,6 +6607,7 @@ timInitUsername();
 renderInvSessionUI();
 invAutoRestoreSession();
 invLoadOdooQuantMap();
+invLoadQuantsBaseline();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
