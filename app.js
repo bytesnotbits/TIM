@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.31.00";
+const APP_VERSION = "v1.31.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4234,18 +4234,19 @@ function invGetQuantId(defCode, locValue, lotName) {
 }
 
 function invRenderQuantMapStatus() {
-  var el      = $("invQuantMapStatus");
   var clearBtn = $("invClearQuantMapBtn");
-  var count   = Object.keys(invOdooQuantMap).length;
-  // Each quant can be stored under up to 2 keys (barcode + complete_name), so show unique IDs
+  // Each quant can be stored under up to 2 keys (barcode + complete_name) — count unique IDs
   var uniqueIds = {};
   Object.values(invOdooQuantMap).forEach(function(e) { if (e.id) uniqueIds[e.id] = 1; });
   var unique = Object.keys(uniqueIds).length;
   if (!unique) {
-    if (el) el.textContent = "No Odoo quants loaded — IDs will be blank on export.";
+    setDropState("invQuantSyncZone", "invQuantSyncStatus", false, "Waiting for upload");
+    updateSidebarStatus(2, null);
     if (clearBtn) clearBtn.style.display = "none";
   } else {
-    if (el) el.textContent = unique + " quant record" + (unique !== 1 ? "s" : "") + " loaded — IDs will be matched on export.";
+    var msg = unique + " quant record" + (unique !== 1 ? "s" : "") + " loaded — IDs matched on export.";
+    setDropState("invQuantSyncZone", "invQuantSyncStatus", true, msg);
+    updateSidebarStatus(2, unique);
     if (clearBtn) clearBtn.style.display = "";
   }
 }
@@ -4337,8 +4338,9 @@ function invProcessOdooQuantCsv(text, fileName) {
   invOdooQuantMap = newMap;
   invSaveOdooQuantMap();
   invRenderQuantMapStatus();
-  var el = $("invQuantMapStatus");
-  if (el) el.textContent = loaded + " quant record" + (loaded !== 1 ? "s" : "") + " loaded from " + (fileName || "file") + ".";
+  // Override status text with filename for context
+  var statusEl = $("invQuantSyncStatus");
+  if (statusEl) statusEl.textContent = loaded + " record" + (loaded !== 1 ? "s" : "") + " loaded from " + (fileName || "file") + ".";
 }
 
 // -- Scan input keyboard handler -----------------------------------
