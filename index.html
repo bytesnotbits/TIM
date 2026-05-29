@@ -463,6 +463,17 @@
               <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
             </label>
 
+            <!-- Activity Feed (inline, fills blank area left of soft keypad) -->
+            <div id="invActivityFeed" class="inv-activity-feed inv-activity-feed-inline">
+              <div class="inv-activity-header">
+                <span class="inv-activity-title">Activity</span>
+                <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
+              </div>
+              <div id="invActivityList" class="inv-activity-list">
+                <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
+              </div>
+            </div>
+
             <!-- Phase 5: Unknown serial inline prompt -->
             <div id="invSerialPromptPanel" class="inv-serial-prompt hidden">
               <div class="inv-serial-prompt-header">
@@ -632,16 +643,6 @@
               <span id="invQtyKeySignPlus" style="display:none;"></span>
             </div>
           </div>
-        </div>
-      </div>
-      <!-- Activity Feed (inline) -->
-      <div id="invActivityFeed" class="inv-activity-feed">
-        <div class="inv-activity-header">
-          <span class="inv-activity-title">Activity</span>
-          <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
-        </div>
-        <div id="invActivityList" class="inv-activity-list">
-          <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
         </div>
       </div>
     </div>

@@ -374,10 +374,12 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-context { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; margin-bottom: 10px; }
 
 /* === Two-column scan layout (fields left, keypad right) === */
-.inv-scan-two-col { display:flex; gap:16px; align-items:flex-start; }
-.inv-scan-fields-col { flex:1; min-width:0; }
+.inv-scan-two-col { display:flex; gap:16px; align-items:stretch; }
+.inv-scan-fields-col { flex:1; min-width:0; display:flex; flex-direction:column; }
 .inv-scan-keypad-col { flex:0 0 278px; }
 .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
+.inv-activity-feed-inline { flex:1; margin-top:10px; min-height:120px; display:flex; flex-direction:column; }
+.inv-activity-feed-inline .inv-activity-list { flex:1; max-height:none; overflow-y:auto; }
 @media (max-width:660px) {
   .inv-scan-two-col { flex-direction:column; }
   .inv-scan-keypad-col { flex:none; width:100%; }

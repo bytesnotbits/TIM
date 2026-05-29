@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v1.32.04";
+const APP_VERSION = "v1.32.07";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3190,7 +3190,7 @@ function invQtyKeyApply() {
     return;
   }
   var n = parseInt(invQtyKeypadValue, 10);
-  if (isNaN(n) || n === 0) { invQtyKeyClear(); return; }
+  if (isNaN(n)) { invQtyKeyClear(); return; }
 
   var evt = invEvents.find(function(e) { return e.eventId === invLastBulkEventId; });
   if (!evt) { invQtyKeyClear(); return; }
