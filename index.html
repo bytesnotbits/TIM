@@ -1,0 +1,1291 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>TIM — Receiving + Inventory + Product Catalog v1.30.10</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TIM" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Hidden utility element (referenced by JS, not displayed) -->
+  <textarea id="mapPreview" style="display:none;" readonly></textarea>
+
+<div class="app-shell">
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- SIDEBAR                                                          -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <aside id="appSidebar" class="sidebar">
+
+    <!-- Header -->
+    <div class="sidebar-header">
+      <span class="sidebar-logo">TIM</span>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="sidebar-nav">
+      <button class="sidebar-nav-btn" id="sideNavDataimport" onclick="switchTab('dataimport')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
+        <span class="sidebar-nav-label">Data Import</span>
+      </button>
+      <button class="sidebar-nav-btn active" id="sideNavReceiving" onclick="switchTab('receiving')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg></span>
+        <span class="sidebar-nav-label">Receiving</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavInventory" onclick="switchTab('inventory')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg></span>
+        <span class="sidebar-nav-label">Inventory</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+        <span class="sidebar-nav-label">Products</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavMapping" onclick="switchTab('mapping')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></span>
+        <span class="sidebar-nav-label">Product Mapping</span>
+      </button>
+      <button class="sidebar-nav-btn" id="sideNavBarcodes" onclick="switchTab('barcodes')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="5" x2="2" y2="19"/><line x1="5" y1="5" x2="5" y2="19"/><line x1="9" y1="5" x2="9" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="5" x2="22" y2="19"/></svg></span>
+        <span class="sidebar-nav-label">Barcodes</span>
+      </button>
+    </nav>
+
+    <!-- Username -->
+    <div class="sidebar-user-section">
+      <span class="sidebar-user-label">User</span>
+      <input id="timUsernameInput" class="sidebar-username-input needs-value" type="text"
+             placeholder="Your name (required)"
+             oninput="timSetUsername(this.value)"
+             onblur="timSetUsername(this.value)" />
+    </div>
+
+    <!-- Setup section -->
+    <div class="sidebar-section-divider">Setup</div>
+
+    <div class="sidebar-setup-scroll">
+
+      <!-- Inventory Session (shown only when Inventory tab is active) -->
+      <div id="sideInvSessionCard" class="sidebar-inv-card hidden">
+        <div class="sidebar-inv-card-title">
+          <span id="sideInvDot" class="sidebar-inv-dot"></span>
+          Inventory Session
+        </div>
+        <div id="sideInvNoSession" class="sidebar-inv-no-session">No active session</div>
+        <div id="sideInvInfo" class="hidden">
+          <div id="sideInvName" class="sidebar-inv-session-name">—</div>
+          <div id="sideInvStats" class="sidebar-inv-session-stats">0 events · 0 exceptions</div>
+        </div>
+        <input id="invSessionNameInput" class="sidebar-inv-name-input" type="text"
+               placeholder="Custom name (optional)" autocomplete="off" />
+        <div class="sidebar-inv-actions">
+          <button class="sidebar-inv-btn sidebar-inv-btn-start"   id="invStartBtn"   onclick="invStartNewSession()">+ Start New</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-resume"  id="invResumeBtn"  onclick="invResumeSession()">&#8617; Resume</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-finalize" id="invFinalizeBtn" onclick="invFinalizeSession()" disabled>&#10003; Finalize &amp; Merge</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-recount" id="invRecountBtn" onclick="invStartRecount()" disabled style="grid-column:1/-1;">&#8635; Start Recount</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-secondary" onclick="invExportBackup()">&#8595; Export</button>
+          <label class="sidebar-inv-label-btn">&#8593; Import<input id="invImportFile" type="file" accept=".json" style="display:none;" onchange="invImportBackup(this)" /></label>
+          <label class="sidebar-inv-label-btn" style="grid-column:1/-1;">&#8593; Import Reels CSV<input id="invReelsCsvFile" type="file" accept=".csv" style="display:none;" onchange="invImportReelsCsv(this)" /></label>
+          <button class="sidebar-inv-btn sidebar-inv-btn-danger"  id="invClearBtn"   onclick="invClearSession()" disabled>&#10005; Clear</button>
+        </div>
+      </div>
+
+      <!-- Master JSON status (load via Data Import tab) -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus1Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus1Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Master Data</div>
+          <p class="sidebar-p" id="sideStatus1Label">Not loaded — go to Data Import tab.</p>
+          <button class="secondary" id="exportHistoryBtn" style="margin-top:4px;width:100%;">Export History JSON</button>
+          <span id="historyStatus"></span>
+        </div>
+      </div>
+
+      <!-- Odoo Quant Sync status (load via Data Import tab) -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus2Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus2Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Odoo Quant Sync</div>
+          <p class="sidebar-p">Inventory adjustment IDs from Odoo.</p>
+        </div>
+      </div>
+
+    </div><!-- /sidebar-setup-scroll -->
+
+    <!-- Admin section -->
+    <div class="sidebar-admin">
+      <div class="sidebar-section-divider">Admin</div>
+      <div class="sidebar-admin-content">
+        <button class="secondary sidebar-admin-btn" id="checkUpdateBtn" onclick="checkForUpdate()">Check for Updates</button>
+        <span id="updateStatus" class="sidebar-admin-status"></span>
+        <button class="secondary sidebar-admin-btn sidebar-admin-btn-danger" onclick="clearAllData()">Clear All Data</button>
+      </div>
+      <div class="sidebar-admin-icon-area">
+        <span class="sidebar-setup-svg" title="Check for Updates" onclick="checkForUpdate()" style="cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </span>
+        <span class="sidebar-setup-svg sidebar-setup-svg-danger" title="Clear All Data" onclick="clearAllData()" style="cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        </span>
+      </div>
+    </div>
+
+  </aside><!-- /sidebar -->
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MAIN CONTENT                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <main class="main-content">
+
+    <!-- App header -->
+    <div class="app-header">
+      <h1 class="app-title">TIM <span class="app-version">v1.30.10</span></h1>
+    </div>
+    <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
+
+  <!-- ── Data Import view ── -->
+  <div id="tabDataImport" class="tab-panel">
+
+    <div class="card" style="margin-top:0;">
+      <h2 style="margin-top:0;">Data Import</h2>
+      <p class="small" style="margin:0;">Load files here before using other tabs. All data is stored locally in your browser — nothing is sent to a server. Once loaded, it stays available across all tabs until cleared or the page is refreshed.</p>
+    </div>
+
+    <div class="import-grid">
+
+      <!-- 1. Master Data JSON -->
+      <div class="card import-card">
+        <div class="import-card-when">Recommended · Load once per session or when updated</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#d97706;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          Master Data (JSON)
+        </h3>
+        <p class="small">The core data file that powers TIM. Contains the <strong>product catalog</strong>, <strong>receiving history</strong>, <strong>inventory events</strong>, and <strong>barcode assignments</strong>. Load this first — it enables duplicate checking, product lookups, and mapping across all tabs. Export an updated copy at the end of each session to save changes.</p>
+        <div class="import-card-fmt">File: <code>Calix_Odoo_Converter_source_data.json</code> &nbsp;·&nbsp; Format: <code>.json</code></div>
+        <div id="historyDropZone" class="drop ready">
+          <div class="drop-title">Drop master JSON here, or click to browse</div>
+          <input id="historyFile" type="file" accept=".json,application/json" />
+          <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center;">
+          <button id="clearMasterDataBtn" class="zone-clear-btn" onclick="clearMasterData()">Clear loaded data</button>
+          <button class="secondary" id="exportHistoryBtn" style="margin:0;">Export History JSON</button>
+          <span id="historyStatus" style="font-size:12px;color:#64748b;"></span>
+        </div>
+      </div>
+
+      <!-- 2. Receiving Source File -->
+      <div class="card import-card">
+        <div class="import-card-when">Load before processing each shipment or RMA</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#2563eb;"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
+          Receiving Source File
+        </h3>
+        <p class="small">Load a Calix shipment report or RMA return sheet to populate a receiving batch. Two formats are recognized automatically: <strong>Calix Customer Shipment Notification</strong> (Excel) containing serial numbers, FSANs, and MAC addresses; and <strong>RMA Return Sheets</strong> (Excel/CSV) with item and serial pair columns. After loading, go to the <strong>Receiving</strong> tab to review, fix any blocked rows, and export an Odoo import CSV.</p>
+        <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
+        <div id="sourceDropZone" class="drop ready">
+          <div class="drop-title">Drop Calix or RMA file here, or click to browse</div>
+          <input id="sourceFile" type="file" accept=".xlsx,.xls,.csv" />
+          <span id="sourceDropStatus" class="drop-status">Waiting for upload</span>
+        </div>
+      </div>
+
+      <!-- 3. Odoo Inventory Adjustment Sync -->
+      <div class="card import-card">
+        <div class="import-card-when">Periodic · After each Odoo inventory adjustment export</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#059669;"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          Odoo Inventory Adjustment Sync
+        </h3>
+        <p class="small">Export <strong>Inventory Adjustments</strong> from Odoo and load here. TIM will embed quant IDs on future inventory exports so Odoo can update existing adjustment records in place instead of creating duplicates. Re-load whenever you confirm or clear adjustments in Odoo to keep IDs current.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Inventory → Adjustments → Export)</div>
+        <div id="invQuantSyncZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Inventory Adj. CSV here, or click to browse</div>
+          <input type="file" accept=".csv" onchange="invImportOdooQuantsCsv(this.files[0]);this.value='';" />
+          <span id="invQuantSyncStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="invClearQuantMapBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearOdooQuantMap()">Clear loaded data</button>
+      </div>
+
+      <!-- 4. Product Catalog Upload -->
+      <div class="card import-card">
+        <div class="import-card-when">Occasional · When adding or updating products</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#7c3aed;"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg>
+          Product Catalog Upload
+        </h3>
+        <p class="small">Upload a CSV or Excel file to add or update products in the catalog. Existing products are matched by <strong>Vendor Part #</strong> or <strong>NISC Item #</strong> and updated in place; new products are appended. Changes live in memory until you export an updated Master JSON. Download the template to see required columns, or use a direct Odoo Product Variant export.</p>
+        <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
+        <div style="margin-bottom:10px;">
+          <button class="secondary" onclick="prodDownloadTemplate()" style="margin:0;">Download CSV Template</button>
+        </div>
+        <div id="prodUploadZone" class="prod-upload-zone">
+          <div class="drop-title">Drop product CSV / Excel here, or click to browse</div>
+          <input id="prodUploadFile" type="file" accept=".xlsx,.xls,.csv" style="margin-top:8px;" onchange="prodBulkUpload(this.files[0])" />
+          <div class="prod-template-hint">TIM columns: Vendor Part # · NISC Item # · Name/Description · Vendor · Tracking Type (serial / reel / none) · Odoo External ID · Requires FSAN · History Only<br>Odoo export columns also supported: <code>id · default_code · name · tracking · x_studio_reel · reel_ids · is_storable</code> (rows where is_storable = false are skipped automatically)</div>
+        </div>
+        <div id="prodUploadStatus" class="small" style="margin-top:8px;color:#475569;"></div>
+        <div id="prodUploadSuccessBanner" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:none;align-items:center;gap:16px;flex-wrap:wrap;">
+          <span style="font-weight:700;color:#166534;">&#10003; Products loaded into memory.</span>
+          <span class="small" style="color:#166534;">Export the master JSON to make changes permanent.</span>
+          <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
+        </div>
+        <button id="clearProductCatalogBtn" class="zone-clear-btn" onclick="clearProductCatalog()" style="margin-top:8px;">Clear product catalog</button>
+      </div>
+
+      <!-- 5. Odoo Barcode Sync -->
+      <div class="card import-card">
+        <div class="import-card-when">Periodic · When barcode assignments change in Odoo</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#0891b2;"><line x1="2" y1="5" x2="2" y2="19"/><line x1="5" y1="5" x2="5" y2="19"/><line x1="9" y1="5" x2="9" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="5" x2="22" y2="19"/></svg>
+          Odoo Barcode Sync
+        </h3>
+        <p class="small">Import a <strong>Product Variant CSV</strong> from Odoo to sync its barcode assignments into TIM. Barcodes already in TIM keep their mapping unless Odoo shows a different item — <strong>Odoo wins on conflict</strong>. After syncing, go to the <strong>Barcodes</strong> tab to assign or print labels. Export the column <code>template_multi_barcode_ids</code> from the Odoo Product Variant view.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Products → Variants → Export with barcode column)</div>
+        <div id="bcImportZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Product Variant CSV here, or click to browse</div>
+          <input id="bcImportFile" type="file" accept=".csv" onchange="bcImportOdooCsv(this.files[0])" />
+          <span id="bcImportStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="clearBarcodeImportBtn" class="zone-clear-btn" onclick="clearBarcodeImport()" style="margin-top:8px;">Clear barcode data</button>
+        <div id="bcImportResult" class="small" style="margin-top:8px;color:#475569;"></div>
+      </div>
+
+    </div><!-- /import-grid -->
+  </div><!-- /tabDataImport -->
+
+  <!-- ── Receiving view ── -->
+  <div id="tabReceiving" class="tab-panel active">
+
+    <!-- Draft restore banner (hidden until a saved draft is detected on load) -->
+    <div id="batchDraftBanner" style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:10px 16px;margin-bottom:12px;display:none;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:15px;flex-shrink:0;">&#9888;</span>
+      <span id="batchDraftBannerText" style="flex:1;font-size:14px;color:#78350f;min-width:200px;"></span>
+      <button onclick="restoreBatchDraft()" style="background:#d97706;color:#fff;border:none;border-radius:6px;padding:5px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">Restore</button>
+      <button onclick="dismissBatchDraft()" style="background:none;border:1px solid #d97706;border-radius:6px;padding:5px 12px;font-size:13px;color:#92400e;cursor:pointer;white-space:nowrap;">Discard</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Review</h2>
+      <div id="summary" class="stat-bar"></div>
+      <p class="small" style="margin:8px 0 12px;">Blocked rows must be fixed before export. DNI rows are valid but excluded from Odoo import.</p>
+      <div class="review-actions">
+        <button id="exportCsvBtn" disabled>Export Odoo CSV</button>
+        <button id="openBlindReceiveBtn" class="secondary">Blind Receive / Add Manually</button>
+        <div class="dropdown-wrap">
+          <button class="secondary" onclick="toggleMoreDropdown(event)">More ▾</button>
+          <div class="dropdown-menu hidden" id="moreDropMenu">
+            <button id="markImportedBtn" disabled>Mark as Imported / Append to History</button>
+            <button id="appendHistoryOnlyBtn" disabled>Add Batch to History Only</button>
+            <button id="mergeExistingBtn" disabled>Merge Existing Records</button>
+            <button id="exportBlockedBtn" disabled>Export Blocked Rows</button>
+            <button id="excludeBlockedBtn" class="danger" disabled>Exclude Blocked Rows From Batch</button>
+          </div>
+        </div>
+        <button class="danger" id="clearBatchBtn" style="margin-left:auto;">Clear Batch</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Current Batch <span id="batchDraftSaveStatus" class="inv-status-save hidden" style="font-size:12px;font-weight:400;margin-left:8px;vertical-align:middle;"></span></h2>
+      <div class="scroll"><table id="batchTable"></table></div>
+    </div>
+
+    <!-- Search History (collapsible) -->
+    <div class="card">
+      <div class="collapsible-header" id="searchHistoryHeader" onclick="toggleCollapsible('searchHistoryBody','searchHistoryHeader','searchHistoryChevron')">
+        <h2 style="margin:0;">Search History</h2>
+        <svg id="searchHistoryChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="searchHistoryBody" class="collapsible-body" style="display:none;">
+        <input id="historySearch" type="search" placeholder="Search (auto-filtering)..." />
+        <div class="scroll"><table id="historyTable"></table></div>
+      </div>
+    </div>
+
+  </div><!-- /tabReceiving -->
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- INVENTORY TAB                                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tabInventory" class="tab-panel">
+
+    <!-- Persistent status bar (replaces session card + autosave bar) -->
+    <div id="invStatusBar" class="inv-status-bar hidden">
+      <span id="invStatusModePill" class="inv-status-mode-pill">AUTO</span>
+      <div class="inv-status-loc">
+        <span id="invStatusLocText" class="inv-status-loc-text no-loc">No location</span>
+        <button class="inv-status-loc-clear" onclick="invClearLocation()" title="Clear location">&#215;</button>
+      </div>
+      <span id="invStatusSession" class="inv-status-session">No session</span>
+      <span id="invStatusCounts" class="inv-status-counts">0 events</span>
+      <span id="invStatusSave" class="inv-status-save hidden">Saved</span>
+    </div>
+    <!-- Hidden session meta elements — written by renderInvSessionMeta() / renderInvSessionUI() -->
+    <div style="display:none;">
+      <span id="invAutosaveBar"></span><span id="invAutosaveText"></span>
+      <span id="invNoSession"></span><span id="invSessionMeta"></span>
+      <span id="invMetaName"></span><span id="invMetaId"></span>
+      <span id="invMetaStatus"></span><span id="invMetaCreated"></span>
+      <span id="invMetaUpdated"></span>
+      <span id="invMetaEventCount">0</span><span id="invMetaSeq">0</span>
+    </div>
+
+    <!-- Scan / Entry Panel -->
+    <div class="card" id="invScanCard">
+      <h2>Scan / Entry Panel</h2>
+      <p class="small">Scan or type any value. Any string starting with <b>WH</b> automatically sets the location. Barcode scanners that send Enter will auto-submit.</p>
+      <!-- Location chip (inline in scan row — see inv-scan-main-row below) -->
+      <!-- Hidden legacy display element — JS still writes to it safely -->
+      <span id="invLocationDisplay" style="display:none;"></span>
+      <span id="invScanLocation" style="display:none;"></span>
+
+      <div class="inv-scan-panel">
+
+        <!-- Mode Toggle -->
+        <div class="inv-mode-toggle">
+          <span class="inv-mode-toggle-label">Mode:</span>
+          <button class="inv-mode-btn active" id="invModeBtnAuto"   onclick="invSetScanMode('auto')">Auto-Detect</button>
+          <button class="inv-mode-btn"        id="invModeBtnSerial" onclick="invSetScanMode('serial')">Serial / FSAN</button>
+          <button class="inv-mode-btn"        id="invModeBtnReel"   onclick="invSetScanMode('reel')">Cable Reel</button>
+          <button class="inv-mode-btn"        id="invModeBtnItem"   onclick="invSetScanMode('item')">Item # (Bulk)</button>
+          <button class="secondary" style="padding:6px 10px;font-size:12px;margin:0 0 0 6px;" onclick="invToggleModeBarcodes()">Mode Barcodes ▾</button>
+        </div>
+
+        <!-- Mode-switch barcodes (scan to change mode without touching screen) -->
+        <div id="invModeBarcodes" class="inv-mode-barcodes hidden">
+          <div class="inv-mode-barcode-item">
+            <svg id="invBarcodeSerial"></svg>
+            <div class="inv-mode-barcode-label">Serial / FSAN Mode</div>
+            <div class="inv-mode-barcode-code">##MSERIAL</div>
+          </div>
+          <div class="inv-mode-barcode-item">
+            <svg id="invBarcodeReel"></svg>
+            <div class="inv-mode-barcode-label">Cable Reel Mode</div>
+            <div class="inv-mode-barcode-code">##MREEL</div>
+          </div>
+          <div class="inv-mode-barcode-item">
+            <svg id="invBarcodeItem"></svg>
+            <div class="inv-mode-barcode-label">Item # Bulk Mode</div>
+            <div class="inv-mode-barcode-code">##MITEM</div>
+          </div>
+          <div class="inv-mode-barcode-item">
+            <svg id="invBarcodeAuto"></svg>
+            <div class="inv-mode-barcode-label">Auto-Detect Mode</div>
+            <div class="inv-mode-barcode-code">##MAUTO</div>
+          </div>
+        </div>
+
+        <!-- Two-column layout: fields left, soft keypad right -->
+        <div class="inv-scan-two-col">
+          <div class="inv-scan-fields-col">
+            <!-- Hidden utility inputs -->
+            <select id="invScanTypeOverride" style="display:none;">
+              <option value="">Auto-detect</option>
+              <option value="serial">Serial Number</option>
+              <option value="fsan">FSAN</option>
+              <option value="mac">MAC Address</option>
+              <option value="item_number">Item Number (bulk count)</option>
+              <option value="box_id">Box ID</option>
+              <option value="location">Location</option>
+              <option value="reel_number">Reel Number</option>
+            </select>
+            <input id="invScanQty" type="hidden" value="1" />
+            <!-- Primary scan input — always at top -->
+            <div class="inv-scan-main-row">
+              <!-- Input line: location chip + scan field -->
+              <div class="inv-scan-input-line">
+                <div id="invLocChipWrap" style="position:relative;display:flex;align-items:center;">
+                  <button id="invLocChip" class="inv-loc-chip" onclick="invToggleLocPopover(event)" title="Set location">
+                    <span class="inv-loc-chip-label">LOC</span>
+                    <span id="invLocBarValue" class="inv-loc-chip-value inv-loc-chip-none">—</span>
+                  </button>
+                  <div id="invLocPopover" class="inv-loc-popover hidden">
+                    <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Type or scan a location (e.g. WH-RACK1)</div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                      <input id="invLocPopoverInput" type="text" placeholder="WH-RACK1"
+                             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+                             style="flex:1;padding:7px 10px;border:1.5px solid #86efac;border-radius:6px;font-family:monospace;font-size:14px;font-weight:700;text-transform:uppercase;"
+                             onkeydown="if(event.key==='Enter'){invLocPopoverSet();}if(event.key==='Escape'){invCloseLocPopover();}" />
+                      <button style="padding:7px 14px;font-size:13px;margin:0;" onclick="invLocPopoverSet()">Set</button>
+                      <button class="secondary" style="padding:7px 10px;font-size:13px;margin:0;" onclick="invCloseLocPopover()">✕</button>
+                    </div>
+                    <button class="secondary" style="padding:4px 8px;font-size:11px;margin:6px 0 0;width:100%;text-align:center;" onclick="invClearLocation();invCloseLocPopover()">Clear Location</button>
+                  </div>
+                </div>
+                <input id="invScanInput" class="inv-scan-main-input" type="text"
+                       placeholder="Scan barcode or type value..."
+                       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+              </div>
+              <!-- Button line: action buttons -->
+              <div class="inv-scan-btn-line">
+                <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
+                <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
+              </div>
+            </div>
+            <div>
+              <span id="invDetectedBadge" class="inv-detected-badge unknown">type: —</span>
+            </div>
+            <div id="invScanMetaRow" class="inv-scan-meta-row" style="display:none;"></div>
+            <!-- Context fields -->
+            <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
+              <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
+                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" style="padding:6px 8px;font-size:13px;" />
+              </label>
+            </div>
+            <label class="small" style="display:block;margin-bottom:6px;">Notes (optional — applies to this scan)
+              <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
+            </label>
+
+            <!-- Phase 5: Unknown serial inline prompt -->
+            <div id="invSerialPromptPanel" class="inv-serial-prompt hidden">
+              <div class="inv-serial-prompt-header">
+                <span class="inv-serial-prompt-title">&#9888; Unknown Device — Enter Details to Commit</span>
+                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invCancelSerialPrompt()">Cancel</button>
+              </div>
+              <p class="small" style="margin:0 0 8px;color:#713f12;">Device not found in history. Fill in what you know, then click Commit — or Cancel to log an exception.</p>
+              <div class="inv-serial-prompt-grid">
+                <label>Serial Number
+                  <input id="invSerialPromptSerial" type="text" placeholder="e.g. SN123456" autocomplete="off" style="text-transform:uppercase;" />
+                </label>
+                <label>FSAN
+                  <input id="invSerialPromptFsan" type="text" placeholder="e.g. CXNK00A1B2C3" autocomplete="off" style="text-transform:uppercase;" />
+                </label>
+                <label>MAC Address <span style="font-weight:400;">(optional)</span>
+                  <input id="invSerialPromptMac" type="text" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" style="text-transform:uppercase;" />
+                </label>
+                <label>Notes <span style="font-weight:400;">(optional)</span>
+                  <input id="invSerialPromptNotes" type="text" placeholder="e.g. found loose, no box"
+                         onkeydown="if(event.key==='Enter'){event.preventDefault();invCommitSerialPrompt();}" />
+                </label>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button onclick="invCommitSerialPrompt()" style="flex:1;padding:9px;">Commit Device</button>
+                <button class="secondary" onclick="invCancelSerialPrompt()">Cancel / Exception</button>
+              </div>
+            </div>
+
+            <!-- Reel entry inline panel (shown in Cable Reel mode) -->
+            <div id="invReelInlinePanel" class="inv-reel-entry-panel hidden">
+              <div class="inv-reel-entry-header">
+                <b style="font-size:13px;color:#166534;">Cable Reel Entry</b>
+                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invDiscardReelEntry()">Discard / Clear</button>
+              </div>
+              <div class="inv-reel-inline-grid">
+                <label>Item Number *
+                  <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
+                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
+                </label>
+                <label>Reel Number *
+                  <input id="invReelNumber" type="text" placeholder="e.g. REEL123" autocomplete="off"
+                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
+                </label>
+              </div>
+              <div style="margin-bottom:10px;">
+                <label style="font-size:12px;color:#475569;font-weight:700;display:block;">Span Type
+                  <select id="invReelSpanType" onchange="invReelSpanTypeChange()" style="margin-top:3px;width:100%;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+                    <option value="single">Single Span</option>
+                    <option value="two_way">Two-Way (two spans)</option>
+                  </select>
+                </label>
+              </div>
+              <!-- Span A -->
+              <div class="inv-reel-span-section">
+                <b style="font-size:12px;color:#475569;">Span A</b>
+                <div class="inv-reel-span-row">
+                  <label>Inner Seq
+                    <input id="invReelInnerA" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq A" />
+                  </label>
+                  <label>Outer Seq
+                    <input id="invReelOuterA" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq A" />
+                  </label>
+                  <label>Available Ft
+                    <input id="invReelFtA" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#1d4ed8;" placeholder="—" />
+                  </label>
+                </div>
+              </div>
+              <!-- Span B (two-way only) -->
+              <div id="invReelSpanBSection" class="inv-reel-span-section span-b" style="display:none;">
+                <b style="font-size:12px;color:#475569;">Span B</b>
+                <div class="inv-reel-span-row">
+                  <label>Inner Seq
+                    <input id="invReelInnerB" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Inner Seq B" />
+                  </label>
+                  <label>Outer Seq
+                    <input id="invReelOuterB" type="number" min="0" placeholder="0"
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" data-reel-label="Outer Seq B" />
+                  </label>
+                  <label>Available Ft
+                    <input id="invReelFtB" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#16a34a;" placeholder="—" />
+                  </label>
+                </div>
+              </div>
+              <!-- Total -->
+              <div class="inv-reel-inline-total">
+                <b style="font-size:13px;color:#1d4ed8;">Total Available Ft</b>
+                <span id="invReelTotalFt" style="font-size:20px;font-weight:800;color:#1d4ed8;">—</span>
+              </div>
+              <!-- Historical comparison -->
+              <div id="invReelHistoryPanel" style="display:none;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:10px;">
+                <b style="font-size:12px;color:#92400e;">Previous Count for This Reel</b>
+                <div class="scroll" style="max-height:70px;margin-top:6px;">
+                  <table style="font-size:12px;width:auto;">
+                    <thead>
+                      <tr>
+                        <th style="white-space:nowrap;">Previous Ft</th>
+                        <th style="white-space:nowrap;">Current Ft</th>
+                        <th style="white-space:nowrap;">Difference</th>
+                        <th style="white-space:nowrap;">Counted At</th>
+                      </tr>
+                    </thead>
+                    <tbody id="invReelHistoryBody"></tbody>
+                  </table>
+                </div>
+              </div>
+              <!-- Notes -->
+              <label style="font-size:12px;color:#475569;font-weight:700;display:block;margin-bottom:10px;">Notes
+                <input id="invReelNotes" type="text" placeholder="Optional notes for this reel count"
+                       style="width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;font-size:13px;"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();invSubmitReelEntry();}" />
+              </label>
+              <div style="display:flex;gap:8px;">
+                <button id="invReelSaveBtn" onclick="invSubmitReelEntry()" style="flex:1;padding:10px;">Save Reel Count</button>
+                <button class="secondary" onclick="invDiscardReelEntry()">Discard</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Soft keypad column (persistent in Item and Reel modes) -->
+          <div class="inv-scan-keypad-col">
+            <div id="invQtyKeypad" class="inv-qty-keypad mode-qty">
+              <div class="inv-qty-keypad-header">
+                <span id="invQtyKeypadTitle" class="inv-qty-keypad-title">Adjust Quantity</span>
+              </div>
+              <div id="invQtyKeypadContext" class="inv-qty-keypad-context">Scan an item to begin.</div>
+              <!-- Focus-jump row: reel mode only -->
+              <div id="invKeyFocusRow" class="inv-key-focus-row hidden">
+                <button class="inv-key-focus" data-target="reel"   onclick="invKeyFocusField('reel')">Reel #</button>
+                <button class="inv-key-focus" data-target="item"   onclick="invKeyFocusField('item')">Item #</button>
+                <button class="inv-key-focus" data-target="inner"  onclick="invKeyFocusField('inner')">Inner</button>
+                <button class="inv-key-focus" data-target="outer"  onclick="invKeyFocusField('outer')">Outer</button>
+                <button class="inv-key-focus" data-target="inner2" onclick="invKeyFocusField('inner2')">Inner 2</button>
+                <button class="inv-key-focus" data-target="outer2" onclick="invKeyFocusField('outer2')">Outer 2</button>
+              </div>
+              <!-- Display -->
+              <div class="inv-qty-display-row">
+                <span id="invQtyDisplayLabel" class="inv-qty-display-label">Qty:</span>
+                <span id="invQtyDisplay" class="inv-qty-display">1</span>
+              </div>
+              <!-- 3-col 10-key digit grid -->
+              <div class="inv-qty-keys">
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('7')">7</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('8')">8</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('9')">9</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('4')">4</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('5')">5</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('6')">6</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('1')">1</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('2')">2</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('3')">3</button>
+                <button class="inv-qty-key dbl-zero" onclick="invQtyKeyDigit('00')">00</button>
+                <button class="inv-qty-key" onclick="invQtyKeyDigit('0')">0</button>
+                <button class="inv-qty-key backspace" onclick="invQtyKeyBackspace()">⌫</button>
+              </div>
+              <!-- Bottom row: Clear | ± | Apply -->
+              <div class="inv-qty-bottom-row">
+                <button class="inv-qty-key clear" onclick="invQtyKeyClear()">C</button>
+                <button id="invQtyKeySignMinus" class="inv-qty-key sign" onclick="invQtyKeySign()">&#177;</button>
+                <button id="invQtyKeyApplyBtn" class="inv-qty-key apply" onclick="invQtyKeyApply()">&#10003; Apply</button>
+              </div>
+              <!-- Hidden compat stub (old code references invQtyKeySignPlus) -->
+              <span id="invQtyKeySignPlus" style="display:none;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Activity Feed (inline) -->
+      <div id="invActivityFeed" class="inv-activity-feed">
+        <div class="inv-activity-header">
+          <span class="inv-activity-title">Activity</span>
+          <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
+        </div>
+        <div id="invActivityList" class="inv-activity-list">
+          <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exceptions -->
+    <div class="card" id="invExceptionsCard">
+      <div class="collapsible-header" id="invExceptionsHeader" onclick="toggleCollapsible('invExceptionsCollapse','invExceptionsHeader','invExceptionsChevron')">
+        <h2 style="margin:0;">Exceptions <span id="invExceptionCount" class="small" style="font-weight:400;">0 exceptions</span></h2>
+        <svg id="invExceptionsChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="invExceptionsCollapse" class="collapsible-body" style="display:none;">
+        <p class="small">Problems detected during scanning. Never silently discarded — each exception is a permanent timestamped event.</p>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr><th>Seq</th><th>Time</th><th>Scanned Value</th><th>Problem</th><th>Suggested Action</th><th>Status</th><th>Notes</th></tr>
+            </thead>
+            <tbody id="invExceptionsBody">
+              <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No exceptions.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inventory Summary -->
+    <div class="card" id="invSummaryCard">
+      <div class="collapsible-header open" id="invSummaryHeader" onclick="toggleCollapsible('invSummaryCollapse','invSummaryHeader','invSummaryChevron')">
+        <h2 style="margin:0;">Inventory Summary</h2>
+        <svg id="invSummaryChevron" class="collapsible-chevron" style="transform:rotate(180deg);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="invSummaryCollapse" class="collapsible-body">
+        <p class="small">Derived from active events — recalculated automatically after each scan. Voided events are excluded.</p>
+        <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <button id="invExportSummaryBtn" onclick="exportInvSummaryXlsx()" disabled>Export Summary XLSX</button>
+          <button id="invExportOdooAdjXlsxBtn" onclick="exportInvOdooAdjustmentXlsx()" disabled title="Export Odoo Inventory Adjustment XLSX — includes quant IDs if Odoo quants were loaded.">Export Odoo Adj. XLSX</button>
+          <button id="invExportOdooAdjCsvBtn" onclick="exportInvOdooAdjustmentCsv()" disabled title="Export Odoo Inventory Adjustment CSV — includes quant IDs if Odoo quants were loaded.">Export Odoo Adj. CSV</button>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th><th>Description</th><th>Counted Qty</th>
+                <th>Serialized Count</th><th>Reel Footage</th><th>Exceptions</th><th>Last Counted</th>
+              </tr>
+            </thead>
+            <tbody id="invSummaryBody">
+              <tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- Reel Detail -->
+        <div id="invReelDetailSection" style="display:none;margin-top:16px;">
+          <h3 style="margin:0 0 6px;font-size:14px;color:#166534;">Cable Reel Detail</h3>
+          <p class="small" style="margin:0 0 8px;">Each reel scan with sequence numbers. Two-way reels show both spans.</p>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reel #</th><th>Item</th><th>Span Type</th>
+                  <th>Inner A</th><th>Outer A</th><th>Ft A</th>
+                  <th>Inner B</th><th>Outer B</th><th>Ft B</th>
+                  <th>Total Ft</th><th>Location</th><th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="invReelDetailBody">
+                <tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:16px;">No reel counts yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="card" id="invEventLogCard">
+      <h2>Inventory Event Log</h2>
+      <p class="small">Every inventory action creates a permanent timestamped event. Scroll right to see all columns.</p>
+
+      <div class="event-log-filters">
+        <input id="invLogSearch" type="search" placeholder="Search events…" oninput="renderInvEventLog()" style="width:220px;" />
+        <select id="invLogFilterType" onchange="renderInvEventLog()">
+          <option value="">All event types</option>
+          <option value="serialized_device_scan">Serialized Device Scan</option>
+          <option value="box_scan">Box Scan</option>
+          <option value="bulk_quantity_count">Bulk Quantity Count</option>
+          <option value="cable_reel_count">Cable Reel Count</option>
+          <option value="recount_count">Recount Count</option>
+          <option value="exception">Exception</option>
+          <option value="manual_adjustment">Manual Adjustment</option>
+          <option value="void_event">Void Event</option>
+        </select>
+        <select id="invLogFilterStatus" onchange="renderInvEventLog()">
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="voided">Voided</option>
+        </select>
+        <span id="invLogCount" class="small">0 events</span>
+        <button id="invExportEventLogBtn" onclick="exportInvEventLogXlsx()" disabled>Export Event Log XLSX</button>
+      </div>
+
+      <div class="scroll">
+        <table id="invEventLogTable">
+          <thead>
+            <tr>
+              <th>Seq</th><th>Time</th><th>Event Type</th><th>Scan Type</th>
+              <th>Scanned Value</th><th>Item</th><th>Description</th>
+              <th>Serial</th><th>FSAN</th><th>Box ID</th><th>Location</th><th>Qty</th>
+              <th>Status</th><th>Flag</th><th>Notes</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="invEventLogBody">
+            <tr><td colspan="16" style="text-align:center;color:#94a3b8;padding:24px;">No events yet. Start a session to begin.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Phase 7: Recount Card -->
+    <div class="card hidden" id="invRecountCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <h2 style="margin:0;">&#8635; Recount Session</h2>
+        <button onclick="exportRecountXlsx()">Export Recount XLSX</button>
+      </div>
+      <p class="small" id="invRecountParentInfo" style="margin:0 0 14px;color:#6366f1;"></p>
+
+      <!-- Walk-through panel (shown when active) -->
+      <div id="invRecountWalkthrough" class="inv-recount-walkthrough hidden">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+          <div class="inv-recount-item-hd" id="invRecountCurrentItem">—</div>
+          <span class="small" id="invRecountProgress" style="color:#6366f1;font-weight:700;white-space:nowrap;padding-top:4px;"></span>
+        </div>
+        <div class="inv-recount-meta" id="invRecountCurrentMeta"></div>
+        <div class="inv-recount-fields">
+          <label>Recount Qty *
+            <input id="invRecountQtyInput" type="number" min="0" placeholder="0" />
+          </label>
+          <label>Received Since <span style="font-weight:400;font-size:10px;">(from Odoo)</span>
+            <input id="invRecountReceivedInput" type="number" min="0" placeholder="0" />
+          </label>
+          <label>Fulfilled Since <span style="font-weight:400;font-size:10px;">(from Odoo)</span>
+            <input id="invRecountFulfilledInput" type="number" min="0" placeholder="0" />
+          </label>
+        </div>
+        <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:10px;">Notes
+          <input id="invRecountNoteInput" type="text" placeholder="Optional"
+                 style="width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #c7d2fe;border-radius:6px;font-size:13px;margin-top:3px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();invRecountSaveItem();}" />
+        </label>
+        <div style="display:flex;gap:8px;">
+          <button onclick="invRecountSaveItem()" style="flex:2;padding:10px;">&#10003; Save &amp; Next</button>
+          <button class="secondary" onclick="invRecountSkipItem()" style="flex:1;">Skip</button>
+          <button class="secondary danger" onclick="invRecountEndWalkthrough()" style="flex:1;font-size:12px;">End Walk-through</button>
+        </div>
+      </div>
+
+      <!-- Add items row -->
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="invRecountAddInput" type="text" placeholder="Scan or type item number to add to recount list"
+               style="flex:1;padding:8px 10px;border:1px solid #c7d2fe;border-radius:8px;font-size:13px;"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();invAddToRecountList();}"
+               autocomplete="off" autocorrect="off" autocapitalize="off" />
+        <button onclick="invAddToRecountList()" class="secondary">+ Add</button>
+        <button onclick="invBuildRecountFromParent()" class="secondary" title="Auto-populate from parent session items">&#8635; From Parent</button>
+      </div>
+
+      <!-- Queue -->
+      <div id="invRecountListEmpty" style="color:#94a3b8;padding:16px;text-align:center;border:1px dashed #c7d2fe;border-radius:8px;">
+        No items in recount list yet. Scan items above or click "From Parent".
+      </div>
+      <div id="invRecountListContainer" class="hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span class="small" id="invRecountListStats" style="color:#475569;"></span>
+          <button onclick="invRecountBeginWalkthrough()" id="invRecountBeginBtn" class="secondary" style="padding:6px 14px;">&#9654; Begin Walk-through</button>
+        </div>
+        <div id="invRecountQueueEl" class="inv-recount-queue"></div>
+      </div>
+    </div>
+
+  </div><!-- /tabInventory -->
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- PRODUCTS TAB                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="tabProducts" class="tab-panel">
+
+    <!-- Product Catalog -->
+    <div class="card">
+      <h2>Product Catalog &nbsp;<span id="prodCatalogCount" class="small" style="font-weight:400;">0 products</span></h2>
+      <div class="prod-search-row">
+        <input type="search" id="prodSearch" placeholder="Search by vendor part #, NISC item #, name, vendor…" oninput="prodRenderList()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <select id="prodFilterTracking" onchange="prodRenderList()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">
+          <option value="">All tracking types</option>
+          <option value="serial">Serial</option>
+          <option value="reel">Reel</option>
+          <option value="none">None (bulk qty)</option>
+        </select>
+        <button class="secondary" onclick="prodRenderList()">Refresh</button>
+        <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Vendor Part #</th><th>NISC Item #</th><th>Name / Description</th><th>Vendor</th><th>Tracking</th><th>Odoo External ID</th><th>Req. FSAN</th><th>History Only</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="prodCatalogBody">
+            <tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">Load a master JSON or upload products to populate the catalog.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Design Notes & Architecture Decisions -->
+    <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;">
+        Architecture &amp; Data Model Notes
+        <button class="secondary" style="font-size:12px;padding:5px 12px;margin:0;" onclick="prodToggleNotes()">Show / Hide</button>
+      </h2>
+      <p class="small">Design decisions recorded during development. Review against real usage data after 6–12 months of operation.</p>
+      <div id="prodNotesBody" class="design-notes-body hidden">
+
+        <h3>Data Volume Assumptions (recorded May 2026)</h3>
+        <table>
+          <tr><th>Metric</th><th>Assumed Value</th><th>Check Against Real Data</th></tr>
+          <tr><td>Product types in catalog</td><td>~3,000 max</td><td>Actual count in catalog above</td></tr>
+          <tr><td>Max locations per item</td><td>8 (most items: 1–2)</td><td>Review inventory event location spread</td></tr>
+          <tr><td>Inventory cycles per year</td><td>4</td><td>Count closed sessions per year</td></tr>
+          <tr><td>Serialized devices in stock</td><td>~2,400</td><td>Count serialized_device_scan events in latest session</td></tr>
+          <tr><td>Cable reels in stock</td><td>~450</td><td>Count cable_reel_count events in latest session</td></tr>
+          <tr><td>Estimated events per year</td><td>~16,200</td><td>Count inventory_events added per calendar year</td></tr>
+          <tr><td>10-year event ceiling</td><td>~162,000 records / ~49 MB</td><td>Check master JSON file size after 2–3 years</td></tr>
+        </table>
+
+        <h3 id="schema-version-heading">Master JSON Schema (v1.27)</h3>
+        <p>All data lives in <code>Calix_Odoo_Converter_source_data.json</code>. Top-level keys:</p>
+        <table>
+          <tr><th>Key</th><th>Contents</th><th>Notes</th></tr>
+          <tr><td>product_map</td><td>Product catalog keyed by Vendor Part # (or NISC Item # when no vendor part exists)</td><td>Each entry includes <code>hctc</code> (NISC Item #) and <code>tracking_type</code></td></tr>
+          <tr><td>history.records</td><td>Receiving history (Calix/RMA imports)</td><td>Existing structure — unchanged</td></tr>
+          <tr><td>inventory_sessions</td><td>Closed inventory session metadata</td><td>Added v1.27; one record per finalized session</td></tr>
+          <tr><td>inventory_events</td><td>All finalized inventory events (flat array)</td><td>Added v1.27; each event carries its sessionId</td></tr>
+        </table>
+
+        <h3>Tracking Types</h3>
+        <table>
+          <tr><th>Type</th><th>Meaning</th><th>Inventory behavior</th></tr>
+          <tr><td><code>serial</code></td><td>Each physical unit has a unique serial number</td><td>One event per scan; duplicate detection active</td></tr>
+          <tr><td><code>reel</code></td><td>Cable/fiber reel tracked by footage via sequence numbers</td><td>Opens reel modal; records footage per span</td></tr>
+          <tr><td><code>none</code></td><td>Bulk item — count only, no individual tracking</td><td>Simple quantity entry; location-level count</td></tr>
+        </table>
+
+        <h3>Data Retention Policy</h3>
+        <p>On every master JSON export (and on Finalize Session), <code>inventory_events</code> older than <strong>10 years</strong> are automatically purged. <code>history.records</code> (receiving history) and <code>inventory_sessions</code> metadata are never auto-purged — they are small and serve as the permanent audit trail.</p>
+
+        <h3>Session Finalize Workflow</h3>
+        <ol>
+          <li>Load master JSON in the Receiving tab (Step 1).</li>
+          <li>Run the inventory session in the Inventory tab.</li>
+          <li>Click <strong>Finalize &amp; Merge to Master JSON</strong> when the count is complete.</li>
+          <li>The session is marked <code>closed</code>; all events are merged into <code>inventory_events</code> with their <code>sessionId</code>.</li>
+          <li>An updated master JSON is downloaded automatically — replace the previous master file.</li>
+        </ol>
+
+        <h3>Item History View</h3>
+        <p>Click the <strong>History</strong> button next to any product in the catalog above to see: all receiving records (from <code>history.records</code>) and all inventory events across every finalized session (from <code>inventory_events</code>), grouped by session with quantity/footage totals.</p>
+
+        <h3>Assumptions to Validate After Real Use</h3>
+        <ul>
+          <li>Is the average locations-per-item actually ≤ 8? Check the item history view for multi-location items.</li>
+          <li>Is the master JSON file size growing faster than expected? If it exceeds ~80 MB, consider lowering the purge window to 5 years.</li>
+          <li>Are there product types that don't fit serial / reel / none cleanly? Flag them — we may need a 4th tracking type.</li>
+          <li>Is the "Finalize" workflow creating too much friction? Consider an auto-finalize on session clear as an alternative.</li>
+        </ul>
+
+      </div><!-- /prodNotesBody -->
+    </div>
+
+  </div><!-- /tabProducts -->
+
+  <!-- ── Barcodes view ── -->
+  <div id="tabBarcodes" class="tab-panel">
+
+    <!-- Scan Panel -->
+    <div class="card" id="bcScanCard">
+      <h2 style="margin-top:0;">Scan Barcode</h2>
+      <p class="small">Scan a barcode to assign it to a product. If the barcode is not recognized, scan the item number to link them. The scanner's Enter key will auto-submit.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+        <input id="bcScanInput" type="text" placeholder="Scan barcode…" autocomplete="off" autocorrect="off" spellcheck="false"
+               style="flex:1;font-size:16px;font-family:monospace;padding:10px 12px;border:2px solid #cbd5e1;border-radius:8px;"
+               onkeydown="if(event.key==='Enter'){bcProcessBarcodeScan();}" />
+        <button onclick="bcProcessBarcodeScan()" style="white-space:nowrap;">Submit</button>
+      </div>
+      <div id="bcScanFeedback" style="display:none;padding:10px 14px;border-radius:8px;font-size:14px;font-weight:500;margin-bottom:10px;"></div>
+
+      <!-- Unknown barcode — item number prompt -->
+      <div id="bcUnknownSection" class="hidden" style="background:#fff7ed;border:2px solid #fed7aa;border-radius:10px;padding:14px;">
+        <p style="margin:0 0 10px;font-size:14px;color:#92400e;">
+          <strong>Unknown barcode:</strong> <code id="bcPendingBarcodeDisplay" style="background:#ffedd5;padding:2px 6px;border-radius:4px;font-size:13px;"></code><br>
+          Scan the <strong>item number</strong> to link it to this barcode.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="bcItemScanInput" type="text" placeholder="Scan item number…" autocomplete="off" autocorrect="off" spellcheck="false"
+                 style="flex:1;min-width:200px;font-size:16px;font-family:monospace;padding:10px 12px;border:2px solid #fed7aa;border-radius:8px;"
+                 onkeydown="if(event.key==='Enter'){bcProcessItemNumber();}" />
+          <button onclick="bcProcessItemNumber()" style="white-space:nowrap;">Link</button>
+          <button class="secondary" onclick="bcCancelUnknown()" style="white-space:nowrap;">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Batch Review Panel -->
+    <div class="card">
+      <h2 style="margin-top:0;">Current Batch &nbsp;<span id="bcBatchCount" class="small" style="font-weight:400;">0 barcodes</span></h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Barcode</th><th>Item #</th><th>Description</th><th>Time</th><th></th></tr></thead>
+          <tbody id="bcBatchBody">
+            <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px;">No barcodes in batch. Scan a barcode to start.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap;">
+        <button class="danger" onclick="bcClearBatch()" style="margin:0;">Clear Batch</button>
+        <div style="flex:1;"></div>
+        <p class="small" style="margin:0;color:#6b7280;max-width:380px;text-align:right;">
+          <strong>Export &amp; Save</strong> generates an Odoo-compatible CSV <em>and</em> permanently adds these barcodes to TIM's database.
+        </p>
+        <button id="bcExportSaveBtn" onclick="bcExportAndSave()" style="margin:0;background:#166534;white-space:nowrap;">Export &amp; Save</button>
+      </div>
+    </div>
+
+  </div><!-- /tabBarcodes -->
+
+  <!-- ── Product Mapping view ── -->
+  <div id="tabMapping" class="tab-panel">
+    <div class="card">
+      <h2 style="margin-top:0;">Mapping Editor</h2>
+      <p class="small">Add or update a product mapping. Use the External ID exported from <b>Product Variants</b>. Product Template IDs are blocked to prevent bad Odoo imports. After saving, the current batch will be reprocessed automatically.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:12px;">
+        <label class="small">Vendor Part # (map key)<br><input id="mapProduct" type="text" placeholder="100-05603 — leave blank if NISC-only item" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">NISC Item # / Odoo Internal Ref<br><input id="mapHctc" type="text" placeholder="6030" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Product Variant External ID<br><input id="mapExternalId" type="text" placeholder="__export__.product_product_..." style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Description<br><input id="mapName" type="text" placeholder="Odoo product description" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Vendor<br><input id="mapVendor" type="text" placeholder="Calix, Tarana, Other" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Tracking Type<br>
+          <select id="mapTrackingType" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;">
+            <option value="serial">Serial — each unit has a unique serial number</option>
+            <option value="reel">Reel — cable/fiber tracked by footage</option>
+            <option value="none">None — bulk quantity count only</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
+        <label class="small"><input id="mapSerialTracked" type="checkbox" checked /> Serial tracked / importable to Odoo</label>
+        <label class="small"><input id="mapRequiresFsan" type="checkbox" /> Requires FSAN/name</label>
+        <label class="small"><input id="mapHistoryOnly" type="checkbox" /> History-only by default / do not export to Odoo</label>
+      </div>
+      <button id="saveMappingBtn">Save Mapping</button>
+      <button class="secondary" id="clearMappingFormBtn">Clear Form</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Unknown Products From Current Batch</h2>
+      <p class="small">Click a row to pre-fill the mapping form above.</p>
+      <div class="scroll"><table id="unknownProductsTable"></table></div>
+    </div>
+  </div><!-- /tabMapping -->
+
+  </main><!-- /main-content -->
+</div><!-- /app-shell -->
+
+  <!-- Item History Modal -->
+  <div id="prodHistoryModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal item-history-modal">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;" id="prodHistoryModalTitle">Item History</h2>
+          <div class="small" id="prodHistoryModalSubtitle"></div>
+        </div>
+        <button class="secondary" onclick="prodCloseHistoryModal()">Close</button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Product info strip -->
+        <div id="prodHistoryInfo" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;display:flex;flex-wrap:wrap;gap:16px;"></div>
+
+        <!-- Receiving history -->
+        <div class="item-history-section">
+          <b style="font-size:13px;color:#475569;text-transform:uppercase;letter-spacing:.05em;">Receiving History</b>
+          <span id="prodHistoryReceivingCount" class="small" style="margin-left:8px;"></span>
+          <div class="scroll" style="max-height:220px;margin-top:8px;">
+            <table>
+              <thead><tr><th>Date</th><th>Source</th><th>RMA / SO</th><th>Serial</th><th>FSAN</th><th>Status</th></tr></thead>
+              <tbody id="prodHistoryReceivingBody">
+                <tr><td colspan="6" style="color:#94a3b8;text-align:center;padding:12px;">No receiving records.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Inventory history -->
+        <div class="item-history-section">
+          <b style="font-size:13px;color:#475569;text-transform:uppercase;letter-spacing:.05em;">Inventory History (Finalized Sessions)</b>
+          <span id="prodHistoryInvCount" class="small" style="margin-left:8px;"></span>
+          <div class="scroll" style="max-height:260px;margin-top:8px;">
+            <table>
+              <thead><tr><th>Session</th><th>Closed</th><th>Location</th><th>Event Type</th><th>Qty / Footage</th><th>Serial</th><th>Notes</th></tr></thead>
+              <tbody id="prodHistoryInvBody">
+                <tr><td colspan="7" style="color:#94a3b8;text-align:center;padding:12px;">No finalized inventory events. Finalize a session to see history here.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Current session events (if loaded) -->
+        <div class="item-history-section" id="prodHistoryCurrentSection" style="display:none;">
+          <b style="font-size:13px;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;">Current Session (not yet finalized)</b>
+          <div class="scroll" style="max-height:160px;margin-top:8px;">
+            <table>
+              <thead><tr><th>Seq</th><th>Time</th><th>Location</th><th>Event Type</th><th>Qty / Footage</th><th>Serial</th></tr></thead>
+              <tbody id="prodHistoryCurrentBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Notes modal -->
+  <div id="invNotesModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal inv-notes-modal">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;">Event Notes</h2>
+          <div class="small" id="invNotesModalDesc"></div>
+        </div>
+        <button class="secondary" onclick="invCloseNotesModal()">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="invNotesModalInfo" class="small" style="margin-bottom:12px;color:#475569;"></div>
+        <label style="font-weight:700;color:#475569;font-size:13px;display:block;">
+          Notes
+          <textarea id="invNotesModalText" style="width:100%;box-sizing:border-box;min-height:100px;margin-top:6px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit;resize:vertical;"></textarea>
+        </label>
+        <div id="invNotesModalHistory" style="display:none;margin-top:14px;border-top:1px solid #e5e7eb;padding-top:12px;">
+          <div style="font-weight:700;font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Status History</div>
+          <div id="invNotesModalHistoryList" style="font-size:13px;"></div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;">
+          <button onclick="invSaveNotesModal()">Save Notes</button>
+          <button class="secondary" onclick="invCloseNotesModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="blindReceiveModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="blindReceiveTitle">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="blindReceiveTitle" style="margin:0;">Blind Receiving / Manual Device Entry</h2>
+          <div class="small">Add serialized devices by HCTC item number. Recognized items auto-fill their Odoo mapping; unknown items can be mapped inline.</div>
+        </div>
+        <button class="secondary" id="closeBlindReceiveBtn">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid">
+          <label>NISC Item # / Vendor Part #
+            <input id="blindHctc" type="text" placeholder="Scan or enter NISC item number" />
+          </label>
+          <label>Sales Order
+            <input id="blindSaleOrder" type="text" placeholder="Optional; stays for next device" />
+          </label>
+          <label>Customer PO
+            <input id="blindCustomerPo" type="text" placeholder="Optional; stays for next device" />
+          </label>
+          <label>Receive Date
+            <input id="blindReceiveDate" type="date" />
+          </label>
+          <label>Notes / RMA / Reference
+            <input id="blindNotes" type="text" placeholder="Optional; stays for next device" />
+          </label>
+        </div>
+        <div id="blindLookupPanel" class="lookup-panel small">Enter an HCTC item number to look up the product mapping.</div>
+
+        <div id="blindMappingPanel" class="mapping-inline hidden">
+          <h3 style="margin-top:0;">Unknown Item Mapping</h3>
+          <p class="small">Create a product mapping now so this item can be validated and exported. Use Product Variant external IDs for Odoo imports.</p>
+          <div class="modal-grid">
+            <label>Vendor
+              <input id="blindVendor" type="text" placeholder="Calix, Tarana, Other" />
+            </label>
+            <label>Description
+              <input id="blindDescription" type="text" placeholder="Device description" />
+            </label>
+            <label>Odoo Product Variant External ID
+              <input id="blindExternalId" type="text" placeholder="__export__.product_product_..." />
+            </label>
+          </div>
+          <div class="queue-actions">
+            <label class="small"><input id="blindSerialTracked" type="checkbox" checked /> Importable / serial tracked</label>
+            <label class="small"><input id="blindRequiresFsan" type="checkbox" /> Requires FSAN</label>
+            <label class="small"><input id="blindHistoryOnlyDefault" type="checkbox" /> History-only by default</label>
+            <button id="blindSaveMappingBtn">Save Mapping</button>
+          </div>
+        </div>
+
+        <div class="scan-panel">
+          <h3 style="margin-top:0;">Bulk Scanner Entry</h3>
+          <div class="small">Scan or hand-key the shared item/SO/PO first. Barcode scanners that send Enter will move through Serial → FSAN if required → MAC if required, then add the device and reset back to Serial.</div>
+          <div class="queue-actions">
+            <label class="small"><input id="blindAutoCommit" type="checkbox" checked /> Auto-add after required scans</label>
+            <label class="small"><input id="blindRequireFsanForSession" type="checkbox" /> Require FSAN for this session</label>
+            <label class="small"><input id="blindRequireMacForSession" type="checkbox" checked /> Require MAC for this session</label>
+            <label class="small"><input id="blindHistoryOnlyRow" type="checkbox" /> History only for scanned devices</label>
+          </div>
+          <div id="blindScanStatus" class="scan-status small">Ready. Enter an item number, then place the cursor in Serial.</div>
+          <div id="blindPatternHint" class="anomaly-panel ok small">Pattern check ready. Warnings will appear here without blocking the scan.</div>
+          <div><span class="small"><b>Recent serials:</b></span><div id="blindRecentScans" class="recent-scans"><span class="small">None yet</span></div></div>
+        </div>
+
+        <h3>Device Scan Fields</h3>
+        <div class="modal-grid">
+          <label>Serial Number <span style="color:#dc2626;">*</span>
+            <input id="blindSerial" type="text" placeholder="Scan serial first" />
+            <div class="inline-hint">Required for every device</div>
+          </label>
+          <label>FSAN / Name
+            <input id="blindFsan" type="text" placeholder="Scan second when required" />
+            <div class="inline-hint">Required when the product/session requires FSAN</div>
+          </label>
+          <label>MAC Address
+            <input id="blindMac" type="text" placeholder="Scan last when available/required" />
+            <div class="inline-hint">Can be disabled for products without MAC scans</div>
+          </label>
+        </div>
+        <div class="queue-actions">
+          <button id="blindAddToQueueBtn">Add / Update Device in Queue</button>
+          <button class="secondary" id="blindClearDeviceBtn">Clear Device Fields</button>
+          <button class="secondary" id="blindFocusSerialBtn">Focus Serial Field</button>
+        </div>
+
+        <h3>Manual Receiving Queue</h3>
+        <div class="queue-actions">
+          <button class="secondary" id="blindPrevQueuedBtn" disabled>← Previous</button>
+          <button class="secondary" id="blindNextQueuedBtn" disabled>Next →</button>
+          <button class="secondary" id="blindNewQueuedBtn">New Device</button>
+          <span id="blindQueueNavStatus" class="small">No queued device selected.</span>
+        </div>
+        <div class="scroll"><table id="blindQueueTable"></table></div>
+        <div class="queue-actions">
+          <button id="blindProcessQueueBtn" disabled>Add Queue to Current Batch</button>
+          <button class="danger" id="blindClearQueueBtn" disabled>Clear Queue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" defer></script>
+  <!-- Product Edit Modal -->
+  <div id="prodEditModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:600px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">Edit Product</h2>
+          <p id="prodEditKeyDisplay" class="small" style="margin:4px 0 0;color:#64748b;font-family:monospace;font-size:12px;"></p>
+        </div>
+        <button onclick="prodCancelEdit()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid two">
+          <label>NISC Item # (hctc)
+            <input id="prodEditHctc" type="text" placeholder="e.g. 6030" />
+          </label>
+          <label>Vendor
+            <input id="prodEditVendor" type="text" placeholder="e.g. Calix" />
+          </label>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Name / Description
+            <input id="prodEditName" type="text" placeholder="Product name" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;" />
+          </label>
+        </div>
+        <div class="modal-grid two" style="margin-top:10px;">
+          <label>Tracking Type
+            <select id="prodEditTracking" onchange="prodEditTrackingChanged()">
+              <option value="serial">Serial</option>
+              <option value="reel">Reel</option>
+              <option value="none">None (bulk qty)</option>
+            </select>
+          </label>
+          <label id="prodEditReelDirWrap">Reel Direction
+            <select id="prodEditReelDir">
+              <option value="one_way" selected>One-way (default)</option>
+              <option value="two_way">Two-way</option>
+            </select>
+          </label>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Odoo External ID
+            <input id="prodEditOdooId" type="text" placeholder="__export__.product_product_..." style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:12px;font-family:monospace;" />
+          </label>
+        </div>
+        <div id="prodEditReelIdsWrap" style="margin-top:10px;display:none;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Reel IDs (from Odoo — read only)
+            <input id="prodEditReelIds" type="text" readonly style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #e5e7eb;border-radius:8px;margin-top:4px;font-size:12px;background:#f8fafc;color:#64748b;font-family:monospace;" />
+          </label>
+        </div>
+        <div style="display:flex;gap:20px;margin-top:14px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#374151;cursor:pointer;">
+            <input type="checkbox" id="prodEditFsan" style="width:auto;margin:0;cursor:pointer;" /> Requires FSAN
+          </label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#374151;cursor:pointer;">
+            <input type="checkbox" id="prodEditHistOnly" style="width:auto;margin:0;cursor:pointer;" /> History Only
+          </label>
+        </div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="prodCancelEdit()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="prodSaveEdit()" style="margin:0;">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product Upload Diff Modal -->
+  <div id="invCsvImportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true"></div>
+
+  <div id="prodDiffModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:860px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">Review Product Changes</h2>
+          <p id="prodDiffSummary" class="small" style="margin:4px 0 0;color:#475569;"></p>
+        </div>
+        <button onclick="prodCancelUpload()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:55vh;overflow:auto;padding:0;">
+        <div id="prodDiffContent"></div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="prodCancelUpload()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="prodApplyUpload()" style="margin:0;">Apply Changes</button>
+      </div>
+    </div>
+  </div>
+
+<div id="prodSaveToast" class="prod-save-toast"></div>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js');
+  }
+</script>
+</body>
+</html>

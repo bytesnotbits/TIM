@@ -1,0 +1,11 @@
+{
+  "name": "TIM — Receiving + Inventory + Product Catalog",
+  "short_name": "TIM",
+  "description": "Calix to Odoo converter and inventory management tool",
+  "start_url": "https://bytesnotbits.github.io/TIM/index.html",
+  "scope": "https://bytesnotbits.github.io/TIM/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "orientation": "any"
+}
