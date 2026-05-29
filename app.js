@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.31.01";
+const APP_VERSION = "v1.32.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1698,7 +1698,7 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["receiving", "inventory", "products", "mapping", "barcodes"].forEach(function(t) {
+  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
