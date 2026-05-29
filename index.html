@@ -36,6 +36,10 @@
 
     <!-- Navigation -->
     <nav class="sidebar-nav">
+      <button class="sidebar-nav-btn" id="sideNavDataimport" onclick="switchTab('dataimport')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
+        <span class="sidebar-nav-label">Data Import</span>
+      </button>
       <button class="sidebar-nav-btn active" id="sideNavReceiving" onclick="switchTab('receiving')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg></span>
         <span class="sidebar-nav-label">Receiving</span>
@@ -97,7 +101,7 @@
         </div>
       </div>
 
-      <!-- Step 1: Master JSON -->
+      <!-- Master JSON status (load via Data Import tab) -->
       <div class="sidebar-setup-item">
         <div class="sidebar-setup-icon-area">
           <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
@@ -105,20 +109,14 @@
           <span class="sidebar-status-count" id="sideStatus1Count"></span>
         </div>
         <div class="sidebar-setup-content">
-          <div class="sidebar-setup-title">Step 1 — Master JSON</div>
-          <p class="sidebar-p">Optional but recommended. Load <code>Calix_Odoo_Converter_source_data.json</code> for duplicate checking and mapping data.</p>
-          <div id="historyDropZone" class="drop ready">
-            <div class="drop-title">Drop master JSON here</div>
-            <input id="historyFile" type="file" accept=".json,application/json" />
-            <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
-          </div>
-          <button id="clearMasterDataBtn" class="zone-clear-btn" onclick="clearMasterData()">Clear loaded data</button>
-          <button class="secondary" id="exportHistoryBtn" style="margin-top:8px;">Export History JSON</button>
+          <div class="sidebar-setup-title">Master Data</div>
+          <p class="sidebar-p" id="sideStatus1Label">Not loaded — go to Data Import tab.</p>
+          <button class="secondary" id="exportHistoryBtn" style="margin-top:4px;width:100%;">Export History JSON</button>
           <span id="historyStatus"></span>
         </div>
       </div>
 
-      <!-- Step 2: Odoo Quant Sync -->
+      <!-- Odoo Quant Sync status (load via Data Import tab) -->
       <div class="sidebar-setup-item">
         <div class="sidebar-setup-icon-area">
           <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg></span>
@@ -126,14 +124,8 @@
           <span class="sidebar-status-count" id="sideStatus2Count"></span>
         </div>
         <div class="sidebar-setup-content">
-          <div class="sidebar-setup-title">Step 2 — Odoo Quant Sync</div>
-          <p class="sidebar-p">Export Inventory Adjustments from Odoo and load here. TIM will include quant IDs on export so Odoo updates records in place instead of creating duplicates.</p>
-          <div id="invQuantSyncZone" class="drop ready">
-            <div class="drop-title">Drop Odoo Inventory Adj. CSV here</div>
-            <input type="file" accept=".csv" onchange="invImportOdooQuantsCsv(this.files[0]);this.value='';" />
-            <span id="invQuantSyncStatus" class="drop-status">Waiting for upload</span>
-          </div>
-          <button id="invClearQuantMapBtn" class="zone-clear-btn" style="display:none;" onclick="invClearOdooQuantMap()">Clear loaded data</button>
+          <div class="sidebar-setup-title">Odoo Quant Sync</div>
+          <p class="sidebar-p">Inventory adjustment IDs from Odoo.</p>
         </div>
       </div>
 
@@ -169,6 +161,117 @@
       <h1 class="app-title">TIM <span class="app-version">v1.30.10</span></h1>
     </div>
     <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
+
+  <!-- ── Data Import view ── -->
+  <div id="tabDataImport" class="tab-panel">
+
+    <div class="card" style="margin-top:0;">
+      <h2 style="margin-top:0;">Data Import</h2>
+      <p class="small" style="margin:0;">Load files here before using other tabs. All data is stored locally in your browser — nothing is sent to a server. Once loaded, it stays available across all tabs until cleared or the page is refreshed.</p>
+    </div>
+
+    <div class="import-grid">
+
+      <!-- 1. Master Data JSON -->
+      <div class="card import-card">
+        <div class="import-card-when">Recommended · Load once per session or when updated</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#d97706;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          Master Data (JSON)
+        </h3>
+        <p class="small">The core data file that powers TIM. Contains the <strong>product catalog</strong>, <strong>receiving history</strong>, <strong>inventory events</strong>, and <strong>barcode assignments</strong>. Load this first — it enables duplicate checking, product lookups, and mapping across all tabs. Export an updated copy at the end of each session to save changes.</p>
+        <div class="import-card-fmt">File: <code>Calix_Odoo_Converter_source_data.json</code> &nbsp;·&nbsp; Format: <code>.json</code></div>
+        <div id="historyDropZone" class="drop ready">
+          <div class="drop-title">Drop master JSON here, or click to browse</div>
+          <input id="historyFile" type="file" accept=".json,application/json" />
+          <span id="historyDropStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center;">
+          <button id="clearMasterDataBtn" class="zone-clear-btn" onclick="clearMasterData()">Clear loaded data</button>
+          <button class="secondary" id="exportHistoryBtn" style="margin:0;">Export History JSON</button>
+          <span id="historyStatus" style="font-size:12px;color:#64748b;"></span>
+        </div>
+      </div>
+
+      <!-- 2. Receiving Source File -->
+      <div class="card import-card">
+        <div class="import-card-when">Load before processing each shipment or RMA</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#2563eb;"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
+          Receiving Source File
+        </h3>
+        <p class="small">Load a Calix shipment report or RMA return sheet to populate a receiving batch. Two formats are recognized automatically: <strong>Calix Customer Shipment Notification</strong> (Excel) containing serial numbers, FSANs, and MAC addresses; and <strong>RMA Return Sheets</strong> (Excel/CSV) with item and serial pair columns. After loading, go to the <strong>Receiving</strong> tab to review, fix any blocked rows, and export an Odoo import CSV.</p>
+        <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
+        <div id="sourceDropZone" class="drop ready">
+          <div class="drop-title">Drop Calix or RMA file here, or click to browse</div>
+          <input id="sourceFile" type="file" accept=".xlsx,.xls,.csv" />
+          <span id="sourceDropStatus" class="drop-status">Waiting for upload</span>
+        </div>
+      </div>
+
+      <!-- 3. Odoo Inventory Adjustment Sync -->
+      <div class="card import-card">
+        <div class="import-card-when">Periodic · After each Odoo inventory adjustment export</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#059669;"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          Odoo Inventory Adjustment Sync
+        </h3>
+        <p class="small">Export <strong>Inventory Adjustments</strong> from Odoo and load here. TIM will embed quant IDs on future inventory exports so Odoo can update existing adjustment records in place instead of creating duplicates. Re-load whenever you confirm or clear adjustments in Odoo to keep IDs current.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Inventory → Adjustments → Export)</div>
+        <div id="invQuantSyncZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Inventory Adj. CSV here, or click to browse</div>
+          <input type="file" accept=".csv" onchange="invImportOdooQuantsCsv(this.files[0]);this.value='';" />
+          <span id="invQuantSyncStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="invClearQuantMapBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearOdooQuantMap()">Clear loaded data</button>
+      </div>
+
+      <!-- 4. Product Catalog Upload -->
+      <div class="card import-card">
+        <div class="import-card-when">Occasional · When adding or updating products</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#7c3aed;"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg>
+          Product Catalog Upload
+        </h3>
+        <p class="small">Upload a CSV or Excel file to add or update products in the catalog. Existing products are matched by <strong>Vendor Part #</strong> or <strong>NISC Item #</strong> and updated in place; new products are appended. Changes live in memory until you export an updated Master JSON. Download the template to see required columns, or use a direct Odoo Product Variant export.</p>
+        <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
+        <div style="margin-bottom:10px;">
+          <button class="secondary" onclick="prodDownloadTemplate()" style="margin:0;">Download CSV Template</button>
+        </div>
+        <div id="prodUploadZone" class="prod-upload-zone">
+          <div class="drop-title">Drop product CSV / Excel here, or click to browse</div>
+          <input id="prodUploadFile" type="file" accept=".xlsx,.xls,.csv" style="margin-top:8px;" onchange="prodBulkUpload(this.files[0])" />
+          <div class="prod-template-hint">TIM columns: Vendor Part # · NISC Item # · Name/Description · Vendor · Tracking Type (serial / reel / none) · Odoo External ID · Requires FSAN · History Only<br>Odoo export columns also supported: <code>id · default_code · name · tracking · x_studio_reel · reel_ids · is_storable</code> (rows where is_storable = false are skipped automatically)</div>
+        </div>
+        <div id="prodUploadStatus" class="small" style="margin-top:8px;color:#475569;"></div>
+        <div id="prodUploadSuccessBanner" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:none;align-items:center;gap:16px;flex-wrap:wrap;">
+          <span style="font-weight:700;color:#166534;">&#10003; Products loaded into memory.</span>
+          <span class="small" style="color:#166534;">Export the master JSON to make changes permanent.</span>
+          <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
+        </div>
+        <button id="clearProductCatalogBtn" class="zone-clear-btn" onclick="clearProductCatalog()" style="margin-top:8px;">Clear product catalog</button>
+      </div>
+
+      <!-- 5. Odoo Barcode Sync -->
+      <div class="card import-card">
+        <div class="import-card-when">Periodic · When barcode assignments change in Odoo</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#0891b2;"><line x1="2" y1="5" x2="2" y2="19"/><line x1="5" y1="5" x2="5" y2="19"/><line x1="9" y1="5" x2="9" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="5" x2="22" y2="19"/></svg>
+          Odoo Barcode Sync
+        </h3>
+        <p class="small">Import a <strong>Product Variant CSV</strong> from Odoo to sync its barcode assignments into TIM. Barcodes already in TIM keep their mapping unless Odoo shows a different item — <strong>Odoo wins on conflict</strong>. After syncing, go to the <strong>Barcodes</strong> tab to assign or print labels. Export the column <code>template_multi_barcode_ids</code> from the Odoo Product Variant view.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Products → Variants → Export with barcode column)</div>
+        <div id="bcImportZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Product Variant CSV here, or click to browse</div>
+          <input id="bcImportFile" type="file" accept=".csv" onchange="bcImportOdooCsv(this.files[0])" />
+          <span id="bcImportStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="clearBarcodeImportBtn" class="zone-clear-btn" onclick="clearBarcodeImport()" style="margin-top:8px;">Clear barcode data</button>
+        <div id="bcImportResult" class="small" style="margin-top:8px;color:#475569;"></div>
+      </div>
+
+    </div><!-- /import-grid -->
+  </div><!-- /tabDataImport -->
 
   <!-- ── Receiving view ── -->
   <div id="tabReceiving" class="tab-panel active">
@@ -716,27 +819,6 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div id="tabProducts" class="tab-panel">
 
-    <!-- Bulk Upload -->
-    <div class="card">
-      <h2>Bulk Product Upload</h2>
-      <p class="small">Upload a CSV or Excel file to add or update products in the catalog. Existing products are updated in place; new ones are added. Download the template to see the expected columns.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-        <button class="secondary" onclick="prodDownloadTemplate()">Download CSV Template</button>
-      </div>
-      <div id="prodUploadZone" class="prod-upload-zone">
-        <div class="drop-title">Drop product CSV / Excel here, or click to browse</div>
-        <input id="prodUploadFile" type="file" accept=".xlsx,.xls,.csv" style="margin-top:8px;" onchange="prodBulkUpload(this.files[0])" />
-        <div class="prod-template-hint">TIM template columns: Vendor Part # · NISC Item # · Name/Description · Vendor · Tracking Type (serial / reel / none) · Odoo External ID · Requires FSAN · History Only<br>Odoo export columns also supported: <code>id · default_code · name · tracking · x_studio_reel · reel_ids · is_storable</code> (rows where is_storable = false are skipped automatically)</div>
-      </div>
-      <div id="prodUploadStatus" class="small" style="margin-top:8px;color:#475569;"></div>
-      <div id="prodUploadSuccessBanner" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:none;align-items:center;gap:16px;flex-wrap:wrap;">
-        <span style="font-weight:700;color:#166534;">✓ Products loaded into memory.</span>
-        <span class="small" style="color:#166534;">Click the button to save them to your master JSON file.</span>
-        <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
-      </div>
-      <button id="clearProductCatalogBtn" class="zone-clear-btn" onclick="clearProductCatalog()">Clear product catalog</button>
-    </div>
-
     <!-- Product Catalog -->
     <div class="card">
       <h2>Product Catalog &nbsp;<span id="prodCatalogCount" class="small" style="font-weight:400;">0 products</span></h2>
@@ -879,24 +961,6 @@
           <strong>Export &amp; Save</strong> generates an Odoo-compatible CSV <em>and</em> permanently adds these barcodes to TIM's database.
         </p>
         <button id="bcExportSaveBtn" onclick="bcExportAndSave()" style="margin:0;background:#166534;white-space:nowrap;">Export &amp; Save</button>
-      </div>
-    </div>
-
-    <!-- Import from Odoo -->
-    <div class="card">
-      <div class="collapsible-header" id="bcImportHeader" onclick="toggleCollapsible('bcImportBody','bcImportHeader','bcImportChevron')">
-        <h2 style="margin:0;">Import / Sync from Odoo</h2>
-        <svg id="bcImportChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-      </div>
-      <div id="bcImportBody" class="collapsible-body" style="display:none;">
-        <p class="small">Import a Product Variant CSV from Odoo to sync its barcode assignments into TIM. Barcodes already in TIM keep their mapping unless Odoo shows a different item — Odoo wins on conflict.</p>
-        <div id="bcImportZone" class="drop ready">
-          <div class="drop-title">Drop Odoo Product Variant CSV here</div>
-          <input id="bcImportFile" type="file" accept=".csv" onchange="bcImportOdooCsv(this.files[0])" />
-          <span id="bcImportStatus" class="drop-status">Waiting for upload</span>
-        </div>
-        <button id="clearBarcodeImportBtn" class="zone-clear-btn" onclick="clearBarcodeImport()">Clear barcode data</button>
-        <div id="bcImportResult" class="small" style="margin-top:8px;color:#475569;"></div>
       </div>
     </div>
 
