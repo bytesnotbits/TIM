@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.26";
+const APP_VERSION = "v1.31.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1659,6 +1659,8 @@ let invCurrentLocation = "";
 let invNotesModalEventId = null;
 let invScanMode = "auto";          // "auto" | "serial" | "reel" | "item"
 let invLastBulkEventId = null;     // eventId of most recent bulk_quantity_count
+var invOdooQuantMap = {};          // normKey(defCode+"||"+loc+"||"+lot) → { id, onHandQty }
+const INV_QUANT_MAP_KEY = "tim_odoo_quant_map_v1";
 let invQtyKeypadValue = "1";       // current soft keypad display value
 let invQtyKeypadFresh = true;      // true = next digit replaces the default "1"
 let invQtyKeypadMode = "qty";      // "qty" | "reel" — routes key presses
@@ -4147,7 +4149,7 @@ function exportInvSummaryXlsx() {
 // ===================================================================
 
 function buildOdooAdjustmentRows(events) {
-  var headers = ["product_id/id", "product_id/default_code", "location_id/barcode", "lot_id/name", "inventory_quantity"];
+  var headers = ["id", "product_id/id", "product_id/default_code", "location_id/barcode", "lot_id/name", "inventory_quantity"];
   var rows = [];
 
   function pmFields(itemNumber) {
@@ -4164,7 +4166,8 @@ function buildOdooAdjustmentRows(events) {
     if (evt.eventType !== "serialized_device_scan") return;
     var f = pmFields(evt.itemNumber);
     var lotName = evt.serial || evt.fsan || evt.scannedValue || "";
-    rows.push([f.extId, f.defCode, evt.location || "", lotName, 1]);
+    var qid = invGetQuantId(f.defCode, evt.location || "", lotName);
+    rows.push([qid, f.extId, f.defCode, evt.location || "", lotName, 1]);
   });
 
   // Bulk quantity counts and box scans — aggregate by item + location
@@ -4183,16 +4186,18 @@ function buildOdooAdjustmentRows(events) {
   });
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
-    rows.push([r.extId, r.defCode, r.loc, "", r.qty]);
+    var qid = invGetQuantId(r.defCode, r.loc, "");
+    rows.push([qid, r.extId, r.defCode, r.loc, "", r.qty]);
   });
 
-  // Cable reel counts — one row per reel (lot-tracked, qty = 1 reel unit)
+  // Cable reel counts — one row per reel (lot-tracked, footage as qty)
   events.forEach(function(evt) {
     if (evt.status === "voided" || evt.eventType === "void_event") return;
     if (evt.eventType !== "cable_reel_count") return;
     var f3 = pmFields(evt.itemNumber);
     var lotName3 = evt.reelNumber || evt.scannedValue || "";
-    rows.push([f3.extId, f3.defCode, evt.location || "", lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
+    var qid3 = invGetQuantId(f3.defCode, evt.location || "", lotName3);
+    rows.push([qid3, f3.extId, f3.defCode, evt.location || "", lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
   });
 
   return { headers: headers, rows: rows };
@@ -4214,6 +4219,126 @@ function exportInvOdooAdjustmentCsv() {
     result.rows.map(function(r) { return r.map(csvEscape).join(","); })
   );
   downloadText("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".csv", lines.join("\r\n"), "text/csv");
+}
+
+// ===================================================================
+// ODOO QUANT MAP — import Odoo Inventory Adjustments CSV to get quant IDs
+// Workflow: Odoo → export Inv. Adj. CSV → load here → count in TIM
+//           → export adj. CSV with quant IDs → Odoo updates in place
+// ===================================================================
+
+function invGetQuantId(defCode, locValue, lotName) {
+  var key = normKey(defCode) + "||" + normKey(locValue) + "||" + normKey(lotName);
+  var entry = invOdooQuantMap[key];
+  return entry ? (entry.id || "") : "";
+}
+
+function invRenderQuantMapStatus() {
+  var el      = $("invQuantMapStatus");
+  var clearBtn = $("invClearQuantMapBtn");
+  var count   = Object.keys(invOdooQuantMap).length;
+  // Each quant can be stored under up to 2 keys (barcode + complete_name), so show unique IDs
+  var uniqueIds = {};
+  Object.values(invOdooQuantMap).forEach(function(e) { if (e.id) uniqueIds[e.id] = 1; });
+  var unique = Object.keys(uniqueIds).length;
+  if (!unique) {
+    if (el) el.textContent = "No Odoo quants loaded — IDs will be blank on export.";
+    if (clearBtn) clearBtn.style.display = "none";
+  } else {
+    if (el) el.textContent = unique + " quant record" + (unique !== 1 ? "s" : "") + " loaded — IDs will be matched on export.";
+    if (clearBtn) clearBtn.style.display = "";
+  }
+}
+
+function invSaveOdooQuantMap() {
+  TimDB.set(INV_QUANT_MAP_KEY, invOdooQuantMap).catch(function(){});
+}
+
+function invLoadOdooQuantMap() {
+  return TimDB.get(INV_QUANT_MAP_KEY).then(function(saved) {
+    if (saved && typeof saved === "object" && Object.keys(saved).length) {
+      invOdooQuantMap = saved;
+      invRenderQuantMapStatus();
+    }
+  }).catch(function(){});
+}
+
+function invClearOdooQuantMap() {
+  invOdooQuantMap = {};
+  TimDB.remove(INV_QUANT_MAP_KEY).catch(function(){});
+  invRenderQuantMapStatus();
+}
+
+function invImportOdooQuantsCsv(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try { invProcessOdooQuantCsv(e.target.result, file.name); }
+    catch(err) { alert("Quant import failed: " + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+function invProcessOdooQuantCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+
+  function colIdx() {
+    var names = Array.prototype.slice.call(arguments);
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i].toLowerCase();
+      var idx = header.findIndex(function(h) { return h.trim().toLowerCase() === n; });
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+
+  var idIdx      = colIdx("id");
+  var codeIdx    = colIdx("product_id/default_code", "default_code");
+  var barcodeIdx = colIdx("location_id/barcode");
+  var cnIdx      = colIdx("location_id/complete_name", "location_id/name");
+  var lotIdx     = colIdx("lot_id/name");
+  var qtyIdx     = colIdx("quantity", "on_hand_quantity");
+
+  if (idIdx === -1)
+    throw new Error("Column 'id' not found. In Odoo, export Inventory Adjustments and make sure the ID column is included.");
+  if (codeIdx === -1)
+    throw new Error("Column 'product_id/default_code' not found.");
+  if (barcodeIdx === -1 && cnIdx === -1)
+    throw new Error("No location column found. Include 'location_id/barcode' or 'location_id/complete_name' in the Odoo export.");
+
+  var newMap = {};
+  var loaded = 0;
+
+  for (var i = 1; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var cells  = bcParseCsvRow(line);
+    var quantId  = (idIdx      >= 0 ? cells[idIdx]      : "").trim();
+    var defCode  = (codeIdx    >= 0 ? cells[codeIdx]    : "").trim();
+    var barcode  = (barcodeIdx >= 0 ? cells[barcodeIdx] : "").trim();
+    var cn       = (cnIdx      >= 0 ? cells[cnIdx]      : "").trim();
+    var lotName  = (lotIdx     >= 0 ? cells[lotIdx]     : "").trim();
+    var onHand   = qtyIdx      >= 0 ? (parseFloat(cells[qtyIdx]) || 0) : 0;
+
+    if (!quantId || !defCode) continue;
+
+    var entry = { id: quantId, onHandQty: onHand };
+    // Store under barcode key AND complete_name key so lookup works either way
+    if (barcode) newMap[normKey(defCode) + "||" + normKey(barcode) + "||" + normKey(lotName)] = entry;
+    if (cn)      newMap[normKey(defCode) + "||" + normKey(cn)      + "||" + normKey(lotName)] = entry;
+    loaded++;
+  }
+
+  if (!loaded)
+    throw new Error("No valid rows found. Verify the file has 'id' and 'product_id/default_code' columns with data.");
+
+  invOdooQuantMap = newMap;
+  invSaveOdooQuantMap();
+  invRenderQuantMapStatus();
+  var el = $("invQuantMapStatus");
+  if (el) el.textContent = loaded + " quant record" + (loaded !== 1 ? "s" : "") + " loaded from " + (fileName || "file") + ".";
 }
 
 // -- Scan input keyboard handler -----------------------------------
@@ -4782,6 +4907,7 @@ timLoadMasterCache();
 timInitUsername();
 renderInvSessionUI();
 invAutoRestoreSession();
+invLoadOdooQuantMap();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
