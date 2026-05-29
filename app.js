@@ -1,5 +1,5 @@
 
-const APP_VERSION = "v1.30.24";
+const APP_VERSION = "v1.30.26";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4192,7 +4192,7 @@ function buildOdooAdjustmentRows(events) {
     if (evt.eventType !== "cable_reel_count") return;
     var f3 = pmFields(evt.itemNumber);
     var lotName3 = evt.reelNumber || evt.scannedValue || "";
-    rows.push([f3.extId, f3.defCode, evt.location || "", lotName3, 1]);
+    rows.push([f3.extId, f3.defCode, evt.location || "", lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
   });
 
   return { headers: headers, rows: rows };
