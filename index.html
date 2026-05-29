@@ -563,10 +563,25 @@
       </div>
       <div id="invSummaryCollapse" class="collapsible-body">
         <p class="small">Derived from active events — recalculated automatically after each scan. Voided events are excluded.</p>
+
+        <!-- Odoo Quant Sync -->
+        <div style="margin-bottom:14px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
+            <strong style="font-size:13px;color:#166534;">Odoo Quant Sync</strong>
+            <span id="invQuantMapStatus" class="small" style="color:#64748b;flex:1;min-width:200px;">No Odoo quants loaded — IDs will be blank on export.</span>
+            <label style="cursor:pointer;display:inline-flex;align-items:center;">
+              <span class="button secondary" style="padding:4px 12px;font-size:12px;white-space:nowrap;">Load Odoo Quants CSV</span>
+              <input type="file" accept=".csv" style="display:none;" onchange="invImportOdooQuantsCsv(this.files[0]);this.value='';" />
+            </label>
+            <button id="invClearQuantMapBtn" class="secondary" style="padding:4px 12px;font-size:12px;display:none;" onclick="invClearOdooQuantMap()">Clear</button>
+          </div>
+          <p class="small" style="margin:0;color:#64748b;">Export Inventory Adjustments from Odoo → load here before counting → TIM will include quant IDs on export so Odoo updates existing records in place.</p>
+        </div>
+
         <div style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
           <button id="invExportSummaryBtn" onclick="exportInvSummaryXlsx()" disabled>Export Summary XLSX</button>
-          <button id="invExportOdooAdjXlsxBtn" onclick="exportInvOdooAdjustmentXlsx()" disabled title="Export Odoo Inventory Adjustment XLSX — one row per serial, bulk item, or reel. Columns: product_id/id, product_id/default_code, location_id/complete_name, lot_id/name, inventory_quantity.">Export Odoo Adj. XLSX</button>
-          <button id="invExportOdooAdjCsvBtn" onclick="exportInvOdooAdjustmentCsv()" disabled title="Export Odoo Inventory Adjustment CSV — one row per serial, bulk item, or reel. Columns: product_id/id, product_id/default_code, location_id/complete_name, lot_id/name, inventory_quantity.">Export Odoo Adj. CSV</button>
+          <button id="invExportOdooAdjXlsxBtn" onclick="exportInvOdooAdjustmentXlsx()" disabled title="Export Odoo Inventory Adjustment XLSX — includes quant IDs if Odoo quants were loaded.">Export Odoo Adj. XLSX</button>
+          <button id="invExportOdooAdjCsvBtn" onclick="exportInvOdooAdjustmentCsv()" disabled title="Export Odoo Inventory Adjustment CSV — includes quant IDs if Odoo quants were loaded.">Export Odoo Adj. CSV</button>
         </div>
         <div class="scroll">
           <table>
