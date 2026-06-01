@@ -138,7 +138,20 @@
         </div>
         <div class="sidebar-setup-content">
           <div class="sidebar-setup-title">Quants Baseline</div>
-          <p class="sidebar-p">Odoo on-hand quantities for gap analysis.</p>
+          <p class="sidebar-p">Odoo on-hand quantities, quant IDs, and variant IDs.</p>
+        </div>
+      </div>
+
+      <!-- Location Map status (load via Data Import tab) -->
+      <div class="sidebar-setup-item">
+        <div class="sidebar-setup-icon-area">
+          <span class="sidebar-setup-svg"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
+          <span class="sidebar-status-dot" id="sideStatus4Dot"></span>
+          <span class="sidebar-status-count" id="sideStatus4Count"></span>
+        </div>
+        <div class="sidebar-setup-content">
+          <div class="sidebar-setup-title">Location Map</div>
+          <p class="sidebar-p">Odoo location paths resolved to barcodes.</p>
         </div>
       </div>
 
@@ -239,14 +252,31 @@
         <button id="invClearQuantMapBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearOdooQuantMap()">Clear loaded data</button>
       </div>
 
-      <!-- 4. Quants Baseline -->
+      <!-- 4. Location Map -->
       <div class="card import-card">
-        <div class="import-card-when">Pre-count &amp; Recount · Load before each inventory cycle</div>
+        <div class="import-card-when">One-time setup · Refresh only when locations change</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#0284c7;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Location Map
+        </h3>
+        <p class="small">Maps Odoo location paths (e.g. <code>W367/S/Y01</code>) to the barcodes TIM scans (e.g. <code>WHY01</code>). Required so the Quants Baseline can correctly index quant IDs for export. In Odoo, go to <strong>Inventory → Configuration → Locations</strong>, select all internal locations, and export as CSV. Load once and refresh only when locations are added or changed.</p>
+        <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Inventory → Configuration → Locations → Export · include <code>id, location_id, name, barcode</code>)</div>
+        <div id="invLocationMapZone" class="drop ready">
+          <div class="drop-title">Drop Odoo Locations CSV here, or click to browse</div>
+          <input type="file" accept=".csv" onchange="invImportLocationMapCsv(this.files[0]);this.value='';" />
+          <span id="invLocationMapStatus" class="drop-status">Waiting for upload</span>
+        </div>
+        <button id="invLocationMapClearBtn" class="zone-clear-btn" style="display:none;margin-top:8px;" onclick="invClearLocationMap()">Clear loaded data</button>
+      </div>
+
+      <!-- 5. Quants Baseline -->
+      <div class="card import-card">
+        <div class="import-card-when">Pre-count · Load before each inventory cycle</div>
         <h3 class="import-card-title">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#d97706;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
           Quants Baseline
         </h3>
-        <p class="small">Load the current Odoo on-hand quantities to enable gap analysis before finalizing a count and to provide the expected baseline during recounts. In Odoo, go to <strong>Inventory → Products → Quants</strong>, select all, and export as CSV. Importing a new file updates any matching records and leaves the rest untouched.</p>
+        <p class="small">One export does three jobs: loads expected on-hand quantities for gap analysis, indexes <strong>quant IDs</strong> so inventory exports update existing Odoo records in place instead of creating duplicates, and refreshes <strong>product variant external IDs</strong> in the product catalog. In Odoo, go to <strong>Inventory → Products → Quants</strong>, select all, and export as CSV — include <code>id</code>, <code>product_id</code>, <code>product_id/id</code>, <code>location_id</code>, <code>lot_id</code>, and <code>quantity</code>. Re-load after confirming or clearing adjustments in Odoo to keep quant IDs current.</p>
         <div class="import-card-fmt">Format: <code>.csv</code> &nbsp;(Odoo → Inventory → Products → Quants → Export)</div>
         <div id="invQuantsBaselineZone" class="drop ready">
           <div class="drop-title">Drop Odoo Quants CSV here, or click to browse</div>

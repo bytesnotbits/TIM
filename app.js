@@ -4659,6 +4659,117 @@ function invProcessOdooQuantCsv(text, fileName) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// LOCATION MAP — Odoo location path → barcode lookup
+// Load once from Odoo Inventory Locations CSV. Rarely needs refresh.
+// Used by the Quants Baseline loader to resolve location paths to the
+// barcodes that TIM events carry, so quant map keys match on export.
+// ═══════════════════════════════════════════════════════════════════════
+
+var invLocationMap = {};
+const INV_LOCATION_MAP_KEY = "tim_location_map_v1";
+
+function invLocationPathToBarcode(path) {
+  if (!path) return "";
+  var barcode = invLocationMap[normKey(path)];
+  return barcode || path; // fall back to original value if not mapped
+}
+
+function invRenderLocationMapStatus() {
+  var clearBtn = $("invLocationMapClearBtn");
+  var count = Object.keys(invLocationMap).length;
+  if (!count) {
+    setDropState("invLocationMapZone", "invLocationMapStatus", false, "Waiting for upload");
+    updateSidebarStatus(4, null);
+    if (clearBtn) clearBtn.style.display = "none";
+  } else {
+    var msg = count.toLocaleString() + " location" + (count !== 1 ? "s" : "") + " mapped";
+    setDropState("invLocationMapZone", "invLocationMapStatus", true, msg);
+    updateSidebarStatus(4, count);
+    if (clearBtn) clearBtn.style.display = "";
+  }
+}
+
+function invSaveLocationMap() {
+  TimDB.set(INV_LOCATION_MAP_KEY, invLocationMap).catch(function(){});
+}
+
+function invLoadLocationMap() {
+  return TimDB.get(INV_LOCATION_MAP_KEY).then(function(saved) {
+    if (saved && typeof saved === "object" && Object.keys(saved).length) {
+      invLocationMap = saved;
+      invRenderLocationMapStatus();
+    }
+  }).catch(function(){});
+}
+
+function invClearLocationMap() {
+  invLocationMap = {};
+  TimDB.remove(INV_LOCATION_MAP_KEY).catch(function(){});
+  invRenderLocationMapStatus();
+}
+
+function invImportLocationMapCsv(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try { invProcessLocationMapCsv(e.target.result, file.name); }
+    catch(err) { alert("Location map import failed: " + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+function invProcessLocationMapCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+
+  function colIdx() {
+    var names = Array.prototype.slice.call(arguments);
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i].toLowerCase().trim();
+      var idx = header.findIndex(function(h) { return h.trim().toLowerCase() === n; });
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+
+  var parentIdx  = colIdx("location_id");  // parent path e.g. "W367/S"
+  var nameIdx    = colIdx("name");          // location name e.g. "Y01"
+  var barcodeIdx = colIdx("barcode");       // barcode e.g. "WHY01"
+
+  if (nameIdx    === -1) throw new Error("Column 'name' not found. Export Locations from Odoo: Inventory → Configuration → Locations.");
+  if (barcodeIdx === -1) throw new Error("Column 'barcode' not found.");
+
+  var newMap = {};
+  var loaded = 0;
+
+  for (var i = 1; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var cells   = bcParseCsvRow(line);
+    var parent  = (parentIdx  >= 0 ? cells[parentIdx]  : "").trim();
+    var name    = (nameIdx    >= 0 ? cells[nameIdx]    : "").trim();
+    var barcode = (barcodeIdx >= 0 ? cells[barcodeIdx] : "").trim();
+
+    if (!name || !barcode) continue;
+
+    // Construct full path: "W367/S/Y01" or just "Rental" when no parent
+    var fullPath = parent ? parent + "/" + name : name;
+    newMap[normKey(fullPath)] = barcode;
+    loaded++;
+  }
+
+  if (!loaded)
+    throw new Error("No valid rows found. Verify this is an Odoo Locations export with 'name' and 'barcode' columns.");
+
+  invLocationMap = newMap;
+  invSaveLocationMap();
+  invRenderLocationMapStatus();
+  var statusEl = $("invLocationMapStatus");
+  if (statusEl) statusEl.textContent = loaded + " location" + (loaded !== 1 ? "s" : "") + " loaded from " + (fileName || "file") + ".";
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // QUANTS BASELINE — Odoo on-hand expected quantities for gap analysis
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -4731,24 +4842,19 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     return -1;
   }
 
-  var idIdx       = colIdx("id");
-  var prodIdx     = colIdx("product_id");
-  var locIdx      = colIdx("location_id");
-  var lotIdx      = colIdx("lot_id");
-  var qtyIdx      = colIdx("quantity");
-  var invQtyIdx   = colIdx("inventory_quantity");
-  var dateIdx     = colIdx("accounting_date");
+  var idIdx         = colIdx("id");
+  var prodIdx       = colIdx("product_id");
+  var varExtIdIdx   = colIdx("product_id/id");
+  var locIdx        = colIdx("location_id");
+  var lotIdx        = colIdx("lot_id");
+  var qtyIdx        = colIdx("quantity");
+  var invQtyIdx     = colIdx("inventory_quantity");
+  var dateIdx       = colIdx("accounting_date");
 
   if (idIdx === -1)   throw new Error("Column 'id' not found. Export Quants from Odoo: Inventory → Products → Quants.");
   if (prodIdx === -1) throw new Error("Column 'product_id' not found.");
   if (locIdx === -1)  throw new Error("Column 'location_id' not found.");
   if (qtyIdx === -1)  throw new Error("Column 'quantity' not found.");
-
-  // Build map of existing quants keyed by itemNumber||locationId||lotId for upsert
-  var existingMap = {};
-  invQuantsBaseline.forEach(function(q) {
-    existingMap[q.itemNumber + "||" + q.locationId + "||" + q.lotId] = true;
-  });
 
   // Parse [itemNumber] description format from product_id
   function parseProductId(raw) {
@@ -4757,64 +4863,110 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     return { itemNumber: raw.trim(), description: "" };
   }
 
-  var newRows = [];
-  var importedAt = new Date().toISOString();
+  var newRows           = [];
+  var newQuantMap       = {};   // quant IDs to merge into invOdooQuantMap
+  var variantExtIdMap   = {};   // itemNumber → product_id/id for PRODUCT_MAP update
+  var importedAt        = new Date().toISOString();
 
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
     var cells = bcParseCsvRow(line);
 
-    var quantId     = (idIdx     >= 0 ? cells[idIdx]     : "").trim();
-    var rawProd     = (prodIdx   >= 0 ? cells[prodIdx]   : "").trim();
-    var locationId  = (locIdx    >= 0 ? cells[locIdx]    : "").trim();
-    var lotId       = (lotIdx    >= 0 ? cells[lotIdx]    : "").trim();
-    var odooQty     = qtyIdx     >= 0 ? (parseFloat(cells[qtyIdx])    || 0) : 0;
-    var inventoryQty = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx]) || 0) : 0;
-    var accountingDate = (dateIdx >= 0 ? cells[dateIdx] : "").trim();
+    var quantId        = (idIdx       >= 0 ? cells[idIdx]       : "").trim();
+    var rawProd        = (prodIdx     >= 0 ? cells[prodIdx]     : "").trim();
+    var variantExtId   = (varExtIdIdx >= 0 ? cells[varExtIdIdx] : "").trim();
+    var locationPath   = (locIdx      >= 0 ? cells[locIdx]      : "").trim();
+    var lotId          = (lotIdx      >= 0 ? cells[lotIdx]      : "").trim();
+    var odooQty        = qtyIdx    >= 0 ? (parseFloat(cells[qtyIdx])    || 0) : 0;
+    var inventoryQty   = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx]) || 0) : 0;
+    var accountingDate = (dateIdx  >= 0 ? cells[dateIdx] : "").trim();
 
     if (!quantId || !rawProd) continue;
 
-    var prod = parseProductId(rawProd);
+    var prod    = parseProductId(rawProd);
+    var barcode = invLocationPathToBarcode(locationPath);
+
+    // Baseline row — store both path and resolved barcode for reference
     newRows.push({
-      quantId:        quantId,
-      itemNumber:     prod.itemNumber,
-      description:    prod.description,
-      locationId:     locationId,
-      lotId:          lotId,
-      odooQty:        odooQty,
-      inventoryQty:   inventoryQty,
-      accountingDate: accountingDate,
-      importedAt:     importedAt
+      quantId:         quantId,
+      itemNumber:      prod.itemNumber,
+      description:     prod.description,
+      locationId:      locationPath,
+      locationBarcode: barcode,
+      lotId:           lotId,
+      odooQty:         odooQty,
+      inventoryQty:    inventoryQty,
+      accountingDate:  accountingDate,
+      importedAt:      importedAt
     });
+
+    // Quant map entry — keyed by defCode||barcode||lot (matches invGetQuantId lookup format)
+    var qmKey = normKey(prod.itemNumber) + "||" + normKey(barcode) + "||" + normKey(lotId);
+    newQuantMap[qmKey] = { id: quantId, onHandQty: odooQty };
+
+    // Collect variant external IDs for PRODUCT_MAP update (skip product_template IDs)
+    if (variantExtId && !/product_template/i.test(variantExtId)) {
+      variantExtIdMap[prod.itemNumber] = variantExtId;
+    }
   }
 
   if (!newRows.length)
     throw new Error("No valid rows found. Verify this is an Odoo Quants export with 'id', 'product_id', 'location_id', and 'quantity' columns.");
 
-  // Upsert: replace existing entries whose itemNumber+locationId+lotId match any incoming row,
-  // then append all incoming rows (deduplicated by quantId)
+  // ── 1. Upsert baseline ──────────────────────────────────────────────
   var incomingKeys = {};
-  var incomingByQuantId = {};
   newRows.forEach(function(r) {
     incomingKeys[r.itemNumber + "||" + r.locationId + "||" + r.lotId] = true;
-    incomingByQuantId[r.quantId] = r;
   });
-
-  // Keep existing rows not touched by this import
   var kept = invQuantsBaseline.filter(function(q) {
     return !incomingKeys[q.itemNumber + "||" + q.locationId + "||" + q.lotId];
   });
-
   invQuantsBaseline = kept.concat(newRows);
   invQuantsBaselineImportedAt = importedAt;
   invSaveQuantsBaseline();
   invRenderQuantsBaselineStatus();
 
+  // ── 2. Merge quant IDs into invOdooQuantMap ─────────────────────────
+  // Overwrites matching keys with fresh IDs; leaves unrelated entries intact.
+  Object.assign(invOdooQuantMap, newQuantMap);
+  invSaveOdooQuantMap();
+  invRenderQuantMapStatus();
+
+  // ── 3. Update PRODUCT_MAP with variant external IDs ─────────────────
+  var pmUpdated = 0;
+  Object.keys(variantExtIdMap).forEach(function(itemNumber) {
+    var extId = variantExtIdMap[itemNumber];
+    var match = findProductMapMatch(itemNumber);
+    if (match && match.entry) {
+      // Only overwrite if current value is missing or is a blocked product_template ID
+      var current = getMapExternalId(match.entry);
+      if (!current || /product_template/i.test(current)) {
+        match.entry.odoo_external_id = extId;
+        pmUpdated++;
+      }
+    } else {
+      // No existing entry — create a minimal placeholder
+      PRODUCT_MAP[itemNumber] = {
+        hctc:             itemNumber,
+        odoo_external_id: extId,
+        name:             null,
+        serial_tracked:   false
+      };
+      pmUpdated++;
+    }
+  });
+  if (pmUpdated > 0) timSaveMasterCache();
+
+  // ── Status message ───────────────────────────────────────────────────
+  var quantCount = Object.keys(newQuantMap).length;
   var statusEl = $("invQuantsBaselineStatus");
   if (statusEl) {
-    statusEl.textContent = newRows.length.toLocaleString() + " record" + (newRows.length !== 1 ? "s" : "") +
-      " imported from " + (fileName || "file") + ". Total baseline: " + invQuantsBaseline.length.toLocaleString() + " records.";
+    var parts = [newRows.length.toLocaleString() + " quant record" + (newRows.length !== 1 ? "s" : "") + " imported"];
+    if (quantCount) parts.push(quantCount + " quant ID" + (quantCount !== 1 ? "s" : "") + " indexed");
+    if (pmUpdated)  parts.push(pmUpdated  + " product variant ID" + (pmUpdated !== 1 ? "s" : "") + " updated");
+    parts.push("from " + (fileName || "file"));
+    statusEl.textContent = parts.join(" · ") + ". Total baseline: " + invQuantsBaseline.length.toLocaleString() + " records.";
   }
 }
 
@@ -6762,6 +6914,7 @@ renderInvSessionUI();
 invAutoRestoreSession();
 invLoadOdooQuantMap();
 invLoadQuantsBaseline();
+invLoadLocationMap();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
