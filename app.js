@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.00.02";
+const APP_VERSION = "v2.00.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1828,7 +1828,12 @@ function invAutosave() {
     events: invEvents,
     exceptions: invExceptions,
     recounts: invRecounts,
-    settings: invSettings
+    settings: invSettings,
+    // Serialize activity feed — time as ISO string so IndexedDB can store it
+    activityLog: invActivityLog.map(function(e) {
+      return { type: e.type, message: e.message, detail: e.detail || "",
+               time: (e.time instanceof Date ? e.time.toISOString() : e.time) };
+    })
   };
   invAutosavePending = false;
   TimDB.set(INV_STORAGE_KEY, payload).then(function() {
@@ -1936,7 +1941,14 @@ function invAutoRestoreSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
+      invActivityLog = saved.activityLog.map(function(e) {
+        return { type: e.type, message: e.message, detail: e.detail || "",
+                 time: e.time ? new Date(e.time) : new Date() };
+      });
+    }
     renderInvSessionUI();
+    renderInvActivityFeed();
     checkReelItemConflicts();
     var bar = $("invAutosaveBar");
     if (bar) {
@@ -1964,8 +1976,15 @@ function invResumeSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
+      invActivityLog = saved.activityLog.map(function(e) {
+        return { type: e.type, message: e.message, detail: e.detail || "",
+                 time: e.time ? new Date(e.time) : new Date() };
+      });
+    }
     invAutosave();
     renderInvSessionUI();
+    renderInvActivityFeed();
     checkReelItemConflicts();
     alert("Resumed: " + invSession.sessionId +
           " — " + invEvents.length + " event(s), sequence at #" + invSequence + ".");
