@@ -4873,14 +4873,14 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     if (!line) continue;
     var cells = bcParseCsvRow(line);
 
-    var quantId        = (idIdx       >= 0 ? cells[idIdx]       : "").trim();
-    var rawProd        = (prodIdx     >= 0 ? cells[prodIdx]     : "").trim();
-    var variantExtId   = (varExtIdIdx >= 0 ? cells[varExtIdIdx] : "").trim();
-    var locationPath   = (locIdx      >= 0 ? cells[locIdx]      : "").trim();
-    var lotId          = (lotIdx      >= 0 ? cells[lotIdx]      : "").trim();
-    var odooQty        = qtyIdx    >= 0 ? (parseFloat(cells[qtyIdx])    || 0) : 0;
-    var inventoryQty   = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx]) || 0) : 0;
-    var accountingDate = (dateIdx  >= 0 ? cells[dateIdx] : "").trim();
+    var quantId        = (idIdx       >= 0 ? (cells[idIdx]       || "") : "").trim();
+    var rawProd        = (prodIdx     >= 0 ? (cells[prodIdx]     || "") : "").trim();
+    var variantExtId   = (varExtIdIdx >= 0 ? (cells[varExtIdIdx] || "") : "").trim();
+    var locationPath   = (locIdx      >= 0 ? (cells[locIdx]      || "") : "").trim();
+    var lotId          = (lotIdx      >= 0 ? (cells[lotIdx]      || "") : "").trim();
+    var odooQty        = qtyIdx    >= 0 ? (parseFloat(cells[qtyIdx]    || 0) || 0) : 0;
+    var inventoryQty   = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx] || 0) || 0) : 0;
+    var accountingDate = (dateIdx  >= 0 ? (cells[dateIdx]       || "") : "").trim();
 
     if (!quantId || !rawProd) continue;
 
