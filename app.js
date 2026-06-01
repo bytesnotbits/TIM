@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.00.05";
+const APP_VERSION = "v2.01.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -874,17 +874,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   timSaveMasterCache();
 }
 
-$("historyFile").addEventListener("change", e => loadJsonFile(e.target.files[0]));
-
-const historyDz = $("historyDropZone");
-historyDz.addEventListener("dragover", e => { e.preventDefault(); historyDz.classList.add("dragover"); });
-historyDz.addEventListener("dragleave", () => historyDz.classList.remove("dragover"));
-historyDz.addEventListener("drop", async e => {
-  e.preventDefault(); historyDz.classList.remove("dragover");
-  const file = e.dataTransfer.files[0]; if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".json")) return alert("Please drop a JSON file.");
-  await loadJsonFile(file);
-});
+// Per-card file inputs removed — universal drop zone handles all routing.
 
 async function loadSourceFile(file) {
   if (!file) return;
@@ -899,15 +889,135 @@ async function loadSourceFile(file) {
     alert("Could not parse source file: " + err.message);
   }
 }
-$("sourceFile").addEventListener("change", e => loadSourceFile(e.target.files[0]));
-const sourceDz = $("sourceDropZone");
-sourceDz.addEventListener("dragover", e => { e.preventDefault(); sourceDz.classList.add("dragover"); });
-sourceDz.addEventListener("dragleave", () => sourceDz.classList.remove("dragover"));
-sourceDz.addEventListener("drop", async e => {
-  e.preventDefault(); sourceDz.classList.remove("dragover");
-  const file = e.dataTransfer.files[0]; if (!file) return;
-  await loadSourceFile(file);
-});
+// ═══════════════════════════════════════════════════════════════════════
+// UNIVERSAL SMART DROP ZONE
+// Detects import type by file extension + header column signatures.
+// ═══════════════════════════════════════════════════════════════════════
+
+function _universalDetectToast(msg, state) {
+  var el = $("universalDropStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = state || "";
+}
+
+async function _readCsvHeaders(file) {
+  return new Promise(function(resolve, reject) {
+    var slice = file.slice(0, 4096);
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var firstLine = (e.target.result || "").split(/\r?\n/)[0] || "";
+      resolve(bcParseCsvRow(firstLine).map(function(h) { return h.trim().toLowerCase(); }));
+    };
+    reader.onerror = reject;
+    reader.readAsText(slice);
+  });
+}
+
+async function detectAndRouteFile(file) {
+  if (!file) return;
+  var ext = file.name.toLowerCase().split(".").pop();
+
+  if (ext === "json") {
+    _universalDetectToast("Detected: Master Data JSON — loading…");
+    await loadJsonFile(file);
+    _universalDetectToast("Loaded: " + file.name, "ok");
+    return;
+  }
+
+  if (ext === "xlsx" || ext === "xls") {
+    _universalDetectToast("Reading spreadsheet…");
+    try {
+      var rawRows = await readWorkbookRawRows(file);
+      var firstRow = (rawRows[0] || []).map(function(h) { return String(h || "").toLowerCase().trim(); });
+      var isProdCatalog = firstRow.some(function(h) {
+        return h === "vendor part #" || h === "nisc item #" || h === "default_code";
+      });
+      if (isProdCatalog) {
+        _universalDetectToast("Detected: Product Catalog — loading…");
+        prodBulkUpload(file);
+      } else {
+        _universalDetectToast("Detected: Receiving Source File — loading…");
+        await loadSourceFile(file);
+      }
+      _universalDetectToast("Loaded: " + file.name, "ok");
+    } catch(err) {
+      _universalDetectToast("Error: " + err.message, "err");
+      alert("Could not read spreadsheet: " + err.message);
+    }
+    return;
+  }
+
+  if (ext === "csv") {
+    try {
+      var cols = await _readCsvHeaders(file);
+      function has() {
+        var names = Array.prototype.slice.call(arguments);
+        return names.some(function(n) { return cols.indexOf(n) !== -1; });
+      }
+
+      if (has("template_multi_barcode_ids")) {
+        _universalDetectToast("Detected: Odoo Barcode Sync — loading…");
+        bcImportOdooCsv(file);
+        return;
+      }
+      if (has("sku") && has("reels no")) {
+        _universalDetectToast("Detected: Cable Reel CSV — loading…");
+        invImportReelsCsv(file);
+        return;
+      }
+      if (has("product_id/id")) {
+        _universalDetectToast("Detected: Quants Baseline — loading…");
+        invImportQuantsBaseline(file);
+        return;
+      }
+      if (has("barcode") && has("name") && has("location_id") && !has("product_id", "product_id/default_code")) {
+        _universalDetectToast("Detected: Location Map — loading…");
+        invImportLocationMapCsv(file);
+        return;
+      }
+      if (has("product_id/default_code") && has("id") && has("quantity", "on_hand_quantity")) {
+        _universalDetectToast("Detected: Odoo Inv. Adj. Sync — loading…");
+        invImportOdooQuantsCsv(file);
+        return;
+      }
+      if (has("vendor part #") || has("nisc item #")) {
+        _universalDetectToast("Detected: Product Catalog — loading…");
+        prodBulkUpload(file);
+        return;
+      }
+
+      _universalDetectToast("Unrecognized file — check columns.", "err");
+      alert("TIM couldn’t identify this CSV.\n\nDetected columns: " + cols.slice(0, 8).join(", ") + (cols.length > 8 ? "…" : "") +
+        "\n\nExpected one of:\n• template_multi_barcode_ids — Barcode Sync\n• product_id/id — Quants Baseline\n• location_id + name + barcode — Location Map\n• product_id/default_code + id — Inv. Adj. Sync\n• Vendor Part # or NISC Item # — Product Catalog\n• SKU + Reels No — Cable Reel CSV");
+    } catch(err) {
+      _universalDetectToast("Error reading file.", "err");
+      alert("Could not read file: " + err.message);
+    }
+    return;
+  }
+
+  _universalDetectToast("Unsupported file type: ." + ext, "err");
+  alert("Unsupported file type: ." + ext);
+}
+
+(function() {
+  var uFile = $("universalFile");
+  var uZone = $("universalDropZone");
+  if (uFile) uFile.addEventListener("change", function(e) {
+    var f = e.target.files[0];
+    if (f) { detectAndRouteFile(f); e.target.value = ""; }
+  });
+  if (uZone) {
+    uZone.addEventListener("dragover", function(e) { e.preventDefault(); uZone.classList.add("dragover"); });
+    uZone.addEventListener("dragleave", function() { uZone.classList.remove("dragover"); });
+    uZone.addEventListener("drop", function(e) {
+      e.preventDefault(); uZone.classList.remove("dragover");
+      var f = e.dataTransfer.files[0]; if (f) detectAndRouteFile(f);
+    });
+  }
+})();
+
 $("exportCsvBtn").addEventListener("click", () => {
   const rows = currentBatch.filter(r => r.status === "valid");
   const badRows = rows.filter(r => /product_template/i.test(getRecordExternalId(r)));
@@ -1770,6 +1880,9 @@ function toggleMoreDropdown(e) {
 document.addEventListener("click", function() {
   var m = $("moreDropMenu");
   if (m) m.classList.add("hidden");
+  ["invExportSummaryMenu","invExportAdjMenu","invExportEventLogMenu"].forEach(function(id) {
+    var el = $(id); if (el) el.classList.add("hidden");
+  });
 });
 
 // -- Collapsible cards -----------------------------------------------
@@ -2177,7 +2290,9 @@ function renderInvEventLog() {
 
   $("invLogCount").textContent = filtered.length + " of " + invEvents.length + " events";
   var exportLogBtn = $("invExportEventLogBtn");
-  if (exportLogBtn) exportLogBtn.disabled = !invEvents.length || !invSession;
+  var logDis = !invEvents.length || !invSession;
+  if (exportLogBtn) exportLogBtn.disabled = logDis;
+  var logCaret = $("invExportEventLogCaretBtn"); if (logCaret) logCaret.disabled = logDis;
 
   if (!filtered.length) {
     var msg = invEvents.length ? "No events match the current filters." :
@@ -2303,11 +2418,11 @@ function renderInvSummary() {
 
   var rows = Object.keys(map).sort().map(function(k) { return map[k]; });
 
-  if (exportBtn) exportBtn.disabled = !rows.length || !invSession;
-  var odooXlsxBtn = $("invExportOdooAdjXlsxBtn");
-  var odooCsvBtn  = $("invExportOdooAdjCsvBtn");
-  if (odooXlsxBtn) odooXlsxBtn.disabled = !rows.length || !invSession;
-  if (odooCsvBtn)  odooCsvBtn.disabled  = !rows.length || !invSession;
+  var dis = !rows.length || !invSession;
+  if (exportBtn) exportBtn.disabled = dis;
+  var summCaret = $("invExportSummaryCaretBtn"); if (summCaret) summCaret.disabled = dis;
+  var adjBtn    = $("invExportOdooAdjBtn");      if (adjBtn)    adjBtn.disabled    = dis;
+  var adjCaret  = $("invExportOdooAdjCaretBtn"); if (adjCaret)  adjCaret.disabled  = dis;
 
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">No items counted yet.</td></tr>';
@@ -4432,6 +4547,35 @@ function invMakeXlsx(headers, rows, sheetName) {
   return wb;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// SPLIT EXPORT BUTTON — format picker (XLSX / CSV)
+// ═══════════════════════════════════════════════════════════════════════
+
+function invGetExportFmt(key) {
+  try { return localStorage.getItem("tim_efmt_" + key) || "xlsx"; } catch(e) { return "xlsx"; }
+}
+
+function invPickExportFmt(key, fmt) {
+  try { localStorage.setItem("tim_efmt_" + key, fmt); } catch(e) {}
+  var menu = $("invExport" + (key === "adj" ? "Adj" : key === "summary" ? "Summary" : "EventLog") + "Menu");
+  if (menu) menu.classList.add("hidden");
+  invDoExport(key, fmt);
+}
+
+function invToggleExportMenu(key, e) {
+  if (e) e.stopPropagation();
+  var menuId = "invExport" + (key === "adj" ? "Adj" : key === "summary" ? "Summary" : "EventLog") + "Menu";
+  var menu = $(menuId);
+  if (menu) menu.classList.toggle("hidden");
+}
+
+function invDoExport(key, fmt) {
+  fmt = fmt || invGetExportFmt(key);
+  if (key === "summary")  { fmt === "csv" ? exportInvSummaryCsv()            : exportInvSummaryXlsx(); }
+  else if (key === "adj") { fmt === "csv" ? exportInvOdooAdjustmentCsv()     : exportInvOdooAdjustmentXlsx(); }
+  else                    { fmt === "csv" ? exportInvEventLogCsv()            : exportInvEventLogXlsx(); }
+}
+
 function exportInvEventLogXlsx() {
   if (!requireInvSession()) return;
   var headers = ["Seq","Timestamp","Event Type","Scan Type","Scanned Value",
@@ -4548,22 +4692,38 @@ function invGetQuantId(defCode, locValue, lotName) {
   return entry ? (entry.id || "") : "";
 }
 
+function invRenderOdooSetupSidebarStatus() {
+  var uniqueIds = {};
+  Object.values(invOdooQuantMap).forEach(function(e) { if (e.id) uniqueIds[e.id] = 1; });
+  var quantMapCount  = Object.keys(uniqueIds).length;
+  var baselineCount  = invQuantsBaseline.length;
+  var locationCount  = Object.keys(invLocationMap).length;
+  var displayCount   = baselineCount || quantMapCount || locationCount || null;
+  updateSidebarStatus(2, displayCount);
+  var label = $("sideOdooSetupLabel");
+  if (label) {
+    var parts = [];
+    if (baselineCount)  parts.push("Quants ✓");
+    if (locationCount)  parts.push("Locations ✓");
+    if (quantMapCount)  parts.push("Adj. IDs ✓");
+    label.textContent = parts.length ? parts.join(" · ") : "Quants Baseline · Location Map · Inv. Adj. Sync";
+  }
+}
+
 function invRenderQuantMapStatus() {
   var clearBtn = $("invClearQuantMapBtn");
-  // Each quant can be stored under up to 2 keys (barcode + complete_name) — count unique IDs
   var uniqueIds = {};
   Object.values(invOdooQuantMap).forEach(function(e) { if (e.id) uniqueIds[e.id] = 1; });
   var unique = Object.keys(uniqueIds).length;
   if (!unique) {
-    setDropState("invQuantSyncZone", "invQuantSyncStatus", false, "Waiting for upload");
-    updateSidebarStatus(2, null);
+    setDropState("invQuantSyncZone", "invQuantSyncStatus", false, "Not loaded");
     if (clearBtn) clearBtn.style.display = "none";
   } else {
     var msg = unique + " quant record" + (unique !== 1 ? "s" : "") + " loaded — IDs matched on export.";
     setDropState("invQuantSyncZone", "invQuantSyncStatus", true, msg);
-    updateSidebarStatus(2, unique);
     if (clearBtn) clearBtn.style.display = "";
   }
+  invRenderOdooSetupSidebarStatus();
 }
 
 function invSaveOdooQuantMap() {
@@ -4678,15 +4838,14 @@ function invRenderLocationMapStatus() {
   var clearBtn = $("invLocationMapClearBtn");
   var count = Object.keys(invLocationMap).length;
   if (!count) {
-    setDropState("invLocationMapZone", "invLocationMapStatus", false, "Waiting for upload");
-    updateSidebarStatus(4, null);
+    setDropState("invLocationMapZone", "invLocationMapStatus", false, "Not loaded");
     if (clearBtn) clearBtn.style.display = "none";
   } else {
     var msg = count.toLocaleString() + " location" + (count !== 1 ? "s" : "") + " mapped";
     setDropState("invLocationMapZone", "invLocationMapStatus", true, msg);
-    updateSidebarStatus(4, count);
     if (clearBtn) clearBtn.style.display = "";
   }
+  invRenderOdooSetupSidebarStatus();
 }
 
 function invSaveLocationMap() {
@@ -4781,16 +4940,15 @@ function invRenderQuantsBaselineStatus() {
   var count = invQuantsBaseline.length;
   var clearBtn = $("invQuantsBaselineClearBtn");
   if (!count) {
-    setDropState("invQuantsBaselineZone", "invQuantsBaselineStatus", false, "Waiting for upload");
-    updateSidebarStatus(3, null);
+    setDropState("invQuantsBaselineZone", "invQuantsBaselineStatus", false, "Not loaded");
     if (clearBtn) clearBtn.style.display = "none";
   } else {
     var msg = count.toLocaleString() + " quant record" + (count !== 1 ? "s" : "") + " loaded";
     if (invQuantsBaselineImportedAt) msg += " · " + new Date(invQuantsBaselineImportedAt).toLocaleDateString();
     setDropState("invQuantsBaselineZone", "invQuantsBaselineStatus", true, msg);
-    updateSidebarStatus(3, count);
     if (clearBtn) clearBtn.style.display = "";
   }
+  invRenderOdooSetupSidebarStatus();
 }
 
 function invSaveQuantsBaseline() {
@@ -7182,8 +7340,7 @@ function bcImportOdooCsv(file) {
     catch(err) { alert("Import failed: " + err.message); }
   };
   reader.readAsText(file);
-  var inp = $("bcImportFile");
-  if (inp) inp.value = "";
+  // input removed from card; universal zone handles file selection
 }
 
 function bcProcessOdooImport(text, fileName) {
@@ -7385,7 +7542,7 @@ function clearSourceData() {
   currentBatch = [];
   blindQueue = [];
   clearBatchDraft();
-  $("sourceFile").value = "";
+  var _sf = $("sourceFile"); if (_sf) _sf.value = "";
   setDropState("sourceDropZone", "sourceDropStatus", false, "Waiting for upload");
   updateSidebarStatus(2, null);
   renderAll();
@@ -7608,9 +7765,9 @@ function prodCancelEdit() {
 var _csvImportPending = null;
 
 function invImportReelsCsv(inputEl) {
-  var file = inputEl.files[0];
+  var file = (inputEl instanceof File) ? inputEl : inputEl.files[0];
   if (!file) return;
-  inputEl.value = "";
+  if (!(inputEl instanceof File)) inputEl.value = "";
   var reader = new FileReader();
   reader.onload = function(e) {
     try {

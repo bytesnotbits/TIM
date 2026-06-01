@@ -466,6 +466,31 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .finalize-btn { background:#166534; }
 .finalize-btn:hover { background:#15803d; }
 
+/* ── Universal drop zone ── */
+.universal-drop { border:2px dashed #6366f1; border-radius:12px; padding:24px 20px; text-align:center; background:#f5f3ff; transition:background .15s, border-color .15s; }
+.universal-drop.dragover { background:#ede9fe; border-color:#4338ca; }
+.universal-drop-title { font-weight:800; font-size:15px; color:#4338ca; margin-bottom:4px; }
+#universalDropStatus { display:block; margin-top:8px; font-size:13px; color:#6b7280; }
+#universalDropStatus.ok { color:#166534; font-weight:600; }
+#universalDropStatus.err { color:#dc2626; font-weight:600; }
+/* ── Import status bars (replace individual drop zones in cards) ── */
+.import-status-bar { border-radius:8px; padding:7px 12px; background:#f8fafc; border:1px solid #e2e8f0; font-size:13px; color:#94a3b8; transition:background .15s,border-color .15s; }
+.import-status-bar.loaded { background:#ecfdf5; border-color:#16a34a; color:#166534; font-weight:600; }
+/* ── Odoo Setup sub-rows ── */
+.odoo-setup-rows { display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.odoo-setup-row { display:flex; align-items:baseline; gap:8px; }
+.odoo-setup-row-label { font-size:12px; font-weight:700; color:#374151; min-width:132px; flex-shrink:0; }
+.odoo-setup-row-status { font-size:12px; color:#94a3b8; flex:1; }
+.odoo-setup-row-status.loaded { color:#166534; font-weight:600; }
+.odoo-setup-row-clear { font-size:11px; font-weight:600; color:#b45309; background:none; border:1px solid #d97706; border-radius:5px; padding:1px 7px; margin:0; cursor:pointer; }
+.odoo-setup-row-clear:hover { background:#fff7ed; }
+/* ── Split export button ── */
+.split-btn-wrap { position:relative; display:inline-flex; }
+.split-btn-wrap .split-main { border-radius:8px 0 0 8px; margin:4px 0 4px 4px; border-right:1px solid rgba(255,255,255,.25); }
+.split-btn-wrap .split-caret { border-radius:0 8px 8px 0; margin:4px 4px 4px 0; padding:10px 9px; min-width:30px; font-size:12px; line-height:1; }
+.split-btn-wrap .split-caret:disabled { opacity:.45; cursor:not-allowed; }
+.split-btn-wrap .dropdown-menu { left:auto; right:0; min-width:160px; }
+
 /* === Inline Reel Entry Panel === */
 .inv-reel-entry-panel { background:#f0fdf4; border:2px solid #86efac; border-radius:10px; padding:12px 14px; margin-top:10px; }
 .inv-reel-entry-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
