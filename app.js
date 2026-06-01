@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.00.00";
+const APP_VERSION = "v2.00.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2794,6 +2794,30 @@ function invHandleBulkCount(itemNumber, qty, notes, location) {
   var mm = findProductMapMatch(itemNumber);
   var description = mm ? getMapDescription(mm.entry) : "";
 
+  // ── Re-scan dedup: if this item+location already has a non-voided bulk count
+  //    in the current session, reuse that event instead of creating a new one.
+  //    The qty keypad will pre-load the existing qty so the user can correct it.
+  var existingEvt = invEvents.find(function(e) {
+    return e.eventType === "bulk_quantity_count" &&
+           e.status !== "voided" &&
+           normKey(e.itemNumber || "") === normKey(itemNumber) &&
+           normKey(e.location   || "") === normKey(location   || "");
+  });
+
+  if (existingEvt) {
+    invLastBulkEventId = existingEvt.eventId;
+    // Pre-load keypad with current qty so user can edit rather than build up
+    invQtyKeypadValue = String(existingEvt.qty != null ? existingEvt.qty : 1);
+    invQtyKeypadFresh = true;
+    invQtyRefreshDisplay();
+    var ctx = $("invQtyKeypadContext");
+    if (ctx) ctx.textContent = (itemNumber || "Item") + " — already counted (" + existingEvt.qty + ") · adjust qty and Apply to update";
+    invSetScanFeedback(
+      "Already counted: " + itemNumber + " (qty " + existingEvt.qty + " at " + (location || "—") + "). Adjust qty with keypad and Apply to update.",
+      "warn", "", "bulk");
+    return true;
+  }
+
   if (!mm) {
     invCreateExceptionEvent(itemNumber, "item_number",
       "Item not found in product map",
@@ -3227,7 +3251,11 @@ function invQtyKeyApply() {
   if (isNaN(n)) { invQtyKeyClear(); return; }
 
   var evt = invEvents.find(function(e) { return e.eventId === invLastBulkEventId; });
-  if (!evt) { invQtyKeyClear(); return; }
+  if (!evt) {
+    invSetScanFeedback("No item active — scan a bulk item first, then adjust qty.", "warn");
+    invQtyKeyClear();
+    return;
+  }
 
   evt.qty = n;
   invSession.updatedAt = invNow();
@@ -3893,27 +3921,104 @@ function invDiscardReelEntry() {
 var invSerialPromptScan = "";
 var invSerialPromptType = "";
 var invSerialPromptLoc  = "";
+var invSerialPromptMode = "serialized"; // "serialized" | "bulk" | "reel"
 
 function invShowSerialPrompt(scannedValue, scanType, location) {
   invSerialPromptScan = scannedValue || "";
   invSerialPromptType = scanType    || "serial";
   invSerialPromptLoc  = location    || invCurrentLocation || "";
-
-  var sf = $("invSerialPromptSerial");
-  var ff = $("invSerialPromptFsan");
-  var mf = $("invSerialPromptMac");
-  var nf = $("invSerialPromptNotes");
-  if (sf) sf.value = (scanType === "serial") ? scannedValue : "";
-  if (ff) ff.value = (scanType === "fsan")   ? scannedValue : "";
-  if (mf) mf.value = "";
-  if (nf) nf.value = "";
+  invSerialPromptMode = "serialized";
 
   var panel = $("invSerialPromptPanel");
   if (panel) panel.classList.remove("hidden");
-  setTimeout(function() {
-    var toFocus = (sf && sf.value) ? ff : sf;
-    if (toFocus) toFocus.focus();
-  }, 50);
+  invRenderSerialPromptBody();
+}
+
+function invSetSerialPromptMode(mode) {
+  invSerialPromptMode = mode;
+  if (mode === "reel") {
+    // Route directly to reel inline panel — close this prompt
+    invHideSerialPrompt();
+    invPrefillReelItemNumber("", "", invSerialPromptLoc || invCurrentLocation);
+    // Pre-fill reel number field with the scanned value
+    var rf = $("invReelNumber");
+    if (rf) { rf.value = invSerialPromptScan; rf.classList.add("inv-reel-prefilled"); }
+    invSetScanFeedback("Switched to Reel mode — fill in reel details.", "warn");
+    return;
+  }
+  invRenderSerialPromptBody();
+}
+
+function invRenderSerialPromptBody() {
+  var pills = $("invSerialPromptTypePills");
+  var body  = $("invSerialPromptBody");
+  if (!pills || !body) return;
+
+  var modes = [
+    { key: "serialized", label: "Serialized" },
+    { key: "bulk",       label: "Bulk / Item #" },
+    { key: "reel",       label: "Cable Reel" }
+  ];
+  pills.innerHTML = modes.map(function(m) {
+    var active = m.key === invSerialPromptMode;
+    return '<button onclick="invSetSerialPromptMode(\'' + m.key + '\')" style="padding:4px 12px;font-size:12px;border-radius:20px;border:1px solid ' +
+      (active ? '#6366f1;background:#eef2ff;color:#3730a3;font-weight:600;' : '#cbd5e1;background:#f8fafc;color:#475569;') +
+      'cursor:pointer;">' + m.label + '</button>';
+  }).join("");
+
+  if (invSerialPromptMode === "serialized") {
+    body.innerHTML =
+      '<p class="small" style="margin:0 0 8px;color:#713f12;">Not in history — fill in what you know and Commit, or Cancel to log an exception.</p>' +
+      '<div class="inv-serial-prompt-grid">' +
+        '<label>Serial Number' +
+          '<input id="invSerialPromptSerial" type="text" placeholder="e.g. SN123456" autocomplete="off" style="text-transform:uppercase;" value="' +
+          (invSerialPromptType === "serial" ? escapeHtml(invSerialPromptScan) : "") + '" /></label>' +
+        '<label>FSAN' +
+          '<input id="invSerialPromptFsan" type="text" placeholder="e.g. CXNK00A1B2C3" autocomplete="off" style="text-transform:uppercase;" value="' +
+          (invSerialPromptType === "fsan" ? escapeHtml(invSerialPromptScan) : "") + '" /></label>' +
+        '<label>MAC Address <span style="font-weight:400;">(optional)</span>' +
+          '<input id="invSerialPromptMac" type="text" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" style="text-transform:uppercase;" /></label>' +
+        '<label>Notes <span style="font-weight:400;">(optional)</span>' +
+          '<input id="invSerialPromptNotes" type="text" placeholder="e.g. found loose, no box" ' +
+          'onkeydown="if(event.key===\'Enter\'){event.preventDefault();invCommitSerialPrompt();}" /></label>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<button onclick="invCommitSerialPrompt()" style="flex:1;padding:9px;">Commit Device</button>' +
+        '<button class="secondary" onclick="invCancelSerialPrompt()">Cancel / Exception</button>' +
+      '</div>';
+    setTimeout(function() {
+      var sf = $("invSerialPromptSerial"), ff = $("invSerialPromptFsan");
+      var toFocus = (sf && sf.value) ? ff : sf;
+      if (toFocus) toFocus.focus();
+    }, 50);
+
+  } else if (invSerialPromptMode === "bulk") {
+    // Move scanned value to Item # field
+    var mm = findProductMapMatch(invSerialPromptScan);
+    var desc = mm ? getMapDescription(mm.entry) : "";
+    body.innerHTML =
+      '<p class="small" style="margin:0 0 8px;color:#713f12;">Count as a bulk item. Item # pre-filled from your scan. Not in product map — will flag in report.</p>' +
+      '<div class="inv-serial-prompt-grid">' +
+        '<label>Item # *' +
+          '<input id="invSerialPromptBulkItem" type="text" placeholder="e.g. 1190OFF" autocomplete="off" style="text-transform:uppercase;" value="' +
+          escapeHtml(invSerialPromptScan) + '" /></label>' +
+        '<label>Description <span style="font-weight:400;">(optional)</span>' +
+          '<input id="invSerialPromptBulkDesc" type="text" placeholder="e.g. Splice enclosure" autocomplete="off" value="' +
+          escapeHtml(desc) + '" /></label>' +
+        '<label>Qty' +
+          '<input id="invSerialPromptBulkQty" type="number" min="1" value="1" style="width:90px;" /></label>' +
+        '<label>Notes <span style="font-weight:400;">(optional)</span>' +
+          '<input id="invSerialPromptBulkNotes" type="text" placeholder="e.g. not in Odoo" ' +
+          'onkeydown="if(event.key===\'Enter\'){event.preventDefault();invCommitSerialPromptBulk();}" /></label>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<button onclick="invCommitSerialPromptBulk()" style="flex:1;padding:9px;">Commit Bulk Count</button>' +
+        '<button class="secondary" onclick="invCancelSerialPrompt()">Cancel / Exception</button>' +
+      '</div>';
+    setTimeout(function() {
+      var qi = $("invSerialPromptBulkQty"); if (qi) qi.focus();
+    }, 50);
+  }
 }
 
 function invHideSerialPrompt() {
@@ -3922,6 +4027,7 @@ function invHideSerialPrompt() {
   invSerialPromptScan = "";
   invSerialPromptType = "";
   invSerialPromptLoc  = "";
+  invSerialPromptMode = "serialized";
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
 
@@ -3977,10 +4083,63 @@ function invCommitSerialPrompt() {
   invHideSerialPrompt();
 }
 
+function invCommitSerialPromptBulk() {
+  var itemNumber = (($("invSerialPromptBulkItem") ? $("invSerialPromptBulkItem").value : "") || "").trim().toUpperCase();
+  var description = (($("invSerialPromptBulkDesc") ? $("invSerialPromptBulkDesc").value : "") || "").trim();
+  var qtyRaw = $("invSerialPromptBulkQty") ? $("invSerialPromptBulkQty").value : "1";
+  var qty = parseInt(qtyRaw, 10);
+  var notes = (($("invSerialPromptBulkNotes") ? $("invSerialPromptBulkNotes").value : "") || "").trim();
+
+  if (!itemNumber) {
+    alert("Item # is required.");
+    var f = $("invSerialPromptBulkItem"); if (f) f.focus();
+    return;
+  }
+  if (isNaN(qty) || qty < 1) { qty = 1; }
+
+  // Check product map — if not found, log exception alongside the count
+  var mm = findProductMapMatch(itemNumber);
+  var resolvedDesc = mm ? getMapDescription(mm.entry) : description;
+
+  if (!mm) {
+    invCreateExceptionEvent(itemNumber, "item_number",
+      "Item not found in product map — committed manually from unknown scan",
+      "Add a product mapping for " + itemNumber + " if it belongs in Odoo.",
+      notes);
+  }
+
+  var evt = invCreateEvent("bulk_quantity_count", {
+    scanType:     "item_number",
+    scannedValue: invSerialPromptScan,
+    itemNumber:   itemNumber,
+    description:  resolvedDesc,
+    location:     invSerialPromptLoc,
+    qty:          qty,
+    notes:        notes || ("Manual bulk entry from unrecognized scan: " + invSerialPromptScan)
+  });
+
+  invLastBulkEventId = evt ? evt.eventId : null;
+  invSetScanFeedback(
+    "Bulk count committed: " + qty + "× " + itemNumber +
+    (resolvedDesc ? " (" + resolvedDesc + ")" : "") +
+    (!mm ? " — WARNING: not in product map, exception created." : ""),
+    mm ? "ok" : "warn", "", mm ? "bulk" : "");
+
+  if (invLastBulkEventId) {
+    invShowQtyKeypad(invLastBulkEventId, itemNumber, resolvedDesc);
+  }
+
+  $("invScanInput").value = "";
+  invHideSerialPrompt();
+}
+
 function invCancelSerialPrompt() {
-  var notes = (($("invSerialPromptNotes") ? $("invSerialPromptNotes").value : "") || "").trim();
+  // Read notes from whichever field is currently rendered
+  var notes = "";
+  var nf = $("invSerialPromptNotes") || $("invSerialPromptBulkNotes");
+  if (nf) notes = nf.value.trim();
   invCreateExceptionEvent(invSerialPromptScan, invSerialPromptType,
-    "Device not found in history — entry cancelled",
+    "Unrecognized scan — entry cancelled",
     "Load a master history JSON with this device, or commit manually next time.",
     notes);
   invSetScanFeedback("Cancelled — exception logged for " + invSerialPromptScan + ".", "warn");

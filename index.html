@@ -504,32 +504,16 @@
               </div>
             </div>
 
-            <!-- Phase 5: Unknown serial inline prompt -->
+            <!-- Unknown-scan inline prompt (serialized / bulk / reel switcher) -->
             <div id="invSerialPromptPanel" class="inv-serial-prompt hidden">
               <div class="inv-serial-prompt-header">
-                <span class="inv-serial-prompt-title">&#9888; Unknown Device — Enter Details to Commit</span>
-                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invCancelSerialPrompt()">Cancel</button>
+                <span class="inv-serial-prompt-title">&#9888; Unrecognized Scan — Choose Type &amp; Commit</span>
+                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invCancelSerialPrompt()">Cancel / Exception</button>
               </div>
-              <p class="small" style="margin:0 0 8px;color:#713f12;">Device not found in history. Fill in what you know, then click Commit — or Cancel to log an exception.</p>
-              <div class="inv-serial-prompt-grid">
-                <label>Serial Number
-                  <input id="invSerialPromptSerial" type="text" placeholder="e.g. SN123456" autocomplete="off" style="text-transform:uppercase;" />
-                </label>
-                <label>FSAN
-                  <input id="invSerialPromptFsan" type="text" placeholder="e.g. CXNK00A1B2C3" autocomplete="off" style="text-transform:uppercase;" />
-                </label>
-                <label>MAC Address <span style="font-weight:400;">(optional)</span>
-                  <input id="invSerialPromptMac" type="text" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" style="text-transform:uppercase;" />
-                </label>
-                <label>Notes <span style="font-weight:400;">(optional)</span>
-                  <input id="invSerialPromptNotes" type="text" placeholder="e.g. found loose, no box"
-                         onkeydown="if(event.key==='Enter'){event.preventDefault();invCommitSerialPrompt();}" />
-                </label>
-              </div>
-              <div style="display:flex;gap:8px;">
-                <button onclick="invCommitSerialPrompt()" style="flex:1;padding:9px;">Commit Device</button>
-                <button class="secondary" onclick="invCancelSerialPrompt()">Cancel / Exception</button>
-              </div>
+              <!-- Type switcher pills -->
+              <div id="invSerialPromptTypePills" style="display:flex;gap:6px;margin-bottom:10px;"></div>
+              <!-- Dynamic body — rendered by invRenderSerialPromptBody() -->
+              <div id="invSerialPromptBody"></div>
             </div>
 
             <!-- Reel entry inline panel (shown in Cable Reel mode) -->
