@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.00.01";
+const APP_VERSION = "v2.00.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2793,30 +2793,6 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
 function invHandleBulkCount(itemNumber, qty, notes, location) {
   var mm = findProductMapMatch(itemNumber);
   var description = mm ? getMapDescription(mm.entry) : "";
-
-  // ── Re-scan dedup: if this item+location already has a non-voided bulk count
-  //    in the current session, reuse that event instead of creating a new one.
-  //    The qty keypad will pre-load the existing qty so the user can correct it.
-  var existingEvt = invEvents.find(function(e) {
-    return e.eventType === "bulk_quantity_count" &&
-           e.status !== "voided" &&
-           normKey(e.itemNumber || "") === normKey(itemNumber) &&
-           normKey(e.location   || "") === normKey(location   || "");
-  });
-
-  if (existingEvt) {
-    invLastBulkEventId = existingEvt.eventId;
-    // Pre-load keypad with current qty so user can edit rather than build up
-    invQtyKeypadValue = String(existingEvt.qty != null ? existingEvt.qty : 1);
-    invQtyKeypadFresh = true;
-    invQtyRefreshDisplay();
-    var ctx = $("invQtyKeypadContext");
-    if (ctx) ctx.textContent = (itemNumber || "Item") + " — already counted (" + existingEvt.qty + ") · adjust qty and Apply to update";
-    invSetScanFeedback(
-      "Already counted: " + itemNumber + " (qty " + existingEvt.qty + " at " + (location || "—") + "). Adjust qty with keypad and Apply to update.",
-      "warn", "", "bulk");
-    return true;
-  }
 
   if (!mm) {
     invCreateExceptionEvent(itemNumber, "item_number",
