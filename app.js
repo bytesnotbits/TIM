@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.00";
+const APP_VERSION = "v2.01.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1942,6 +1942,7 @@ function invAutosave() {
     exceptions: invExceptions,
     recounts: invRecounts,
     settings: invSettings,
+    currentLocation: invCurrentLocation || "",
     // Serialize activity feed — time as ISO string so IndexedDB can store it
     activityLog: invActivityLog.map(function(e) {
       return { type: e.type, message: e.message, detail: e.detail || "",
@@ -2054,6 +2055,7 @@ function invAutoRestoreSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    if (saved.currentLocation) invSetLocation(saved.currentLocation);
     if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
       invActivityLog = saved.activityLog.map(function(e) {
         return { type: e.type, message: e.message, detail: e.detail || "",
@@ -2089,6 +2091,7 @@ function invResumeSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    if (saved.currentLocation) invSetLocation(saved.currentLocation);
     if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
       invActivityLog = saved.activityLog.map(function(e) {
         return { type: e.type, message: e.message, detail: e.detail || "",
@@ -4608,7 +4611,7 @@ function exportInvSummaryXlsx() {
 // ===================================================================
 
 function buildOdooAdjustmentRows(events) {
-  var headers = ["id", "product_id/id", "product_id/default_code", "location_id/barcode", "lot_id/name", "inventory_quantity"];
+  var headers = ["id", "product_id/id", "product_id/default_code", "location_id/complete_name", "lot_id/name", "inventory_quantity"];
   var rows = [];
 
   function pmFields(itemNumber) {
@@ -4619,6 +4622,10 @@ function buildOdooAdjustmentRows(events) {
     };
   }
 
+  function resolveLocation(barcode) {
+    return invLocationBarcodeToCompleteName(barcode || "");
+  }
+
   // Serialized device scans — one row per active event
   events.forEach(function(evt) {
     if (evt.status === "voided" || evt.eventType === "void_event") return;
@@ -4626,7 +4633,7 @@ function buildOdooAdjustmentRows(events) {
     var f = pmFields(evt.itemNumber);
     var lotName = evt.serial || evt.fsan || evt.scannedValue || "";
     var qid = invGetQuantId(f.defCode, evt.location || "", lotName);
-    rows.push([qid, f.extId, f.defCode, evt.location || "", lotName, 1]);
+    rows.push([qid, f.extId, f.defCode, resolveLocation(evt.location), lotName, 1]);
   });
 
   // Bulk quantity counts and box scans — aggregate by item + location
@@ -4646,7 +4653,7 @@ function buildOdooAdjustmentRows(events) {
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
     var qid = invGetQuantId(r.defCode, r.loc, "");
-    rows.push([qid, r.extId, r.defCode, r.loc, "", r.qty]);
+    rows.push([qid, r.extId, r.defCode, resolveLocation(r.loc), "", r.qty]);
   });
 
   // Cable reel counts — one row per reel (lot-tracked, footage as qty)
@@ -4656,16 +4663,24 @@ function buildOdooAdjustmentRows(events) {
     var f3 = pmFields(evt.itemNumber);
     var lotName3 = evt.reelNumber || evt.scannedValue || "";
     var qid3 = invGetQuantId(f3.defCode, evt.location || "", lotName3);
-    rows.push([qid3, f3.extId, f3.defCode, evt.location || "", lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
+    rows.push([qid3, f3.extId, f3.defCode, resolveLocation(evt.location), lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
   });
 
   return { headers: headers, rows: rows };
+}
+
+function invWarnBlankLocations(rows) {
+  var blank = rows.filter(function(r) { return !r[3]; }).length;
+  if (blank) {
+    alert(blank + " row" + (blank !== 1 ? "s" : "") + " ha" + (blank !== 1 ? "ve" : "s") + " no location.\n\nOdoo will reject these. Check that all items were scanned after setting a location, then re-export.");
+  }
 }
 
 function exportInvOdooAdjustmentXlsx() {
   if (!requireInvSession()) return;
   var result = buildOdooAdjustmentRows(invEvents);
   if (!result.rows.length) { alert("No countable events to export."); return; }
+  invWarnBlankLocations(result.rows);
   var wb = invMakeXlsx(result.headers, result.rows, "Inventory Adjustment");
   XLSX.writeFile(wb, "odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx");
 }
@@ -4674,6 +4689,7 @@ function exportInvOdooAdjustmentCsv() {
   if (!requireInvSession()) return;
   var result = buildOdooAdjustmentRows(invEvents);
   if (!result.rows.length) { alert("No countable events to export."); return; }
+  invWarnBlankLocations(result.rows);
   var lines = [result.headers.map(csvEscape).join(",")].concat(
     result.rows.map(function(r) { return r.map(csvEscape).join(","); })
   );
@@ -4826,12 +4842,19 @@ function invProcessOdooQuantCsv(text, fileName) {
 // ═══════════════════════════════════════════════════════════════════════
 
 var invLocationMap = {};
+var invLocationBarcodeMap = {};  // normKey(barcode) → complete_name path
 const INV_LOCATION_MAP_KEY = "tim_location_map_v1";
 
 function invLocationPathToBarcode(path) {
   if (!path) return "";
   var barcode = invLocationMap[normKey(path)];
   return barcode || path; // fall back to original value if not mapped
+}
+
+function invLocationBarcodeToCompleteName(barcode) {
+  if (!barcode) return "";
+  var path = invLocationBarcodeMap[normKey(barcode)];
+  return path || barcode; // fall back to barcode if not mapped
 }
 
 function invRenderLocationMapStatus() {
@@ -4848,14 +4871,22 @@ function invRenderLocationMapStatus() {
   invRenderOdooSetupSidebarStatus();
 }
 
+const INV_LOCATION_BARCODE_MAP_KEY = "tim_location_barcode_map_v1";
+
 function invSaveLocationMap() {
   TimDB.set(INV_LOCATION_MAP_KEY, invLocationMap).catch(function(){});
+  TimDB.set(INV_LOCATION_BARCODE_MAP_KEY, invLocationBarcodeMap).catch(function(){});
 }
 
 function invLoadLocationMap() {
-  return TimDB.get(INV_LOCATION_MAP_KEY).then(function(saved) {
-    if (saved && typeof saved === "object" && Object.keys(saved).length) {
-      invLocationMap = saved;
+  return Promise.all([
+    TimDB.get(INV_LOCATION_MAP_KEY),
+    TimDB.get(INV_LOCATION_BARCODE_MAP_KEY)
+  ]).then(function(results) {
+    var savedPath = results[0], savedBarcode = results[1];
+    if (savedPath && typeof savedPath === "object" && Object.keys(savedPath).length) {
+      invLocationMap = savedPath;
+      if (savedBarcode && typeof savedBarcode === "object") invLocationBarcodeMap = savedBarcode;
       invRenderLocationMapStatus();
     }
   }).catch(function(){});
@@ -4863,7 +4894,9 @@ function invLoadLocationMap() {
 
 function invClearLocationMap() {
   invLocationMap = {};
+  invLocationBarcodeMap = {};
   TimDB.remove(INV_LOCATION_MAP_KEY).catch(function(){});
+  TimDB.remove(INV_LOCATION_BARCODE_MAP_KEY).catch(function(){});
   invRenderLocationMapStatus();
 }
 
@@ -4892,29 +4925,33 @@ function invProcessLocationMapCsv(text, fileName) {
     return -1;
   }
 
-  var parentIdx  = colIdx("location_id");  // parent path e.g. "W367/S"
-  var nameIdx    = colIdx("name");          // location name e.g. "Y01"
-  var barcodeIdx = colIdx("barcode");       // barcode e.g. "WHY01"
+  var parentIdx       = colIdx("location_id");   // parent path e.g. "W367/S"
+  var nameIdx         = colIdx("name");           // location name e.g. "Y01"
+  var barcodeIdx      = colIdx("barcode");        // barcode e.g. "WHY01"
+  var completeNameIdx = colIdx("complete_name");  // Odoo full path if exported
 
   if (nameIdx    === -1) throw new Error("Column 'name' not found. Export Locations from Odoo: Inventory → Configuration → Locations.");
   if (barcodeIdx === -1) throw new Error("Column 'barcode' not found.");
 
   var newMap = {};
+  var newBarcodeMap = {};
   var loaded = 0;
 
   for (var i = 1; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
-    var cells   = bcParseCsvRow(line);
-    var parent  = (parentIdx  >= 0 ? cells[parentIdx]  : "").trim();
-    var name    = (nameIdx    >= 0 ? cells[nameIdx]    : "").trim();
-    var barcode = (barcodeIdx >= 0 ? cells[barcodeIdx] : "").trim();
+    var cells        = bcParseCsvRow(line);
+    var parent       = (parentIdx       >= 0 ? cells[parentIdx]       : "").trim();
+    var name         = (nameIdx         >= 0 ? cells[nameIdx]         : "").trim();
+    var barcode      = (barcodeIdx      >= 0 ? cells[barcodeIdx]      : "").trim();
+    var completeName = (completeNameIdx >= 0 ? cells[completeNameIdx] : "").trim();
 
     if (!name || !barcode) continue;
 
     // Construct full path: "W367/S/Y01" or just "Rental" when no parent
     var fullPath = parent ? parent + "/" + name : name;
     newMap[normKey(fullPath)] = barcode;
+    newBarcodeMap[normKey(barcode)] = completeName || fullPath;
     loaded++;
   }
 
@@ -4922,6 +4959,7 @@ function invProcessLocationMapCsv(text, fileName) {
     throw new Error("No valid rows found. Verify this is an Odoo Locations export with 'name' and 'barcode' columns.");
 
   invLocationMap = newMap;
+  invLocationBarcodeMap = newBarcodeMap;
   invSaveLocationMap();
   invRenderLocationMapStatus();
   var statusEl = $("invLocationMapStatus");
