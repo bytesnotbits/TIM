@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.01";
+const APP_VERSION = "v2.01.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -914,9 +914,23 @@ async function _readCsvHeaders(file) {
   });
 }
 
+function odooFilenameType(filename) {
+  // Strip extension, then strip Windows duplicate suffix " (N)", then normalize
+  var base = filename.trim()
+    .replace(/\.[^.]+$/, "")
+    .replace(/\s+\(\d+\)$/, "")
+    .toLowerCase()
+    .trim();
+  if (base === "product variant (product.product)") return "prod_catalog";
+  if (base === "inventory locations (stock.location)") return "location_map";
+  if (base === "quants (stock.quant)") return "quants_baseline";
+  return null;
+}
+
 async function detectAndRouteFile(file) {
   if (!file) return;
   var ext = file.name.toLowerCase().split(".").pop();
+  var fnType = odooFilenameType(file.name);
 
   if (ext === "json") {
     _universalDetectToast("Detected: Master Data JSON — loading…");
@@ -930,12 +944,32 @@ async function detectAndRouteFile(file) {
     try {
       var rawRows = await readWorkbookRawRows(file);
       var firstRow = (rawRows[0] || []).map(function(h) { return String(h || "").toLowerCase().trim(); });
-      var isProdCatalog = firstRow.some(function(h) {
+      var isProdCatalog = fnType === "prod_catalog" || firstRow.some(function(h) {
         return h === "vendor part #" || h === "nisc item #" || h === "default_code";
       });
+      var isQuantsBaseline = fnType === "quants_baseline" || firstRow.indexOf("product_id/id") !== -1;
+      var isOdooQuantSync = firstRow.indexOf("product_id/default_code") !== -1 && firstRow.indexOf("id") !== -1 &&
+        (firstRow.indexOf("quantity") !== -1 || firstRow.indexOf("on_hand_quantity") !== -1);
       if (isProdCatalog) {
         _universalDetectToast("Detected: Product Catalog — loading…");
         prodBulkUpload(file);
+      } else if (isQuantsBaseline || isOdooQuantSync) {
+        var csvText = rawRows.map(function(row) {
+          return row.map(function(cell) {
+            var s = String(cell == null ? "" : cell);
+            if (s.indexOf(",") !== -1 || s.indexOf('"') !== -1 || s.indexOf("\n") !== -1) {
+              s = '"' + s.replace(/"/g, '""') + '"';
+            }
+            return s;
+          }).join(",");
+        }).join("\n");
+        if (isQuantsBaseline) {
+          _universalDetectToast("Detected: Quants Baseline — loading…");
+          invProcessQuantsBaselineCsv(csvText, file.name);
+        } else {
+          _universalDetectToast("Detected: Odoo Inv. Adj. Sync — loading…");
+          invProcessOdooQuantCsv(csvText, file.name);
+        }
       } else {
         _universalDetectToast("Detected: Receiving Source File — loading…");
         await loadSourceFile(file);
@@ -966,12 +1000,12 @@ async function detectAndRouteFile(file) {
         invImportReelsCsv(file);
         return;
       }
-      if (has("product_id/id")) {
+      if (fnType === "quants_baseline" || has("product_id/id")) {
         _universalDetectToast("Detected: Quants Baseline — loading…");
         invImportQuantsBaseline(file);
         return;
       }
-      if (has("barcode") && has("name") && has("location_id") && !has("product_id", "product_id/default_code")) {
+      if (fnType === "location_map" || (has("barcode") && has("name") && has("location_id") && !has("product_id", "product_id/default_code"))) {
         _universalDetectToast("Detected: Location Map — loading…");
         invImportLocationMapCsv(file);
         return;
@@ -981,7 +1015,7 @@ async function detectAndRouteFile(file) {
         invImportOdooQuantsCsv(file);
         return;
       }
-      if (has("vendor part #") || has("nisc item #")) {
+      if (fnType === "prod_catalog" || has("vendor part #") || has("nisc item #")) {
         _universalDetectToast("Detected: Product Catalog — loading…");
         prodBulkUpload(file);
         return;
