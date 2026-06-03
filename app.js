@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.08";
+const APP_VERSION = "v2.01.09";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -606,11 +606,13 @@ function processRows(rows) {
     const customerPo = getField(row, ["Customer PO", "PO", "Customer P/O", "customer_po"]);
     const shipDate = getField(row, ["Actual Ship Date", "Ship Date", "ship_date"]);
     const sourceProduct = getField(row, ["Product", "Calix Product", "Calix Product Number", "calix_product"]);
+    const mappedNisc = getField(row, ["hctc"]);
     const calixDescription = getField(row, ["Description", "Product Description", "calix_description"]);
     const serial = sanitizeScannerValue(getField(row, ["Serial Number", "Serial", "Calix Serial Number", "serial"]), { uppercase: true });
     const fsan = sanitizeScannerValue(getField(row, ["FSAN", "fsan", "FSAN Number", "FSAN Serial", "name"]), { uppercase: true });
     const mac = sanitizeScannerValue(getField(row, ["MAC Address", "MAC", "mac", "MAC address"]), { uppercase: true });
-    const mapMatch = findProductMapMatch(sourceProduct);
+    let mapMatch = findProductMapMatch(sourceProduct);
+    if (!mapMatch && mappedNisc) mapMatch = findProductMapMatch(mappedNisc);
     const map = mapMatch?.entry || null;
     const calixProduct = resolveCalixProduct(sourceProduct, mapMatch);
     let status = "valid";
@@ -650,7 +652,7 @@ function processRows(rows) {
       ship_date: shipDate,
       calix_product: calixProduct,
       calix_description: calixDescription,
-      hctc: map?.hctc || sourceProduct || "",
+      hctc: map?.hctc || mappedNisc || sourceProduct || "",
       odoo_external_id: getMapExternalId(map),
       external_id: getMapExternalId(map),
       odoo_name: getMapDescription(map),
@@ -934,7 +936,7 @@ var _CSV_IMPORT_TYPES = [
       { key: "Serial Number",   label: "Serial Number",   required: false },
       { key: "FSAN",            label: "FSAN #",          required: false },
       { key: "Product",         label: "Vendor Model #",  required: false },
-      { key: "calix_product",   label: "NISC Item #",     required: false },
+      { key: "hctc",            label: "NISC Item #",     required: false },
       { key: "Sales Order Num", label: "Sales Order #",   required: false },
       { key: "Customer PO",     label: "PO #",            required: false },
       { key: "Actual Ship Date",label: "Ship Date",       required: false }
