@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.04";
+const APP_VERSION = "v2.01.05";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4645,13 +4645,12 @@ function exportInvSummaryXlsx() {
 // ===================================================================
 
 function buildOdooAdjustmentRows(events) {
-  var headers = ["id", "product_id/id", "product_id/default_code", "location_id/complete_name", "lot_id/name", "inventory_quantity"];
+  var headers = ["product_id/default_code", "location_id/complete_name", "lot_id/name", "inventory_quantity"];
   var rows = [];
 
   function pmFields(itemNumber) {
     var pm = findProductMapMatch(itemNumber || "");
     return {
-      extId:   (pm && pm.entry) ? (getMapExternalId(pm.entry) || "") : "",
       defCode: (pm && pm.entry && pm.entry.default_code) ? pm.entry.default_code : (itemNumber || "")
     };
   }
@@ -4666,8 +4665,7 @@ function buildOdooAdjustmentRows(events) {
     if (evt.eventType !== "serialized_device_scan") return;
     var f = pmFields(evt.itemNumber);
     var lotName = evt.serial || evt.fsan || evt.scannedValue || "";
-    var qid = invGetQuantId(f.defCode, evt.location || "", lotName);
-    rows.push([qid, f.extId, f.defCode, resolveLocation(evt.location), lotName, 1]);
+    rows.push([f.defCode, resolveLocation(evt.location), lotName, 1]);
   });
 
   // Bulk quantity counts and box scans — aggregate by item + location
@@ -4686,8 +4684,7 @@ function buildOdooAdjustmentRows(events) {
   });
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
-    var qid = invGetQuantId(r.defCode, r.loc, "");
-    rows.push([qid, r.extId, r.defCode, resolveLocation(r.loc), "", r.qty]);
+    rows.push([r.defCode, resolveLocation(r.loc), "", r.qty]);
   });
 
   // Cable reel counts — one row per reel (lot-tracked, footage as qty)
@@ -4696,15 +4693,14 @@ function buildOdooAdjustmentRows(events) {
     if (evt.eventType !== "cable_reel_count") return;
     var f3 = pmFields(evt.itemNumber);
     var lotName3 = evt.reelNumber || evt.scannedValue || "";
-    var qid3 = invGetQuantId(f3.defCode, evt.location || "", lotName3);
-    rows.push([qid3, f3.extId, f3.defCode, resolveLocation(evt.location), lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
+    rows.push([f3.defCode, resolveLocation(evt.location), lotName3, evt.totalAvailableFt != null ? evt.totalAvailableFt : 0]);
   });
 
   return { headers: headers, rows: rows };
 }
 
 function invWarnBlankLocations(rows) {
-  var blank = rows.filter(function(r) { return !r[3]; }).length;
+  var blank = rows.filter(function(r) { return !r[1]; }).length;
   if (blank) {
     alert(blank + " row" + (blank !== 1 ? "s" : "") + " ha" + (blank !== 1 ? "ve" : "s") + " no location.\n\nOdoo will reject these. Check that all items were scanned after setting a location, then re-export.");
   }
