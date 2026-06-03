@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.09";
+const APP_VERSION = "v2.01.10";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5773,7 +5773,16 @@ function prodToggleNotes() {
   if (body) body.classList.toggle("hidden");
 }
 
+var _prodRenderTimer = null;
+var PROD_ROW_LIMIT = 300;
+
+function prodDebouncedRender() {
+  clearTimeout(_prodRenderTimer);
+  _prodRenderTimer = setTimeout(prodRenderList, 250);
+}
+
 function prodRenderList() {
+  clearTimeout(_prodRenderTimer);
   var tbody = $("prodCatalogBody");
   var countEl = $("prodCatalogCount");
   if (!tbody) return;
@@ -5793,8 +5802,12 @@ function prodRenderList() {
     return true;
   });
 
+  var capped = filtered.length > PROD_ROW_LIMIT;
+  var toRender = capped ? filtered.slice(0, PROD_ROW_LIMIT) : filtered;
+
   if (countEl) countEl.textContent = allKeys.length + " product" + (allKeys.length !== 1 ? "s" : "") +
-    (filtered.length !== allKeys.length ? " (" + filtered.length + " shown)" : "");
+    (filtered.length !== allKeys.length ? " (" + filtered.length + " shown)" : "") +
+    (capped ? " — showing first " + PROD_ROW_LIMIT + ", refine search to see more" : "");
 
   if (!filtered.length) {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">' +
@@ -5804,7 +5817,7 @@ function prodRenderList() {
     return;
   }
 
-  tbody.innerHTML = filtered.map(function(key) {
+  tbody.innerHTML = toRender.map(function(key) {
     return '<tr data-prodkey="' + escapeHtml(key) + '">' + buildCatalogRowCells(key, PRODUCT_MAP[key] || {}) + "</tr>";
   }).join("");
   updateClearBtns();

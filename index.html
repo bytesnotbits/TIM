@@ -265,8 +265,7 @@
         <div id="prodUploadStatus" class="small" style="margin-top:8px;color:#475569;"></div>
         <div id="prodUploadSuccessBanner" style="margin-top:12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;display:none;align-items:center;gap:16px;flex-wrap:wrap;">
           <span style="font-weight:700;color:#166534;">&#10003; Products loaded into memory.</span>
-          <span class="small" style="color:#166534;">Export the master JSON to make changes permanent.</span>
-          <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
+          <span class="small" style="color:#166534;">Go to the Products tab to review and export the master JSON.</span>
         </div>
         <button id="clearProductCatalogBtn" class="zone-clear-btn" onclick="clearProductCatalog()" style="margin-top:8px;">Clear product catalog</button>
       </div>
@@ -950,7 +949,7 @@
     <div class="card">
       <h2>Product Catalog &nbsp;<span id="prodCatalogCount" class="small" style="font-weight:400;">0 products</span></h2>
       <div class="prod-search-row">
-        <input type="search" id="prodSearch" placeholder="Search by vendor part #, NISC item #, name, vendor…" oninput="prodRenderList()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <input type="search" id="prodSearch" placeholder="Search by vendor part #, NISC item #, name, vendor…" oninput="prodDebouncedRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
         <select id="prodFilterTracking" onchange="prodRenderList()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">
           <option value="">All tracking types</option>
           <option value="serial">Serial</option>
