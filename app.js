@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.02";
+const APP_VERSION = "v2.01.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
