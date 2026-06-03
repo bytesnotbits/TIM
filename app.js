@@ -5077,14 +5077,14 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   var varExtIdIdx   = colIdx("product_id/id");
   var locIdx        = colIdx("location_id");
   var lotIdx        = colIdx("lot_id");
-  var qtyIdx        = colIdx("quantity");
+  var qtyIdx        = colIdx("quantity", "inventory_quantity_auto_apply");
   var invQtyIdx     = colIdx("inventory_quantity");
   var dateIdx       = colIdx("accounting_date");
 
   if (idIdx === -1)   throw new Error("Column 'id' not found. Export Quants from Odoo: Inventory → Products → Quants.");
   if (prodIdx === -1) throw new Error("Column 'product_id' not found.");
   if (locIdx === -1)  throw new Error("Column 'location_id' not found.");
-  if (qtyIdx === -1)  throw new Error("Column 'quantity' not found.");
+  if (qtyIdx === -1)  throw new Error("Column 'quantity' or 'inventory_quantity_auto_apply' not found.");
 
   // Parse [itemNumber] description format from product_id
   function parseProductId(raw) {
