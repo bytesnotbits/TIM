@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.06";
+const APP_VERSION = "v2.01.07";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -901,6 +901,265 @@ function _universalDetectToast(msg, state) {
   el.className = state || "";
 }
 
+// ── CSV Column Mapper ────────────────────────────────────────────────────────
+
+function _parseCsvToRowObjects(text) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) return [];
+  var header = bcParseCsvRow(lines[0] || "");
+  var rows = [];
+  for (var i = 1; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var cells = bcParseCsvRow(line);
+    var row = {};
+    header.forEach(function(h, idx) { if (h) row[h] = cells[idx] || ""; });
+    rows.push(row);
+  }
+  return rows;
+}
+
+var _CSV_IMPORT_TYPES = [
+  {
+    id: "receiving",
+    label: "Receiving Source File",
+    desc: "Calix shipment / RMA — serials, FSANs, product model",
+    fields: [
+      { key: "FSAN",           label: "FSAN / ONT Serial #",     required: true  },
+      { key: "Serial Number",  label: "Calix Factory Serial",    required: false },
+      { key: "Product",        label: "Product / Model #",       required: false },
+      { key: "Sales Order Num",label: "Sales Order #",           required: false },
+      { key: "Customer PO",    label: "Customer PO / Item #",    required: false },
+      { key: "Actual Ship Date",label: "Ship Date",              required: false }
+    ],
+    run: function(text, name) {
+      var rows = _parseCsvToRowObjects(text);
+      if (!rows.length) throw new Error("No data rows found.");
+      processRows(rows);
+      setDropState("sourceDropZone", "sourceDropStatus", true,
+        "Loaded via column mapper: " + name + " (" + rows.length + " rows)");
+      updateSidebarStatus(2, rows.length);
+    }
+  },
+  {
+    id: "barcode_sync",
+    label: "Barcode Sync",
+    desc: "Map product codes to barcodes / serial numbers",
+    fields: [
+      { key: "default_code",              label: "Product Code / SKU",      required: true  },
+      { key: "template_multi_barcode_ids",label: "Barcode / Serial #",      required: true  },
+      { key: "id",                        label: "Odoo External ID",         required: false }
+    ],
+    run: function(text, name) { bcProcessOdooImport(text, name); }
+  },
+  {
+    id: "quants_baseline",
+    label: "Quants Baseline",
+    desc: "Odoo stock quants — inventory snapshot",
+    fields: [
+      { key: "id",           label: "Quant ID",           required: true  },
+      { key: "product_id",   label: "Product",            required: true  },
+      { key: "location_id",  label: "Location",           required: true  },
+      { key: "quantity",     label: "Quantity",           required: true  },
+      { key: "product_id/id",label: "Product Ext. ID",   required: false },
+      { key: "lot_id",       label: "Lot / Serial #",     required: false }
+    ],
+    run: function(text, name) { invProcessQuantsBaselineCsv(text, name); }
+  },
+  {
+    id: "location_map",
+    label: "Location Map",
+    desc: "Odoo warehouse locations with barcodes",
+    fields: [
+      { key: "name",          label: "Location Name",    required: true  },
+      { key: "barcode",       label: "Location Barcode", required: true  },
+      { key: "location_id",   label: "Parent Location",  required: false },
+      { key: "complete_name", label: "Full Path",        required: false }
+    ],
+    run: function(text, name) { invProcessLocationMapCsv(text, name); }
+  },
+  {
+    id: "inv_adj_sync",
+    label: "Inv. Adj. Sync",
+    desc: "Odoo inventory adjustments for quantity sync",
+    fields: [
+      { key: "id",                        label: "Quant ID",         required: true  },
+      { key: "product_id/default_code",   label: "Product Code / SKU", required: true },
+      { key: "quantity",                  label: "Quantity",         required: true  },
+      { key: "location_id/barcode",       label: "Location Barcode", required: false },
+      { key: "location_id/complete_name", label: "Location Name",    required: false },
+      { key: "lot_id/name",               label: "Lot / Serial #",   required: false }
+    ],
+    run: function(text, name) { invProcessOdooQuantCsv(text, name); }
+  },
+  {
+    id: "prod_catalog",
+    label: "Product Catalog",
+    desc: "Add or update products in TIM's catalog",
+    fields: [
+      { key: "default_code",  label: "NISC Item # / Internal Ref",    required: true  },
+      { key: "vendor part #", label: "Vendor Part #",                 required: false },
+      { key: "name",          label: "Product Name",                  required: false },
+      { key: "tracking",      label: "Tracking (lot / serial / none)",required: false }
+    ],
+    run: function(text, name) { prodBulkUpload(new File([text], name, { type: "text/csv" })); }
+  }
+];
+
+var _csvMapperFile  = null;
+var _csvMapperCols  = null;
+
+function _csvEsc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function _showCsvMapperModal(file, cols) {
+  _csvMapperFile = file;
+  _csvMapperCols = cols;
+  var modal = $("csvMapperModal");
+  if (!modal) return;
+
+  var pillsHtml = cols.map(function(c) {
+    return '<span class="csv-col-pill">' + _csvEsc(c) + '</span>';
+  }).join(" ");
+
+  var typeCardsHtml = _CSV_IMPORT_TYPES.map(function(t) {
+    return '<label class="csv-type-card">' +
+      '<input type="radio" name="csvImportType" value="' + _csvEsc(t.id) + '">' +
+      '<span class="csv-type-label">' + _csvEsc(t.label) + '</span>' +
+      '<span class="csv-type-desc">' + _csvEsc(t.desc) + '</span>' +
+    '</label>';
+  }).join("");
+
+  modal.innerHTML =
+    '<div class="modal" style="max-width:680px;">' +
+      '<div class="modal-header">' +
+        '<div>' +
+          '<h2 style="margin:0;">Identify This CSV</h2>' +
+          '<div class="small">TIM couldn\'t auto-detect this file. Select the data type and map your columns.</div>' +
+        '</div>' +
+        '<button class="secondary" id="csvMapperCloseBtn">Close</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<p class="small" style="margin:0 0 10px;"><strong>Detected columns:</strong> ' + pillsHtml + '</p>' +
+        '<p class="small" style="margin:0 0 8px;font-weight:700;">Step 1 — What type of data is this?</p>' +
+        '<div class="csv-type-grid">' + typeCardsHtml + '</div>' +
+        '<div id="csvMapperFields" class="hidden" style="margin-top:16px;">' +
+          '<p class="small" style="margin:0 0 8px;font-weight:700;">Step 2 — Map your columns</p>' +
+          '<p class="small" style="margin:0 0 10px;color:#64748b;">For each TIM field, choose the matching column from your file. Required fields (<span style="color:#ef4444;">*</span>) must be mapped.</p>' +
+          '<table class="csv-map-table" id="csvMapTable"></table>' +
+          '<div style="margin-top:16px;display:flex;align-items:center;gap:12px;">' +
+            '<button id="csvMapperImportBtn">Import</button>' +
+            '<span id="csvMapperErr" class="small" style="color:#ef4444;"></span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  modal.querySelector("#csvMapperCloseBtn").addEventListener("click", function() {
+    modal.classList.add("hidden");
+  });
+  modal.addEventListener("click", function(e) {
+    if (e.target === modal) modal.classList.add("hidden");
+  });
+  modal.querySelectorAll('input[name="csvImportType"]').forEach(function(r) {
+    r.addEventListener("change", function() { _csvMapperBuildFields(cols, this.value); });
+  });
+  modal.querySelector("#csvMapperImportBtn").addEventListener("click", _csvMapperDoImport);
+
+  modal.classList.remove("hidden");
+}
+
+function _csvMapperBuildFields(cols, typeId) {
+  var type = _CSV_IMPORT_TYPES.find(function(t) { return t.id === typeId; });
+  if (!type) return;
+
+  var rows = type.fields.map(function(f) {
+    var autoVal = cols.find(function(c) { return c.toLowerCase() === f.key.toLowerCase(); }) || "";
+    var options = (f.required
+      ? '<option value="">— select a column —</option>'
+      : '<option value="">(skip)</option>'
+    ) + cols.map(function(c) {
+      var sel = (c.toLowerCase() === autoVal.toLowerCase() && autoVal) ? ' selected' : '';
+      return '<option value="' + _csvEsc(c) + '"' + sel + '>' + _csvEsc(c) + '</option>';
+    }).join("");
+
+    return '<tr>' +
+      '<td style="padding:6px 16px 6px 0;font-size:13px;font-weight:700;white-space:nowrap;vertical-align:middle;">' +
+        (f.required ? '<span style="color:#ef4444;">* </span>' : '') +
+        _csvEsc(f.label) +
+        '<div style="font-size:11px;font-weight:400;color:#94a3b8;font-family:monospace;">' + _csvEsc(f.key) + '</div>' +
+      '</td>' +
+      '<td style="padding:6px 0;vertical-align:middle;">' +
+        '<select data-field-key="' + _csvEsc(f.key) + '" data-required="' + f.required + '" ' +
+          'style="width:100%;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">' +
+          options +
+        '</select>' +
+      '</td>' +
+    '</tr>';
+  }).join("");
+
+  var table = $("csvMapTable");
+  if (table) table.innerHTML = '<colgroup><col style="width:260px"><col></colgroup>' + rows;
+  var fieldsDiv = $("csvMapperFields");
+  if (fieldsDiv) fieldsDiv.classList.remove("hidden");
+}
+
+function _csvMapperDoImport() {
+  var modal = $("csvMapperModal");
+  var errEl = $("csvMapperErr");
+  if (errEl) errEl.textContent = "";
+
+  var typeRadio = modal.querySelector('input[name="csvImportType"]:checked');
+  if (!typeRadio) { if (errEl) errEl.textContent = "Select a data type first."; return; }
+  var type = _CSV_IMPORT_TYPES.find(function(t) { return t.id === typeRadio.value; });
+  if (!type) return;
+
+  var mapping = {}, missing = [];
+  modal.querySelectorAll('[data-field-key]').forEach(function(sel) {
+    var fieldKey   = sel.getAttribute("data-field-key");
+    var isRequired = sel.getAttribute("data-required") === "true";
+    var csvCol     = sel.value;
+    if (!csvCol) { if (isRequired) missing.push(fieldKey); return; }
+    mapping[csvCol.toLowerCase()] = fieldKey;
+  });
+
+  if (missing.length) {
+    if (errEl) errEl.textContent = "Required fields not mapped: " + missing.join(", ");
+    return;
+  }
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var rewritten = _remapCsvHeaders(e.target.result, mapping);
+      modal.classList.add("hidden");
+      _universalDetectToast("Column-mapped import: " + type.label + " — loading…");
+      type.run(rewritten, _csvMapperFile.name);
+    } catch(err) {
+      if (errEl) errEl.textContent = "Error: " + err.message;
+    }
+  };
+  reader.readAsText(_csvMapperFile);
+}
+
+function _remapCsvHeaders(text, mapping) {
+  var useCrlf = text.indexOf("\r\n") !== -1;
+  var lines   = text.split(/\r?\n/);
+  if (!lines.length) return text;
+  var header    = bcParseCsvRow(lines[0]);
+  var newHeader = header.map(function(h) {
+    var lower = h.trim().toLowerCase();
+    return mapping.hasOwnProperty(lower) ? mapping[lower] : h;
+  });
+  lines[0] = newHeader.map(function(h) {
+    return /[,"\r\n]/.test(h) ? '"' + h.replace(/"/g, '""') + '"' : h;
+  }).join(",");
+  return lines.join(useCrlf ? "\r\n" : "\n");
+}
+
+// ── End CSV Column Mapper ────────────────────────────────────────────────────
+
 async function _readCsvHeaders(file) {
   return new Promise(function(resolve, reject) {
     var slice = file.slice(0, 4096);
@@ -1021,9 +1280,8 @@ async function detectAndRouteFile(file) {
         return;
       }
 
-      _universalDetectToast("Unrecognized file — check columns.", "err");
-      alert("TIM couldn’t identify this CSV.\n\nDetected columns: " + cols.slice(0, 8).join(", ") + (cols.length > 8 ? "…" : "") +
-        "\n\nExpected one of:\n• template_multi_barcode_ids — Barcode Sync\n• product_id/id — Quants Baseline\n• location_id + name + barcode — Location Map\n• product_id/default_code + id — Inv. Adj. Sync\n• Vendor Part # or NISC Item # — Product Catalog\n• SKU + Reels No — Cable Reel CSV");
+      _universalDetectToast("Unrecognized CSV — select type to import.", "err");
+      _showCsvMapperModal(file, cols);
     } catch(err) {
       _universalDetectToast("Error reading file.", "err");
       alert("Could not read file: " + err.message);

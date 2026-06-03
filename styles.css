@@ -491,6 +491,18 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .split-btn-wrap .split-caret:disabled { opacity:.45; cursor:not-allowed; }
 .split-btn-wrap .dropdown-menu { left:auto; right:0; min-width:160px; }
 
+/* === CSV Column Mapper === */
+.csv-col-pill { display:inline-block; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:5px; padding:2px 7px; font-size:12px; font-family:monospace; margin:2px 2px 2px 0; color:#334155; }
+.csv-type-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; margin-bottom:4px; }
+.csv-type-card { display:flex; flex-direction:column; gap:3px; border:1.5px solid #e2e8f0; border-radius:10px; padding:10px 12px; cursor:pointer; transition:border-color .15s,background .15s; }
+.csv-type-card:hover { border-color:#94a3b8; background:#f8fafc; }
+.csv-type-card:has(input:checked) { border-color:#2563eb; background:#eff6ff; }
+.csv-type-card input[type=radio] { position:absolute; opacity:0; pointer-events:none; }
+.csv-type-label { font-size:13px; font-weight:700; color:#1e293b; }
+.csv-type-desc { font-size:11px; color:#64748b; }
+.csv-map-table { width:100%; border-collapse:collapse; }
+.csv-map-table td { vertical-align:middle; }
+
 /* === Inline Reel Entry Panel === */
 .inv-reel-entry-panel { background:#f0fdf4; border:2px solid #86efac; border-radius:10px; padding:12px 14px; margin-top:10px; }
 .inv-reel-entry-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }

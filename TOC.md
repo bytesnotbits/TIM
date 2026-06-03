@@ -131,6 +131,21 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ---
 
+### CSV Column Mapper
+
+> Shown automatically when TIM can't auto-detect a dropped CSV. Lets the user identify the data type and map their columns to TIM's expected field names before routing to the normal import handler.
+
+| Function / Variable | Line | Purpose |
+|---------------------|------|---------|
+| `_CSV_IMPORT_TYPES` | 922 | Array of import type definitions (id, label, fields, run) — one entry per supported import |
+| `_parseCsvToRowObjects(text)` | 906 | Parse CSV text into array of `{ header: value }` row objects |
+| `_showCsvMapperModal(file, cols)` | 1016 | Open the mapper modal; renders type cards + detected column pills |
+| `_csvMapperBuildFields(cols, typeId)` | 1073 | Populate Step 2 mapping table for selected import type; auto-matches on name |
+| `_csvMapperDoImport()` | 1108 | Validate mapping, rewrite headers, call the type's `run()` handler |
+| `_remapCsvHeaders(text, mapping)` | 1146 | Rewrite CSV header row using `{ csvColLower → fieldKey }` mapping |
+
+---
+
 ### Data Loading (Master JSON + Source File)
 
 | Function | Line | Purpose |
