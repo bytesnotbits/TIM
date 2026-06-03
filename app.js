@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.05";
+const APP_VERSION = "v2.01.06";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4713,6 +4713,7 @@ function exportInvOdooAdjustmentXlsx() {
   invWarnBlankLocations(result.rows);
   var wb = invMakeXlsx(result.headers, result.rows, "Inventory Adjustment");
   XLSX.writeFile(wb, "odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  invShowOdooImportReminder(result.rows.length);
 }
 
 function exportInvOdooAdjustmentCsv() {
@@ -4724,6 +4725,37 @@ function exportInvOdooAdjustmentCsv() {
     result.rows.map(function(r) { return r.map(csvEscape).join(","); })
   );
   downloadText("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".csv", lines.join("\r\n"), "text/csv");
+  invShowOdooImportReminder(result.rows.length);
+}
+
+function invShowOdooImportReminder(rowCount) {
+  var existing = $("invOdooImportReminderModal");
+  if (existing) existing.remove();
+  var modal = document.createElement("div");
+  modal.id = "invOdooImportReminderModal";
+  modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;";
+  modal.innerHTML =
+    '<div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:460px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.22);">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">' +
+        '<span style="font-size:28px;">📋</span>' +
+        '<h3 style="margin:0;font-size:17px;font-weight:700;color:#1e293b;">Odoo Import Checklist</h3>' +
+      '</div>' +
+      '<p style="margin:0 0 6px;font-size:13px;color:#475569;"><strong>' + rowCount + ' row' + (rowCount !== 1 ? 's' : '') + '</strong> exported. Follow these steps in Odoo:</p>' +
+      '<ol style="margin:10px 0 18px;padding-left:20px;font-size:13px;color:#1e293b;line-height:2;">' +
+        '<li>Inventory → Operations → <strong>Inventory Adjustments</strong></li>' +
+        '<li>Click <strong>Import</strong> and upload this file</li>' +
+        '<li>Verify the rows look correct</li>' +
+        '<li style="color:#dc2626;font-weight:700;">Click <strong>Apply All</strong> — do NOT navigate away first</li>' +
+        '<li>Confirm the adjustment dialog</li>' +
+      '</ol>' +
+      '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:20px;font-size:12px;color:#991b1b;">' +
+        '⚠️ <strong>Do not import twice.</strong> Navigating away before clicking Apply All and re-importing will double your counted quantities.' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'invOdooImportReminderModal\').remove();" ' +
+        'style="width:100%;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Got it</button>' +
+    '</div>';
+  document.body.appendChild(modal);
+  modal.addEventListener("click", function(e) { if (e.target === modal) modal.remove(); });
 }
 
 // ===================================================================
