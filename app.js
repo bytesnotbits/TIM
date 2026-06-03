@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.07";
+const APP_VERSION = "v2.01.08";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -923,18 +923,30 @@ var _CSV_IMPORT_TYPES = [
   {
     id: "receiving",
     label: "Receiving Source File",
-    desc: "Calix shipment / RMA — serials, FSANs, product model",
+    desc: "Vendor shipment / RMA — serials, FSANs, product model",
+    validate: function(mapping) {
+      var hasSn   = Object.values(mapping).indexOf("Serial Number") !== -1;
+      var hasFsan = Object.values(mapping).indexOf("FSAN") !== -1;
+      if (!hasSn && !hasFsan) return "Map at least one of Serial Number or FSAN # before importing.";
+      return null;
+    },
     fields: [
-      { key: "FSAN",           label: "FSAN / ONT Serial #",     required: true  },
-      { key: "Serial Number",  label: "Calix Factory Serial",    required: false },
-      { key: "Product",        label: "Product / Model #",       required: false },
-      { key: "Sales Order Num",label: "Sales Order #",           required: false },
-      { key: "Customer PO",    label: "Customer PO / Item #",    required: false },
-      { key: "Actual Ship Date",label: "Ship Date",              required: false }
+      { key: "Serial Number",   label: "Serial Number",   required: false },
+      { key: "FSAN",            label: "FSAN #",          required: false },
+      { key: "Product",         label: "Vendor Model #",  required: false },
+      { key: "calix_product",   label: "NISC Item #",     required: false },
+      { key: "Sales Order Num", label: "Sales Order #",   required: false },
+      { key: "Customer PO",     label: "PO #",            required: false },
+      { key: "Actual Ship Date",label: "Ship Date",       required: false }
     ],
     run: function(text, name) {
       var rows = _parseCsvToRowObjects(text);
       if (!rows.length) throw new Error("No data rows found.");
+      // Cross-populate Serial Number ↔ FSAN so either alone is sufficient
+      rows.forEach(function(row) {
+        if (row["FSAN"] && !row["Serial Number"]) row["Serial Number"] = row["FSAN"];
+        if (row["Serial Number"] && !row["FSAN"])  row["FSAN"]          = row["Serial Number"];
+      });
       processRows(rows);
       setDropState("sourceDropZone", "sourceDropStatus", true,
         "Loaded via column mapper: " + name + " (" + rows.length + " rows)");
@@ -1006,8 +1018,9 @@ var _CSV_IMPORT_TYPES = [
   }
 ];
 
-var _csvMapperFile  = null;
-var _csvMapperCols  = null;
+var _csvMapperFile       = null;
+var _csvMapperCols       = null;
+var _csvMapperSampleData = {}; // { colNameLower: ["val1", "val2", ...] }
 
 function _csvEsc(s) {
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -1016,6 +1029,33 @@ function _csvEsc(s) {
 function _showCsvMapperModal(file, cols) {
   _csvMapperFile = file;
   _csvMapperCols = cols;
+  _csvMapperSampleData = {};
+
+  // Read first ~8 KB to build per-column sample values (fire-and-forget)
+  var sampleReader = new FileReader();
+  sampleReader.onload = function(e) {
+    var lines = (e.target.result || "").split(/\r?\n/);
+    if (lines.length < 2) return;
+    var hdr = bcParseCsvRow(lines[0] || "");
+    for (var ci = 0; ci < hdr.length; ci++) {
+      var key = hdr[ci].trim().toLowerCase();
+      var vals = [];
+      for (var ri = 1; ri < lines.length && vals.length < 10; ri++) {
+        if (!lines[ri].trim()) continue;
+        var cells = bcParseCsvRow(lines[ri]);
+        var v = (cells[ci] || "").trim();
+        if (v) vals.push(v);
+      }
+      _csvMapperSampleData[key] = vals;
+    }
+    // Refresh any preview areas already visible
+    var modal = $("csvMapperModal");
+    if (modal) modal.querySelectorAll("select[data-field-key]").forEach(function(sel) {
+      _csvMapperUpdatePreview(sel);
+    });
+  };
+  sampleReader.readAsText(file.slice(0, 8192));
+
   var modal = $("csvMapperModal");
   if (!modal) return;
 
@@ -1070,6 +1110,17 @@ function _showCsvMapperModal(file, cols) {
   modal.classList.remove("hidden");
 }
 
+function _csvMapperUpdatePreview(sel) {
+  var previewEl = sel.parentNode.querySelector(".csv-field-preview");
+  if (!previewEl) return;
+  var colLower = (sel.value || "").toLowerCase();
+  var samples  = colLower ? (_csvMapperSampleData[colLower] || []) : [];
+  if (!samples.length) { previewEl.innerHTML = ""; return; }
+  previewEl.innerHTML = samples.map(function(v) {
+    return '<span class="csv-sample-val">' + _csvEsc(v) + '</span>';
+  }).join("") + (samples.length === 10 ? '<span class="csv-sample-more">…</span>' : '');
+}
+
 function _csvMapperBuildFields(cols, typeId) {
   var type = _CSV_IMPORT_TYPES.find(function(t) { return t.id === typeId; });
   if (!type) return;
@@ -1095,12 +1146,19 @@ function _csvMapperBuildFields(cols, typeId) {
           'style="width:100%;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">' +
           options +
         '</select>' +
+        '<div class="csv-field-preview"></div>' +
       '</td>' +
     '</tr>';
   }).join("");
 
   var table = $("csvMapTable");
-  if (table) table.innerHTML = '<colgroup><col style="width:260px"><col></colgroup>' + rows;
+  if (table) {
+    table.innerHTML = '<colgroup><col style="width:260px"><col></colgroup>' + rows;
+    table.querySelectorAll("select[data-field-key]").forEach(function(sel) {
+      sel.addEventListener("change", function() { _csvMapperUpdatePreview(sel); });
+      _csvMapperUpdatePreview(sel); // populate immediately for auto-matched columns
+    });
+  }
   var fieldsDiv = $("csvMapperFields");
   if (fieldsDiv) fieldsDiv.classList.remove("hidden");
 }
@@ -1127,6 +1185,11 @@ function _csvMapperDoImport() {
   if (missing.length) {
     if (errEl) errEl.textContent = "Required fields not mapped: " + missing.join(", ");
     return;
+  }
+
+  if (type.validate) {
+    var vErr = type.validate(mapping);
+    if (vErr) { if (errEl) errEl.textContent = vErr; return; }
   }
 
   var reader = new FileReader();
