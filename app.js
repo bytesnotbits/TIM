@@ -8474,3 +8474,281 @@ function invConfirmCsvImport() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// HISTORY MANAGER  —  full CRUD for history.records[]
+// ═══════════════════════════════════════════════════════════════════════
+
+var _histMgrFiltered  = [];   // indices into history.records for current filter
+var _histMgrSelected  = new Set();
+var _histMgrEditIdx   = null; // null = new record, number = existing index
+
+var _HIST_DISPLAY_COLS = ["imported_at","serial","fsan","calix_product","hctc","sale_order","customer_po","status"];
+var _HIST_COL_LABELS   = {
+  imported_at: "Date", serial: "Serial", fsan: "FSAN",
+  calix_product: "Product", hctc: "NISC #",
+  sale_order: "Sale Order", customer_po: "PO", status: "Status"
+};
+
+var _HIST_EDIT_FIELDS = [
+  { key: "serial",           label: "Serial Number",    type: "text",   half: true  },
+  { key: "fsan",             label: "FSAN",             type: "text",   half: true  },
+  { key: "calix_product",    label: "Calix Product",    type: "text",   half: true  },
+  { key: "hctc",             label: "NISC Item #",      type: "text",   half: true  },
+  { key: "sale_order",       label: "Sale Order",       type: "text",   half: true  },
+  { key: "customer_po",      label: "Customer PO",      type: "text",   half: true  },
+  { key: "vendor",           label: "Vendor",           type: "text",   half: true  },
+  { key: "ship_date",        label: "Ship Date",        type: "text",   half: true  },
+  { key: "mac_address",      label: "MAC Address",      type: "text",   half: true  },
+  { key: "rma_number",       label: "RMA #",            type: "text",   half: true  },
+  { key: "source_type",      label: "Source Type",      type: "select", half: true,
+    options: ["receiving","rma","blind","manual",""] },
+  { key: "status",           label: "Status",           type: "select", half: true,
+    options: ["valid","history_only","dni","merge_candidate","blocked",""] },
+  { key: "odoo_external_id", label: "Odoo External ID", type: "text",   half: false },
+  { key: "imported_at",      label: "Imported At (ISO)", type: "text",  half: false }
+];
+
+function histMgrOpen() {
+  var modal = $("histMgrModal");
+  if (!modal) return;
+  _histMgrSelected.clear();
+  var search = $("histMgrSearch"); if (search) search.value = "";
+  var fs = $("histMgrFilterStatus"); if (fs) fs.value = "";
+  histMgrRender();
+  modal.classList.remove("hidden");
+}
+
+function histMgrClose() {
+  var modal = $("histMgrModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function histMgrRender() {
+  var records = history.records || [];
+  var searchQ = normKey(($("histMgrSearch") ? $("histMgrSearch").value : "") || "");
+  var filterStatus = $("histMgrFilterStatus") ? $("histMgrFilterStatus").value : "";
+
+  _histMgrFiltered = [];
+  records.forEach(function(r, i) {
+    if (filterStatus && (r.status || "") !== filterStatus) return;
+    if (searchQ) {
+      var hay = normKey([r.serial, r.fsan, r.calix_product, r.hctc,
+                         r.sale_order, r.customer_po, r.rma_number, r.vendor,
+                         r.mac_address, r.odoo_external_id].join(" "));
+      if (hay.indexOf(searchQ) === -1) return;
+    }
+    _histMgrFiltered.push(i);
+  });
+
+  // Drop selections no longer in view
+  var filteredSet = new Set(_histMgrFiltered);
+  _histMgrSelected.forEach(function(i) { if (!filteredSet.has(i)) _histMgrSelected.delete(i); });
+
+  var subtitle = $("histMgrSubtitle");
+  if (subtitle) subtitle.textContent = records.length + " total records";
+
+  var countEl = $("histMgrCount");
+  if (countEl) countEl.textContent = _histMgrFiltered.length + " of " + records.length + " shown";
+
+  // Header
+  var thead = $("histMgrThead");
+  if (thead) {
+    thead.innerHTML = "<tr>" +
+      '<th style="padding:8px;width:32px;"><input type="checkbox" id="histMgrChkAll" onchange="histMgrToggleAll(this.checked)"></th>' +
+      _HIST_DISPLAY_COLS.map(function(c) {
+        return '<th style="padding:8px;text-align:left;white-space:nowrap;font-size:12px;color:#475569;">' +
+          (_HIST_COL_LABELS[c] || c) + "</th>";
+      }).join("") +
+      '<th style="padding:8px;font-size:12px;color:#475569;">Actions</th>' +
+      "</tr>";
+  }
+
+  var tbody = $("histMgrTbody");
+  if (!tbody) return;
+
+  var CAP = 500;
+  var toShow = _histMgrFiltered.slice(0, CAP);
+
+  if (!toShow.length) {
+    tbody.innerHTML = '<tr><td colspan="' + (_HIST_DISPLAY_COLS.length + 2) +
+      '" style="text-align:center;color:#94a3b8;padding:24px;">' +
+      (records.length ? "No records match the current filters." : "No history records loaded.") +
+      "</td></tr>";
+    histMgrUpdateDeleteBtn();
+    return;
+  }
+
+  tbody.innerHTML = toShow.map(function(idx) {
+    var r = records[idx];
+    var checked = _histMgrSelected.has(idx) ? " checked" : "";
+    var dateFmt = "";
+    if (r.imported_at) {
+      try { dateFmt = new Date(r.imported_at).toLocaleDateString(); } catch(e) { dateFmt = r.imported_at.slice(0,10); }
+    }
+    var displayVals = _HIST_DISPLAY_COLS.map(function(c) {
+      var v = c === "imported_at" ? dateFmt : (r[c] || "");
+      return '<td style="padding:6px 8px;border-top:1px solid #f1f5f9;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' +
+        escapeHtml(r[c] || "") + '">' + escapeHtml(v) + "</td>";
+    }).join("");
+    return '<tr>' +
+      '<td style="padding:6px 8px;border-top:1px solid #f1f5f9;">' +
+        '<input type="checkbox" class="hist-mgr-chk" onchange="histMgrToggleOne(' + idx + ',this.checked)"' + checked + '>' +
+      '</td>' +
+      displayVals +
+      '<td style="padding:6px 8px;border-top:1px solid #f1f5f9;white-space:nowrap;">' +
+        '<button class="secondary" style="padding:3px 8px;font-size:12px;margin:0 4px 0 0;" onclick="histMgrEdit(' + idx + ')">Edit</button>' +
+        '<button class="secondary" style="padding:3px 8px;font-size:12px;margin:0;color:#ef4444;" onclick="histMgrDeleteOne(' + idx + ')">Del</button>' +
+      '</td>' +
+    '</tr>';
+  }).join("");
+
+  if (_histMgrFiltered.length > CAP) {
+    tbody.innerHTML += '<tr><td colspan="' + (_HIST_DISPLAY_COLS.length + 2) +
+      '" style="text-align:center;color:#94a3b8;padding:10px;font-size:12px;">Showing first ' +
+      CAP + ' of ' + _histMgrFiltered.length + ' — refine search to see more.</td></tr>';
+  }
+
+  histMgrUpdateDeleteBtn();
+  var chkAll = $("histMgrChkAll");
+  if (chkAll) chkAll.checked = _histMgrSelected.size === _histMgrFiltered.length && _histMgrFiltered.length > 0;
+}
+
+function histMgrToggleAll(checked) {
+  if (checked) _histMgrFiltered.forEach(function(i) { _histMgrSelected.add(i); });
+  else _histMgrSelected.clear();
+  histMgrRender();
+}
+
+function histMgrToggleOne(idx, checked) {
+  if (checked) _histMgrSelected.add(idx); else _histMgrSelected.delete(idx);
+  histMgrUpdateDeleteBtn();
+}
+
+function histMgrSelectAll() {
+  _histMgrFiltered.forEach(function(i) { _histMgrSelected.add(i); });
+  histMgrRender();
+}
+
+function histMgrUpdateDeleteBtn() {
+  var btn = $("histMgrDeleteBtn");
+  var countEl = $("histMgrSelCount");
+  if (!btn) return;
+  var n = _histMgrSelected.size;
+  btn.disabled = n === 0;
+  if (countEl) countEl.textContent = n;
+}
+
+function histMgrDeleteSelected() {
+  if (!_histMgrSelected.size) return;
+  if (!confirm("Permanently delete " + _histMgrSelected.size + " history record(s)? This cannot be undone.")) return;
+  var sorted = Array.from(_histMgrSelected).sort(function(a, b) { return b - a; });
+  sorted.forEach(function(i) { history.records.splice(i, 1); });
+  _histMgrSelected.clear();
+  timSaveMasterCache();
+  histMgrRender();
+}
+
+function histMgrDeleteOne(idx) {
+  var r = (history.records || [])[idx];
+  var label = r ? (r.serial || r.fsan || "this record") : "this record";
+  if (!confirm("Delete " + label + "?")) return;
+  history.records.splice(idx, 1);
+  _histMgrSelected.delete(idx);
+  timSaveMasterCache();
+  histMgrRender();
+}
+
+// ── Edit / Create ───────────────────────────────────────────────────
+
+function histMgrEdit(idx) {
+  _histMgrEditIdx = idx;
+  var r = (history.records || [])[idx] || {};
+  var title = $("histMgrEditTitle");
+  if (title) title.textContent = "Edit Record";
+  var sub = $("histMgrEditSubtitle");
+  if (sub) sub.textContent = "Serial: " + (r.serial || "(none)") + (r.fsan ? "  ·  FSAN: " + r.fsan : "");
+  _histMgrBuildForm(r);
+  $("histMgrEditModal").classList.remove("hidden");
+}
+
+function histMgrCreate() {
+  _histMgrEditIdx = null;
+  var title = $("histMgrEditTitle");
+  if (title) title.textContent = "New History Record";
+  var sub = $("histMgrEditSubtitle");
+  if (sub) sub.textContent = "Fill in the fields below. Serial, FSAN, or MAC is required.";
+  _histMgrBuildForm({});
+  $("histMgrEditModal").classList.remove("hidden");
+}
+
+function histMgrEditClose() {
+  $("histMgrEditModal").classList.add("hidden");
+}
+
+function _histMgrBuildForm(r) {
+  var form = $("histMgrEditForm");
+  if (!form) return;
+
+  var halfFields = _HIST_EDIT_FIELDS.filter(function(f) { return f.half; });
+  var fullFields = _HIST_EDIT_FIELDS.filter(function(f) { return !f.half; });
+
+  function buildInput(f) {
+    var val = normalize(r[f.key] || "");
+    if (f.type === "select") {
+      return '<select id="histEdit_' + f.key + '" style="width:100%;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">' +
+        f.options.map(function(o) {
+          return '<option value="' + escapeHtml(o) + '"' + (o === val ? ' selected' : '') + '>' + (o || '(none)') + '</option>';
+        }).join("") + '</select>';
+    }
+    var mono = (f.key === "odoo_external_id" || f.key === "imported_at") ? "font-family:monospace;font-size:12px;" : "";
+    return '<input type="text" id="histEdit_' + f.key + '" value="' + escapeHtml(val) + '" ' +
+      'style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;' + mono + '" />';
+  }
+
+  function buildLabel(f) {
+    return '<label style="display:block;font-size:13px;font-weight:700;color:#374151;">' +
+      f.label + '<div style="margin-top:4px;font-weight:400;">' + buildInput(f) + '</div></label>';
+  }
+
+  // Pair the half-width fields into rows of two
+  var halfRows = "";
+  for (var i = 0; i < halfFields.length; i += 2) {
+    var left  = buildLabel(halfFields[i]);
+    var right = i + 1 < halfFields.length ? buildLabel(halfFields[i + 1]) : "";
+    halfRows += '<div class="modal-grid two" style="margin-bottom:10px;">' + left + right + '</div>';
+  }
+
+  var fullRows = fullFields.map(function(f) {
+    return '<div style="margin-bottom:10px;">' + buildLabel(f) + '</div>';
+  }).join("");
+
+  form.innerHTML = halfRows + fullRows;
+}
+
+function histMgrEditSave() {
+  var records = history.records;
+  if (!Array.isArray(records)) { history.records = []; records = history.records; }
+
+  var isNew = _histMgrEditIdx === null;
+  var r = isNew ? {} : Object.assign({}, records[_histMgrEditIdx]);
+
+  _HIST_EDIT_FIELDS.forEach(function(f) {
+    var el = $("histEdit_" + f.key);
+    if (el) r[f.key] = el.value.trim();
+  });
+
+  if (!r.serial && !r.fsan && !r.mac_address) {
+    alert("A history record must have at least a Serial Number, FSAN, or MAC Address.");
+    return;
+  }
+
+  if (isNew && !r.imported_at) r.imported_at = new Date().toISOString();
+
+  if (isNew) records.push(r);
+  else records[_histMgrEditIdx] = r;
+
+  timSaveMasterCache();
+  histMgrEditClose();
+  histMgrRender();
+}
+

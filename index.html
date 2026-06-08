@@ -112,6 +112,7 @@
           <div class="sidebar-setup-title">Master Data</div>
           <p class="sidebar-p" id="sideStatus1Label">Not loaded — go to Data Import tab.</p>
           <button class="secondary" id="exportHistoryBtn" style="margin-top:4px;width:100%;">Export History JSON</button>
+          <button class="secondary" style="margin-top:4px;width:100%;" onclick="histMgrOpen()">History Manager</button>
           <span id="historyStatus"></span>
         </div>
       </div>
@@ -1449,5 +1450,66 @@
     navigator.serviceWorker.register('./sw.js');
   }
 </script>
+
+  <!-- History Manager Modal -->
+  <div id="histMgrModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:1150px;width:95vw;max-height:90vh;display:flex;flex-direction:column;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">History Manager</h2>
+          <p id="histMgrSubtitle" class="small" style="margin:4px 0 0;color:#64748b;"></p>
+        </div>
+        <button onclick="histMgrClose()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div style="padding:0 18px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="search" id="histMgrSearch" placeholder="Search serial, FSAN, product, sale order, PO, vendor…" oninput="histMgrRender()" style="flex:1;min-width:200px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <select id="histMgrFilterStatus" onchange="histMgrRender()" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">
+          <option value="">All statuses</option>
+          <option value="valid">Valid</option>
+          <option value="history_only">History Only</option>
+          <option value="dni">DNI</option>
+          <option value="merge_candidate">Merge Candidate</option>
+          <option value="blocked">Blocked</option>
+        </select>
+      </div>
+      <div style="padding:0 18px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button onclick="histMgrCreate()" style="margin:0;">+ New Record</button>
+        <button class="secondary" onclick="histMgrSelectAll()" style="margin:0;">Select All</button>
+        <button class="secondary" id="histMgrDeleteBtn" onclick="histMgrDeleteSelected()" style="margin:0;color:#ef4444;" disabled>Delete Selected (<span id="histMgrSelCount">0</span>)</button>
+        <span class="small" style="color:#64748b;margin-left:auto;" id="histMgrCount"></span>
+      </div>
+      <div style="flex:1;overflow:auto;margin:0 18px;border:1px solid #e2e8f0;border-radius:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead id="histMgrThead" style="position:sticky;top:0;background:#f8fafc;z-index:1;"></thead>
+          <tbody id="histMgrTbody"></tbody>
+        </table>
+      </div>
+      <div style="padding:14px 18px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #e5e7eb;margin-top:12px;">
+        <button onclick="histMgrClose()" class="secondary" style="margin:0;">Close</button>
+        <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Record Edit / Create Modal -->
+  <div id="histMgrEditModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:620px;width:95vw;">
+      <div class="modal-header">
+        <div>
+          <h2 id="histMgrEditTitle" style="margin:0;font-size:18px;">Edit Record</h2>
+          <p id="histMgrEditSubtitle" class="small" style="margin:4px 0 0;color:#64748b;"></p>
+        </div>
+        <button onclick="histMgrEditClose()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+        <div id="histMgrEditForm"></div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="histMgrEditClose()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="histMgrEditSave()" style="margin:0;">Save Record</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
