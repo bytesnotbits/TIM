@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.10";
+const APP_VERSION = "v2.01.12";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1201,6 +1201,7 @@ function _csvMapperDoImport() {
       modal.classList.add("hidden");
       _universalDetectToast("Column-mapped import: " + type.label + " — loading…");
       type.run(rewritten, _csvMapperFile.name);
+      _universalDetectToast("Loaded: " + _csvMapperFile.name + " (" + type.label + ")", "ok");
     } catch(err) {
       if (errEl) errEl.textContent = "Error: " + err.message;
     }
@@ -1313,35 +1314,45 @@ async function detectAndRouteFile(file) {
         var names = Array.prototype.slice.call(arguments);
         return names.some(function(n) { return cols.indexOf(n) !== -1; });
       }
+      // Completion callback so the universal toast resolves instead of sticking on "loading…".
+      // review=true means the handler hands off to its own confirmation modal (not a finished import).
+      function done(label, review) {
+        return function(err) {
+          if (err) { _universalDetectToast("Error: " + err.message, "err"); return; }
+          _universalDetectToast(review
+            ? "Parsed: " + label + " — review & confirm to finish"
+            : "Loaded: " + file.name + " (" + label + ")", "ok");
+        };
+      }
 
       if (has("template_multi_barcode_ids")) {
         _universalDetectToast("Detected: Odoo Barcode Sync — loading…");
-        bcImportOdooCsv(file);
+        bcImportOdooCsv(file, done("Odoo Barcode Sync", false));
         return;
       }
       if (has("sku") && has("reels no")) {
         _universalDetectToast("Detected: Cable Reel CSV — loading…");
-        invImportReelsCsv(file);
+        invImportReelsCsv(file, done("Cable Reel CSV", true));
         return;
       }
       if (fnType === "quants_baseline" || has("product_id/id")) {
         _universalDetectToast("Detected: Quants Baseline — loading…");
-        invImportQuantsBaseline(file);
+        invImportQuantsBaseline(file, done("Quants Baseline", false));
         return;
       }
       if (fnType === "location_map" || (has("barcode") && has("name") && has("location_id") && !has("product_id", "product_id/default_code"))) {
         _universalDetectToast("Detected: Location Map — loading…");
-        invImportLocationMapCsv(file);
+        invImportLocationMapCsv(file, done("Location Map", false));
         return;
       }
       if (has("product_id/default_code") && has("id") && has("quantity", "on_hand_quantity")) {
         _universalDetectToast("Detected: Odoo Inv. Adj. Sync — loading…");
-        invImportOdooQuantsCsv(file);
+        invImportOdooQuantsCsv(file, done("Odoo Inv. Adj. Sync", false));
         return;
       }
       if (fnType === "prod_catalog" || has("vendor part #") || has("nisc item #")) {
         _universalDetectToast("Detected: Product Catalog — loading…");
-        prodBulkUpload(file);
+        prodBulkUpload(file, done("Product Catalog", true));
         return;
       }
 
@@ -5146,12 +5157,12 @@ function invClearOdooQuantMap() {
   invRenderQuantMapStatus();
 }
 
-function invImportOdooQuantsCsv(file) {
+function invImportOdooQuantsCsv(file, onDone) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    try { invProcessOdooQuantCsv(e.target.result, file.name); }
-    catch(err) { alert("Quant import failed: " + err.message); }
+    try { invProcessOdooQuantCsv(e.target.result, file.name); if (onDone) onDone(null); }
+    catch(err) { alert("Quant import failed: " + err.message); if (onDone) onDone(err); }
   };
   reader.readAsText(file);
 }
@@ -5285,12 +5296,12 @@ function invClearLocationMap() {
   invRenderLocationMapStatus();
 }
 
-function invImportLocationMapCsv(file) {
+function invImportLocationMapCsv(file, onDone) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    try { invProcessLocationMapCsv(e.target.result, file.name); }
-    catch(err) { alert("Location map import failed: " + err.message); }
+    try { invProcessLocationMapCsv(e.target.result, file.name); if (onDone) onDone(null); }
+    catch(err) { alert("Location map import failed: " + err.message); if (onDone) onDone(err); }
   };
   reader.readAsText(file);
 }
@@ -5398,12 +5409,12 @@ function invClearQuantsBaseline() {
   invRenderQuantsBaselineStatus();
 }
 
-function invImportQuantsBaseline(file) {
+function invImportQuantsBaseline(file, onDone) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    try { invProcessQuantsBaselineCsv(e.target.result, file.name); }
-    catch(err) { alert("Quants baseline import failed: " + err.message); }
+    try { invProcessQuantsBaselineCsv(e.target.result, file.name); if (onDone) onDone(null); }
+    catch(err) { alert("Quants baseline import failed: " + err.message); if (onDone) onDone(err); }
   };
   reader.readAsText(file);
 }
@@ -5839,7 +5850,7 @@ function prodDownloadTemplate() {
   downloadText("product-upload-template.csv", lines.join("\n"), "text/csv");
 }
 
-function prodBulkUpload(file) {
+function prodBulkUpload(file, onDone) {
   if (!file) return;
   var statusEl = $("prodUploadStatus");
   if (statusEl) statusEl.textContent = "Reading file…";
@@ -5949,10 +5960,12 @@ function prodBulkUpload(file) {
 
       if (statusEl) statusEl.textContent = "";
       prodShowUploadDiff(diff);
+      if (onDone) onDone(null);
     } catch(err) {
       if (statusEl) statusEl.textContent = "Error: " + err.message;
       alert("Could not parse product file: " + err.message);
       $("prodUploadFile").value = "";
+      if (onDone) onDone(err);
     }
   };
 
@@ -7768,12 +7781,12 @@ function bcExportAndSave() {
 
 // ── Odoo CSV import ──────────────────────────────────────────────────
 
-function bcImportOdooCsv(file) {
+function bcImportOdooCsv(file, onDone) {
   if (!file) return;
   var reader = new FileReader();
   reader.onload = function(e) {
-    try { bcProcessOdooImport(e.target.result, file.name); }
-    catch(err) { alert("Import failed: " + err.message); }
+    try { bcProcessOdooImport(e.target.result, file.name); if (onDone) onDone(null); }
+    catch(err) { alert("Import failed: " + err.message); if (onDone) onDone(err); }
   };
   reader.readAsText(file);
   // input removed from card; universal zone handles file selection
@@ -8200,7 +8213,7 @@ function prodCancelEdit() {
 
 var _csvImportPending = null;
 
-function invImportReelsCsv(inputEl) {
+function invImportReelsCsv(inputEl, onDone) {
   var file = (inputEl instanceof File) ? inputEl : inputEl.files[0];
   if (!file) return;
   if (!(inputEl instanceof File)) inputEl.value = "";
@@ -8213,8 +8226,10 @@ function invImportReelsCsv(inputEl) {
       var parsed = _analyzeReelCsvRows(rows);
       _csvImportPending = parsed;
       _showCsvImportModal(parsed);
+      if (onDone) onDone(null);
     } catch(err) {
       alert("Error parsing CSV: " + err.message);
+      if (onDone) onDone(err);
     }
   };
   reader.readAsText(file);
