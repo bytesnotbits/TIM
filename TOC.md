@@ -182,7 +182,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | Function / Variable | Purpose |
 |---------------------|---------|
 | `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` | TimDB keys — grep `const GH_CONFIG_KEY` |
-| `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad }` + PAT |
+| `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad, deviceLabel }` + PAT |
 | `ghConfigured()` | True when token + owner + repo are set |
 | `ghSetStatus(msg, state)` | Update sync status line on the Data Import card |
 | `ghHeaders(accept)` | Build auth headers for the GitHub API |
@@ -203,7 +203,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
 | `ghApiWrite(method, path, body)` | JSON-body fetch wrapper for POST/PATCH to api.github.com |
 | `_ghCheckWrite(res, what)` | Shared write-response check; maps 403/404→token perms, 409/422→branch conflict |
-| `ghPushToGitHub()` | **Main push**: build files → diff SHAs → confirm (warn on conflicts) → blobs → tree → commit → ref |
+| `ghPushToGitHub()` | **Main push**: build files → diff SHAs → confirm (warn on conflicts) → blobs → tree → commit → ref. Prompts for username if blank; commit message includes `deviceLabel` (set it to the token name for attribution) |
 
 ---
 

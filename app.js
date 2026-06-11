@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.03.00";
+const APP_VERSION = "v2.03.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2100,6 +2100,7 @@ function ghOpenConfig() {
   $("ghCfgOwner").value  = (ghConfig && ghConfig.owner)  || "";
   $("ghCfgRepo").value   = (ghConfig && ghConfig.repo)   || "";
   $("ghCfgBranch").value = (ghConfig && ghConfig.branch) || "main";
+  $("ghCfgDeviceLabel").value = (ghConfig && ghConfig.deviceLabel) || "";
   $("ghCfgToken").value  = "";
   $("ghCfgToken").placeholder = ghToken
     ? "Token saved (…" + ghToken.slice(-4) + ") — leave blank to keep"
@@ -2118,6 +2119,7 @@ function _ghReadConfigForm() {
     owner:  sanitizeScannerValue($("ghCfgOwner").value || "").trim(),
     repo:   sanitizeScannerValue($("ghCfgRepo").value || "").trim(),
     branch: sanitizeScannerValue($("ghCfgBranch").value || "").trim() || "main",
+    deviceLabel: sanitizeScannerValue($("ghCfgDeviceLabel").value || "").trim(),
     token:  ($("ghCfgToken").value || "").trim() || ghToken || "",
     autoLoad: $("ghCfgAutoLoad").checked
   };
@@ -2154,7 +2156,7 @@ function ghSaveConfig() {
   var f = _ghReadConfigForm();
   if (!f.owner || !f.repo) { alert("Owner and repo are required."); return; }
   if (!f.token) { alert("Paste a fine-grained personal access token (Contents: read access to the data repo)."); return; }
-  ghConfig = { owner: f.owner, repo: f.repo, branch: f.branch, autoLoad: f.autoLoad };
+  ghConfig = { owner: f.owner, repo: f.repo, branch: f.branch, autoLoad: f.autoLoad, deviceLabel: f.deviceLabel };
   ghToken = f.token;
   Promise.all([TimDB.set(GH_CONFIG_KEY, ghConfig), TimDB.set(GH_TOKEN_KEY, ghToken)]).then(function() {
     ghCloseConfig();
@@ -2372,6 +2374,11 @@ function ghPushToGitHub() {
     alert("Nothing to push — no master data is loaded on this device. Load your master JSON (or Sync) first.");
     return;
   }
+  if (!timGetUsername()) {
+    var who = prompt("Enter your name — it goes on the commit record:");
+    if (who && who.trim()) timSetUsername(who.trim());
+    else { alert("Push cancelled — a name is required for the commit record."); return; }
+  }
 
   ghSyncInFlight = true;
   var syncBtn = $("ghSyncNowBtn"), pushBtn = $("ghPushBtn");
@@ -2455,8 +2462,9 @@ function ghPushToGitHub() {
             }).then(function(res) { return _ghCheckWrite(res, "Building tree"); })
             .then(function(tree) {
               var user = timGetUsername() || "TIM user";
+              var label = (ghConfig.deviceLabel || "").trim();
               return ghApiWrite("POST", repoBase + "/git/commits", {
-                message: "TIM: " + user + " — data push (" + APP_VERSION + ")",
+                message: "TIM: " + user + (label ? " @ " + label : "") + " — data push (" + APP_VERSION + ")",
                 tree: tree.sha,
                 parents: [headSha],
                 author: {
