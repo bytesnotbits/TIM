@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.02.00";
+const APP_VERSION = "v2.03.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1621,7 +1621,8 @@ function saveBlindMapping() {
     tracking_type: serialTracked ? "serial" : "none",
     serial_tracked: serialTracked,
     requires_fsan: $("blindRequiresFsan").checked,
-    history_only: $("blindHistoryOnlyDefault").checked
+    history_only: $("blindHistoryOnlyDefault").checked,
+    updated_at: invNow()
   };
   appData.product_map = PRODUCT_MAP;
   $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
@@ -2175,11 +2176,14 @@ function ghClearConfig() {
 
 // -- Sync engine ----------------------------------------------------
 
-function ghListDataDir() {
+function ghListDataDir(allowMissing) {
   var path = "/repos/" + ghConfig.owner + "/" + ghConfig.repo + "/contents/" + GH_DATA_DIR +
              "?ref=" + encodeURIComponent(ghConfig.branch);
   return ghApi(path).then(function(res) {
-    if (res.status === 404) throw new Error("No '" + GH_DATA_DIR + "/' folder found in " + ghConfig.owner + "/" + ghConfig.repo + " — seed the repo first (Download Seed Files).");
+    if (res.status === 404) {
+      if (allowMissing) return [];
+      throw new Error("No '" + GH_DATA_DIR + "/' folder found in " + ghConfig.owner + "/" + ghConfig.repo + " — seed the repo first (Download Seed Files).");
+    }
     if (res.status === 401) throw new Error("Token rejected (401) — open Configure and re-enter it.");
     if (!res.ok) throw new Error("GitHub returned " + res.status + " listing the data folder.");
     return res.json();
@@ -2277,7 +2281,10 @@ function ghHistoryShardName(record) {
   return "history-" + (m ? m[1] : "legacy") + ".json";
 }
 
-function ghDownloadSeedFiles() {
+// Build the full sharded file set from current data: { fileName → JSON string }.
+// Trailing newline included — repo files end with one, so unchanged data
+// produces byte-identical content (and matching blob SHAs).
+function ghBuildDataFiles() {
   var payload = buildExportPayload();
   var files = {
     "product_map.json": payload.product_map,
@@ -2291,13 +2298,194 @@ function ghDownloadSeedFiles() {
     if (!files[name]) files[name] = [];
     files[name].push(r);
   });
+  var out = {};
+  Object.keys(files).forEach(function(name) {
+    out[name] = JSON.stringify(files[name], null, 2) + "\n";
+  });
+  return out;
+}
+
+function ghDownloadSeedFiles() {
+  var files = ghBuildDataFiles();
   var names = Object.keys(files);
   names.forEach(function(name, i) {
     setTimeout(function() {
-      downloadText(name, JSON.stringify(files[name], null, 2), "application/json");
+      downloadText(name, files[name], "application/json");
     }, i * 400);
   });
   ghSetStatus(names.length + " seed files downloading — commit them into the '" + GH_DATA_DIR + "/' folder of your private repo.", "info");
+}
+
+// -- Phase 2: write-back (push local data to the repo) --------------
+
+function _ghUtf8Bytes(str) { return new TextEncoder().encode(str); }
+
+function _ghB64FromBytes(bytes) {
+  var s = "";
+  for (var i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 0x8000, bytes.length)));
+  }
+  return btoa(s);
+}
+
+// Git blob SHA of a string: sha1("blob <byteLen>\0" + content).
+// Lets us detect unchanged files against the repo listing without fetching them.
+function ghBlobSha(content) {
+  var body = _ghUtf8Bytes(content);
+  var header = _ghUtf8Bytes("blob " + body.length + "\0");
+  var full = new Uint8Array(header.length + body.length);
+  full.set(header, 0);
+  full.set(body, header.length);
+  return crypto.subtle.digest("SHA-1", full).then(function(buf) {
+    return Array.from(new Uint8Array(buf)).map(function(b) {
+      return ("0" + b.toString(16)).slice(-2);
+    }).join("");
+  });
+}
+
+function ghApiWrite(method, path, body) {
+  var headers = ghHeaders();
+  headers["Content-Type"] = "application/json";
+  return fetch("https://api.github.com" + path, {
+    method: method,
+    headers: headers,
+    cache: "no-store",
+    body: JSON.stringify(body)
+  });
+}
+
+function _ghCheckWrite(res, what) {
+  if (res.ok) return res.json();
+  if (res.status === 403 || res.status === 404) {
+    throw new Error(what + " rejected (" + res.status + ") — the token likely has read-only access. Edit it on GitHub and set Contents to 'Read and write'.");
+  }
+  if (res.status === 409 || res.status === 422) {
+    throw new Error(what + " conflict (" + res.status + ") — the branch changed mid-push. Sync from GitHub, then push again.");
+  }
+  throw new Error(what + " failed (" + res.status + ").");
+}
+
+function ghPushToGitHub() {
+  if (ghSyncInFlight) return;
+  if (!ghConfigured()) { ghOpenConfig(); return; }
+  if (!Object.keys(PRODUCT_MAP).length && !(history.records || []).length) {
+    alert("Nothing to push — no master data is loaded on this device. Load your master JSON (or Sync) first.");
+    return;
+  }
+
+  ghSyncInFlight = true;
+  var syncBtn = $("ghSyncNowBtn"), pushBtn = $("ghPushBtn");
+  if (syncBtn) syncBtn.disabled = true;
+  if (pushBtn) pushBtn.disabled = true;
+  ghSetStatus("Preparing push…", "info");
+
+  var repoBase = "/repos/" + ghConfig.owner + "/" + ghConfig.repo;
+  var local = ghBuildDataFiles();
+  var names = Object.keys(local);
+  var lastPulled = {};
+  var changed = [];   // { name, path, content, localSha }
+  var conflicts = [];
+  var newShas = {};
+
+  TimDB.get(GH_SHAS_KEY).then(function(s) {
+    lastPulled = s || {};
+    return Promise.all(names.map(function(n) {
+      return ghBlobSha(local[n]).then(function(sha) { return { name: n, sha: sha }; });
+    }));
+  }).then(function(localShas) {
+    return ghListDataDir(true).then(function(listing) {
+      var remote = {};
+      (listing || []).forEach(function(f) {
+        if (f.type === "file") remote[f.name] = f;
+      });
+      localShas.forEach(function(ls) {
+        var path = GH_DATA_DIR + "/" + ls.name;
+        var r = remote[ls.name];
+        newShas[path] = ls.sha;
+        if (r && r.sha === ls.sha) return; // byte-identical — skip
+        changed.push({ name: ls.name, path: path, content: local[ls.name], localSha: ls.sha });
+        // Conflict: the repo copy moved since this device last pulled it
+        if (r && lastPulled[path] !== r.sha) conflicts.push(ls.name);
+      });
+      // Carry forward shas for remote files we don't manage locally
+      Object.keys(remote).forEach(function(n) {
+        var p = GH_DATA_DIR + "/" + n;
+        if (!(p in newShas)) newShas[p] = remote[n].sha;
+      });
+    });
+  }).then(function() {
+    if (!changed.length) {
+      ghSetStatus("Already up to date — nothing to push.", "ok");
+      TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+      throw { _ghDone: true };
+    }
+    var msg = "Push " + changed.length + " file(s) to " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch + "?\n\n" +
+      changed.map(function(c) { return "• " + c.name; }).join("\n");
+    if (conflicts.length) {
+      msg += "\n\n⚠ GitHub has versions of " + conflicts.join(", ") + " that this device never pulled. " +
+             "Pushing OVERWRITES them (the old versions stay recoverable in commit history).";
+    }
+    if (!confirm(msg)) {
+      ghSetStatus("Push cancelled.", "info");
+      throw { _ghDone: true };
+    }
+    ghSetStatus("Pushing " + changed.length + " file(s)…", "info");
+
+    // Git Data API: blobs → tree → commit → ref. One atomic commit for all
+    // files; the ref update fails cleanly if someone else pushed mid-flight.
+    return ghApi(repoBase + "/git/ref/heads/" + encodeURIComponent(ghConfig.branch))
+      .then(function(res) { return _ghCheckWrite(res, "Reading branch head"); })
+      .then(function(ref) {
+        var headSha = ref.object.sha;
+        return ghApi(repoBase + "/git/commits/" + headSha)
+          .then(function(res) { return _ghCheckWrite(res, "Reading head commit"); })
+          .then(function(commit) {
+            return Promise.all(changed.map(function(c) {
+              return ghApiWrite("POST", repoBase + "/git/blobs", {
+                content: _ghB64FromBytes(_ghUtf8Bytes(c.content)),
+                encoding: "base64"
+              }).then(function(res) { return _ghCheckWrite(res, "Uploading " + c.name); });
+            })).then(function(blobs) {
+              return ghApiWrite("POST", repoBase + "/git/trees", {
+                base_tree: commit.tree.sha,
+                tree: changed.map(function(c, i) {
+                  return { path: c.path, mode: "100644", type: "blob", sha: blobs[i].sha };
+                })
+              });
+            }).then(function(res) { return _ghCheckWrite(res, "Building tree"); })
+            .then(function(tree) {
+              var user = timGetUsername() || "TIM user";
+              return ghApiWrite("POST", repoBase + "/git/commits", {
+                message: "TIM: " + user + " — data push (" + APP_VERSION + ")",
+                tree: tree.sha,
+                parents: [headSha],
+                author: {
+                  name: user,
+                  email: user.toLowerCase().replace(/[^a-z0-9._-]/g, "_") + "@tim-pwa.local"
+                }
+              });
+            }).then(function(res) { return _ghCheckWrite(res, "Creating commit"); })
+            .then(function(newCommit) {
+              return ghApiWrite("PATCH", repoBase + "/git/refs/heads/" + encodeURIComponent(ghConfig.branch), {
+                sha: newCommit.sha
+              }).then(function(res) { return _ghCheckWrite(res, "Updating branch"); })
+              .then(function() { return newCommit.sha; });
+            });
+          });
+      });
+  }).then(function(commitSha) {
+    TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+    ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
+                " — commit " + commitSha.slice(0, 7) + ".", "ok");
+  }).catch(function(err) {
+    if (!err || !err._ghDone) {
+      ghSetStatus("Push failed: " + (err && err.message ? err.message : err), "err");
+    }
+  }).finally(function() {
+    ghSyncInFlight = false;
+    if (syncBtn) syncBtn.disabled = false;
+    if (pushBtn) pushBtn.disabled = false;
+  });
 }
 
 // ===================================================================
@@ -8356,8 +8544,9 @@ function prodShowUploadDiff(diff) {
 function prodApplyUpload() {
   if (!_prodPendingDiff) return;
   var diff = _prodPendingDiff;
-  diff.added.forEach(function(r)   { PRODUCT_MAP[r.key] = r.entry; });
-  diff.updated.forEach(function(r) { PRODUCT_MAP[r.key] = r.entry; });
+  var _uploadStamp = invNow();
+  diff.added.forEach(function(r)   { r.entry.updated_at = _uploadStamp; PRODUCT_MAP[r.key] = r.entry; });
+  diff.updated.forEach(function(r) { r.entry.updated_at = _uploadStamp; PRODUCT_MAP[r.key] = r.entry; });
   appData.product_map = PRODUCT_MAP;
   $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
   prodRenderList();
@@ -8441,7 +8630,8 @@ function prodSaveEdit() {
     odoo_external_id: externalId || null,
     external_id:      externalId || null,
     requires_fsan:    $("prodEditFsan").checked,
-    history_only:     $("prodEditHistOnly").checked
+    history_only:     $("prodEditHistOnly").checked,
+    updated_at:       invNow()
   });
   appData.product_map = PRODUCT_MAP;
 

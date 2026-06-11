@@ -177,7 +177,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ### GitHub Data Sync (`gh*`)
 
-> Phase 1 (read-only): pulls shared master data from a private GitHub repo's `data/` folder via the REST Contents API, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. Per-file blob SHAs are cached for the Phase 2 write-back. The service worker bypasses `api.github.com` so responses are never cached.
+> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit; unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing, and conflicts (repo changed since last pull) require explicit overwrite confirmation. The service worker bypasses `api.github.com` so responses are never cached.
 
 | Function / Variable | Purpose |
 |---------------------|---------|
@@ -192,12 +192,18 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghTestConnection()` | GET `/repos/{o}/{r}` with form values; report ok/401/404 |
 | `ghSaveConfig()` | Persist settings + token, then sync |
 | `ghClearConfig()` | Remove token/config/SHAs from this device |
-| `ghListDataDir()` | List `data/` folder contents (names + blob SHAs) |
+| `ghListDataDir(allowMissing)` | List `data/` folder contents (names + blob SHAs); `allowMissing` returns `[]` on 404 |
 | `ghFetchJsonFile(path)` | Fetch one file as raw JSON (`vnd.github.raw+json`) |
-| `ghSyncNow(silent)` | **Main sync**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs |
+| `ghSyncNow(silent)` | **Main pull**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs |
 | `ghInit()` | Startup hook: load settings, auto-sync if `autoLoad` |
 | `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
+| `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data (shared by seed + push) |
 | `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
+| `_ghUtf8Bytes(str)` / `_ghB64FromBytes(bytes)` | UTF-8 encode / chunked base64 encode |
+| `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
+| `ghApiWrite(method, path, body)` | JSON-body fetch wrapper for POST/PATCH to api.github.com |
+| `_ghCheckWrite(res, what)` | Shared write-response check; maps 403/404→token perms, 409/422→branch conflict |
+| `ghPushToGitHub()` | **Main push**: build files → diff SHAs → confirm (warn on conflicts) → blobs → tree → commit → ref |
 
 ---
 
