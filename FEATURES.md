@@ -42,6 +42,12 @@ Known feature targets (much-needed; a previous developer started but never finis
 - Candidates beyond that: scan-type auto-classification (`invClassifyScan`), exception
   handling during counts, recount chains with audit trail.
 
+**Status (June 2026): deferred, deliberately.** Odoo dev bandwidth is committed to
+higher-priority work. Plan: keep improving TIM as the operational tool, then port into
+Odoo **piece-by-piece** when bandwidth frees — each piece retired from TIM only after its
+Odoo equivalent proves out in the warehouse. When a piece is picked up, first step is
+extracting its spec from TIM (see below).
+
 Implications to keep in mind:
 - TIM stays the operational tool until Odoo-native features ship **and prove out in the
   warehouse** — don't halt TIM work on the promise of a port.
