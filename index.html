@@ -203,6 +203,25 @@
         </div>
       </div>
 
+      <!-- 1b. GitHub Data Sync -->
+      <div class="card import-card">
+        <div class="import-card-when">Multi-user · Shared master data from a private GitHub repo</div>
+        <h3 class="import-card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;color:#0f172a;"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11.04 11.04 0 015.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.26 5.67.41.36.78 1.06.78 2.14 0 1.54-.02 2.78-.02 3.16 0 .31.21.67.8.55C20.22 21.38 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+          GitHub Data Sync
+        </h3>
+        <p class="small">Pulls shared master data from a <strong>private GitHub repository</strong> so every device starts from the same catalog and history, with full commit history for recovery. Requires a <strong>fine-grained personal access token</strong> scoped to <em>only</em> the data repo with <em>Contents: read</em> permission — the token is stored only on this device. When configured, TIM syncs automatically on startup.</p>
+        <div class="import-card-fmt">Repo files: <code>data/product_map.json</code> · <code>data/history-&lt;year&gt;.json</code> · <code>data/quants.json</code> · <code>data/barcode_map.json</code> · <code>data/recounts.json</code> · <code>data/inventory.json</code></div>
+        <div id="ghSyncStatusBar" class="import-status-bar">
+          <span id="ghSyncStatus">Not configured — click Configure to connect.</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center;">
+          <button class="secondary" style="margin:0;" onclick="ghOpenConfig()">&#9881; Configure</button>
+          <button id="ghSyncNowBtn" class="secondary" style="margin:0;" onclick="ghSyncNow()">&#8635; Sync Now</button>
+          <button class="secondary" style="margin:0;" onclick="ghDownloadSeedFiles()" title="Download the current local data as split JSON files to commit into the repo's data/ folder">&#8595; Download Seed Files</button>
+        </div>
+      </div>
+
       <!-- 2. Receiving Source File -->
       <div class="card import-card">
         <div class="import-card-when">Load before processing each shipment or RMA</div>
@@ -1507,6 +1526,52 @@
       <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
         <button onclick="histMgrEditClose()" class="secondary" style="margin:0;">Cancel</button>
         <button onclick="histMgrEditSave()" style="margin:0;">Save Record</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GitHub Sync Config Modal -->
+  <div id="ghConfigModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:560px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">GitHub Data Sync</h2>
+          <p class="small" style="margin:4px 0 0;color:#64748b;">Connect to the private repo that holds TIM's shared master data.</p>
+        </div>
+        <button onclick="ghCloseConfig()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid two">
+          <label>Repo Owner
+            <input id="ghCfgOwner" type="text" placeholder="e.g. bytesnotbits" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <label>Repo Name
+            <input id="ghCfgRepo" type="text" placeholder="e.g. TIM-data" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+        </div>
+        <div class="modal-grid two" style="margin-top:10px;">
+          <label>Branch
+            <input id="ghCfgBranch" type="text" placeholder="main" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Personal Access Token
+            <input id="ghCfgToken" type="password" placeholder="github_pat_…" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:12px;font-family:monospace;" />
+          </label>
+          <p class="small" style="margin:6px 0 0;color:#64748b;">Use a <b>fine-grained</b> token: repository access limited to the data repo only, permission <b>Contents: Read-only</b>, with an expiration. Stored only in this browser's local database — never sent anywhere except api.github.com.</p>
+        </div>
+        <div style="margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#374151;cursor:pointer;">
+            <input type="checkbox" id="ghCfgAutoLoad" checked style="width:auto;margin:0;cursor:pointer;" /> Sync automatically on startup
+          </label>
+          <button class="secondary" style="margin:0;" onclick="ghTestConnection()">Test Connection</button>
+        </div>
+        <p id="ghCfgTestResult" class="small" style="margin:8px 0 0;min-height:16px;"></p>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="ghClearConfig()" class="secondary" style="margin:0 auto 0 0;color:#dc2626;">Remove Saved Settings</button>
+        <button onclick="ghCloseConfig()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="ghSaveConfig()" style="margin:0;">Save &amp; Sync</button>
       </div>
     </div>
   </div>

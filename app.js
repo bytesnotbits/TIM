@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.01.12";
+const APP_VERSION = "v2.02.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2034,6 +2034,270 @@ async function checkForUpdate() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ===================================================================
+// GITHUB DATA SYNC — Phase 1: read-only ingest from private data repo
+// Master data lives as split JSON files under data/ in a private repo.
+// A fine-grained PAT (Contents: read) stored in IndexedDB authorizes
+// the GitHub REST API directly from the browser. Per-file blob SHAs
+// are cached for the Phase 2 write-back (optimistic locking).
+// ===================================================================
+
+const GH_CONFIG_KEY = "tim_gh_config_v1";   // { owner, repo, branch, autoLoad }
+const GH_TOKEN_KEY  = "tim_gh_token_v1";    // fine-grained PAT string
+const GH_SHAS_KEY   = "tim_gh_shas_v1";     // { "data/<file>": blobSha }
+const GH_DATA_DIR   = "data";
+
+var ghConfig = null;
+var ghToken = null;
+var ghSyncInFlight = false;
+
+function ghConfigured() {
+  return !!(ghToken && ghConfig && ghConfig.owner && ghConfig.repo);
+}
+
+function ghSetStatus(msg, state) {
+  var el = $("ghSyncStatus");
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = state === "err" ? "#dc2626" : state === "ok" ? "#16a34a" : "#64748b";
+  var bar = $("ghSyncStatusBar");
+  if (bar) bar.classList.toggle("loaded", state === "ok");
+}
+
+function ghHeaders(accept) {
+  return {
+    "Authorization": "Bearer " + ghToken,
+    "Accept": accept || "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+}
+
+function ghApi(path, accept, tokenOverride) {
+  var saved = ghToken;
+  if (tokenOverride) ghToken = tokenOverride;
+  var headers = ghHeaders(accept);
+  ghToken = saved;
+  return fetch("https://api.github.com" + path, { headers: headers, cache: "no-store" });
+}
+
+function ghLoadSettings() {
+  return Promise.all([TimDB.get(GH_CONFIG_KEY), TimDB.get(GH_TOKEN_KEY)]).then(function(res) {
+    ghConfig = res[0] || null;
+    ghToken = res[1] || null;
+    if (ghConfigured()) {
+      ghSetStatus("Connected to " + ghConfig.owner + "/" + ghConfig.repo + " — not synced yet this session.", "info");
+    }
+    return ghConfigured();
+  }).catch(function() { return false; });
+}
+
+// -- Config modal ---------------------------------------------------
+
+function ghOpenConfig() {
+  $("ghCfgOwner").value  = (ghConfig && ghConfig.owner)  || "";
+  $("ghCfgRepo").value   = (ghConfig && ghConfig.repo)   || "";
+  $("ghCfgBranch").value = (ghConfig && ghConfig.branch) || "main";
+  $("ghCfgToken").value  = "";
+  $("ghCfgToken").placeholder = ghToken
+    ? "Token saved (…" + ghToken.slice(-4) + ") — leave blank to keep"
+    : "github_pat_…";
+  $("ghCfgAutoLoad").checked = ghConfig ? ghConfig.autoLoad !== false : true;
+  $("ghCfgTestResult").textContent = "";
+  $("ghConfigModal").classList.remove("hidden");
+}
+
+function ghCloseConfig() {
+  $("ghConfigModal").classList.add("hidden");
+}
+
+function _ghReadConfigForm() {
+  return {
+    owner:  sanitizeScannerValue($("ghCfgOwner").value || "").trim(),
+    repo:   sanitizeScannerValue($("ghCfgRepo").value || "").trim(),
+    branch: sanitizeScannerValue($("ghCfgBranch").value || "").trim() || "main",
+    token:  ($("ghCfgToken").value || "").trim() || ghToken || "",
+    autoLoad: $("ghCfgAutoLoad").checked
+  };
+}
+
+function ghTestConnection() {
+  var f = _ghReadConfigForm();
+  var out = $("ghCfgTestResult");
+  if (!f.owner || !f.repo || !f.token) {
+    out.style.color = "#dc2626";
+    out.textContent = "Owner, repo, and token are required.";
+    return;
+  }
+  out.style.color = "#64748b";
+  out.textContent = "Testing…";
+  ghApi("/repos/" + encodeURIComponent(f.owner) + "/" + encodeURIComponent(f.repo), null, f.token)
+    .then(function(res) {
+      if (res.ok) return res.json().then(function(j) {
+        out.style.color = "#16a34a";
+        out.textContent = "✓ Connected: " + j.full_name + (j.private ? " (private)" : " (⚠ PUBLIC repo)");
+      });
+      out.style.color = "#dc2626";
+      if (res.status === 401) out.textContent = "✗ Token rejected (401) — check the token value and expiration.";
+      else if (res.status === 404) out.textContent = "✗ Repo not found (404) — check owner/repo, and that the token has access to it.";
+      else out.textContent = "✗ GitHub returned " + res.status + ".";
+    })
+    .catch(function() {
+      out.style.color = "#dc2626";
+      out.textContent = "✗ Network error — are you online?";
+    });
+}
+
+function ghSaveConfig() {
+  var f = _ghReadConfigForm();
+  if (!f.owner || !f.repo) { alert("Owner and repo are required."); return; }
+  if (!f.token) { alert("Paste a fine-grained personal access token (Contents: read access to the data repo)."); return; }
+  ghConfig = { owner: f.owner, repo: f.repo, branch: f.branch, autoLoad: f.autoLoad };
+  ghToken = f.token;
+  Promise.all([TimDB.set(GH_CONFIG_KEY, ghConfig), TimDB.set(GH_TOKEN_KEY, ghToken)]).then(function() {
+    ghCloseConfig();
+    ghSetStatus("Settings saved — syncing…", "info");
+    ghSyncNow();
+  }).catch(function(err) {
+    alert("Could not save settings: " + err);
+  });
+}
+
+function ghClearConfig() {
+  if (!confirm("Remove the saved GitHub token and repo settings from this device?")) return;
+  ghConfig = null;
+  ghToken = null;
+  Promise.all([TimDB.remove(GH_CONFIG_KEY), TimDB.remove(GH_TOKEN_KEY), TimDB.remove(GH_SHAS_KEY)]).catch(function(){});
+  ghCloseConfig();
+  ghSetStatus("Not configured — click Configure to connect.", "info");
+}
+
+// -- Sync engine ----------------------------------------------------
+
+function ghListDataDir() {
+  var path = "/repos/" + ghConfig.owner + "/" + ghConfig.repo + "/contents/" + GH_DATA_DIR +
+             "?ref=" + encodeURIComponent(ghConfig.branch);
+  return ghApi(path).then(function(res) {
+    if (res.status === 404) throw new Error("No '" + GH_DATA_DIR + "/' folder found in " + ghConfig.owner + "/" + ghConfig.repo + " — seed the repo first (Download Seed Files).");
+    if (res.status === 401) throw new Error("Token rejected (401) — open Configure and re-enter it.");
+    if (!res.ok) throw new Error("GitHub returned " + res.status + " listing the data folder.");
+    return res.json();
+  });
+}
+
+function ghFetchJsonFile(filePath) {
+  var path = "/repos/" + ghConfig.owner + "/" + ghConfig.repo + "/contents/" + filePath +
+             "?ref=" + encodeURIComponent(ghConfig.branch);
+  return ghApi(path, "application/vnd.github.raw+json").then(function(res) {
+    if (!res.ok) throw new Error("GitHub returned " + res.status + " fetching " + filePath);
+    return res.json();
+  });
+}
+
+function ghSyncNow(silent) {
+  if (ghSyncInFlight) return;
+  if (!ghConfigured()) {
+    if (!silent) { ghOpenConfig(); }
+    ghSetStatus("Not configured — click Configure to connect.", "info");
+    return;
+  }
+  ghSyncInFlight = true;
+  var btn = $("ghSyncNowBtn");
+  if (btn) btn.disabled = true;
+  ghSetStatus("Syncing from " + ghConfig.owner + "/" + ghConfig.repo + "…", "info");
+
+  var shas = {};
+  ghListDataDir().then(function(listing) {
+    var files = (listing || []).filter(function(f) {
+      return f.type === "file" && /\.json$/i.test(f.name);
+    });
+    if (!files.length) throw new Error("The '" + GH_DATA_DIR + "/' folder has no .json files.");
+    files.forEach(function(f) { shas[f.path] = f.sha; });
+
+    return Promise.all(files.map(function(f) {
+      return ghFetchJsonFile(f.path).then(function(json) { return { name: f.name.toLowerCase(), json: json }; });
+    }));
+  }).then(function(fetched) {
+    var payload = {};
+    var historyShards = [];
+
+    fetched.forEach(function(f) {
+      if (f.name === "product_map.json" && f.json && typeof f.json === "object") payload.product_map = f.json;
+      else if (f.name === "barcode_map.json" && f.json && typeof f.json === "object") payload.barcode_map = f.json;
+      else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
+      else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
+        if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
+        if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
+      }
+      else if (f.name === "inventory.json" && f.json && typeof f.json === "object") {
+        if (Array.isArray(f.json.inventory_sessions)) payload.inventory_sessions = f.json.inventory_sessions;
+        if (Array.isArray(f.json.inventory_events))   payload.inventory_events   = f.json.inventory_events;
+      }
+      else if (/^history-.*\.json$/.test(f.name)) {
+        var records = Array.isArray(f.json) ? f.json : (f.json && Array.isArray(f.json.records) ? f.json.records : []);
+        historyShards.push({ name: f.name, records: records });
+      }
+    });
+
+    if (historyShards.length) {
+      historyShards.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
+      payload.history = { records: [].concat.apply([], historyShards.map(function(s) { return s.records; })) };
+    } else {
+      // No history shards in the repo — keep the locally loaded history
+      // (loadSourceData would otherwise reset it to empty).
+      payload.history = history;
+    }
+
+    loadSourceData(payload, "GitHub: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+    TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
+
+    var pCount = Object.keys(PRODUCT_MAP).length;
+    var hCount = (history.records || []).length;
+    ghSetStatus("Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.", "ok");
+  }).catch(function(err) {
+    ghSetStatus("Sync failed: " + (err && err.message ? err.message : err), "err");
+  }).finally(function() {
+    ghSyncInFlight = false;
+    if (btn) btn.disabled = false;
+  });
+}
+
+function ghInit() {
+  ghLoadSettings().then(function(configured) {
+    if (configured && ghConfig.autoLoad !== false) ghSyncNow(true);
+  });
+}
+
+// -- Seed-file export (one-time repo setup / manual publish) --------
+
+function ghHistoryShardName(record) {
+  var d = (record && (record.imported_at || record.ship_date)) || "";
+  var m = String(d).match(/^(\d{4})/);
+  return "history-" + (m ? m[1] : "legacy") + ".json";
+}
+
+function ghDownloadSeedFiles() {
+  var payload = buildExportPayload();
+  var files = {
+    "product_map.json": payload.product_map,
+    "barcode_map.json": payload.barcode_map,
+    "quants.json": payload.odoo_quants,
+    "recounts.json": { recount_sessions: payload.recount_sessions, recount_movements: payload.recount_movements },
+    "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events }
+  };
+  (payload.history.records || []).forEach(function(r) {
+    var name = ghHistoryShardName(r);
+    if (!files[name]) files[name] = [];
+    files[name].push(r);
+  });
+  var names = Object.keys(files);
+  names.forEach(function(name, i) {
+    setTimeout(function() {
+      downloadText(name, JSON.stringify(files[name], null, 2), "application/json");
+    }, i * 400);
+  });
+  ghSetStatus(names.length + " seed files downloading — commit them into the '" + GH_DATA_DIR + "/' folder of your private repo.", "info");
 }
 
 // ===================================================================
@@ -7516,6 +7780,7 @@ try {
 } catch(e) {}
 
 timLoadMasterCache();
+ghInit();
 timInitUsername();
 renderInvSessionUI();
 invAutoRestoreSession();

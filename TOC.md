@@ -16,7 +16,7 @@ Single-page PWA. Four files do all the work:
 | `index.html` | All HTML markup; inline `oninput`/`onclick` handlers wire to `app.js` functions |
 | `app.js` | All application logic (~8400 lines); no framework |
 | `styles.css` | All styling |
-| `sw.js` | Service worker: network-first for local files, cache-first for CDN; cache key `tim-v4` |
+| `sw.js` | Service worker: network-first for local files, cache-first for CDN, bypass for api.github.com; cache key `tim-v5` |
 
 ### Main Tabs / Feature Areas
 - **Receiving** — load vendor/RMA source file, map products, export to Odoo
@@ -47,6 +47,9 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_location_map_v1` | Location path→barcode map |
 | `tim_location_barcode_map_v1` | Location barcode→complete name map |
 | `tim_recount_v1` | Recount sessions + movement records |
+| `tim_gh_config_v1` | GitHub sync config `{ owner, repo, branch, autoLoad }` |
+| `tim_gh_token_v1` | GitHub fine-grained PAT (Contents: read on the data repo) |
+| `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
 
 `localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`.
 
@@ -169,6 +172,32 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `rowsToObjects(rawRows, headerIdx)` | Convert raw rows → keyed objects |
 | `parseRmaRows(rawRows)` | Parse RMA header/item row structure |
 | `excelDateToISO(v)` | Convert Excel date serial → ISO string |
+
+---
+
+### GitHub Data Sync (`gh*`)
+
+> Phase 1 (read-only): pulls shared master data from a private GitHub repo's `data/` folder via the REST Contents API, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. Per-file blob SHAs are cached for the Phase 2 write-back. The service worker bypasses `api.github.com` so responses are never cached.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` | TimDB keys — grep `const GH_CONFIG_KEY` |
+| `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad }` + PAT |
+| `ghConfigured()` | True when token + owner + repo are set |
+| `ghSetStatus(msg, state)` | Update sync status line on the Data Import card |
+| `ghHeaders(accept)` | Build auth headers for the GitHub API |
+| `ghApi(path, accept, tokenOverride)` | `fetch` wrapper for api.github.com (no-store) |
+| `ghLoadSettings()` | Restore config + token from IDB on startup |
+| `ghOpenConfig()` / `ghCloseConfig()` | Show/hide the config modal |
+| `ghTestConnection()` | GET `/repos/{o}/{r}` with form values; report ok/401/404 |
+| `ghSaveConfig()` | Persist settings + token, then sync |
+| `ghClearConfig()` | Remove token/config/SHAs from this device |
+| `ghListDataDir()` | List `data/` folder contents (names + blob SHAs) |
+| `ghFetchJsonFile(path)` | Fetch one file as raw JSON (`vnd.github.raw+json`) |
+| `ghSyncNow(silent)` | **Main sync**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs |
+| `ghInit()` | Startup hook: load settings, auto-sync if `autoLoad` |
+| `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
+| `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
 
 ---
 
