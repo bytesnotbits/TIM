@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.03.01";
+const APP_VERSION = "v2.03.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2376,7 +2376,7 @@ function ghPushToGitHub() {
   }
   if (!timGetUsername()) {
     var who = prompt("Enter your name — it goes on the commit record:");
-    if (who && who.trim()) timSetUsername(who.trim());
+    if (who && who.trim()) { timSetUsername(who.trim()); timInitUsername(); }
     else { alert("Push cancelled — a name is required for the commit record."); return; }
   }
 
