@@ -29,6 +29,28 @@ export → massage → re-import. A live connection removes the file layer entir
   current inventory-count imports (error messages, which rows fail, Odoo version) —
   it's possible the file format is fixable cheaply while the live connection is built.
 
+## Strategic direction — TIM as baseline spec for Odoo-native features
+
+Rather than (or alongside) TIM talking to Odoo, the longer-term plan under discussion is
+having **Nihala (Odoo developer) build TIM's workflows into Odoo itself**, using TIM as
+the working reference implementation / requirements baseline. Adjust Odoo's inventory
+process to match the warehouse workflow TIM already encodes.
+
+Known feature targets (much-needed; a previous developer started but never finished):
+- **Scan a serial number → return the FSAN** (TIM: `invResolveBySerial` / history lookup)
+- **Scan a multi-barcode → return the NISC item** (TIM: `BARCODE_MAP` semantics, `bc*` subsystem)
+- Candidates beyond that: scan-type auto-classification (`invClassifyScan`), exception
+  handling during counts, recount chains with audit trail.
+
+Implications to keep in mind:
+- TIM stays the operational tool until Odoo-native features ship **and prove out in the
+  warehouse** — don't halt TIM work on the promise of a port.
+- Hand Nihala tight, precise specs extracted from TIM (scan classification rules, data
+  shapes, lookup semantics), not feature names — the previous attempt likely failed on
+  underspecification. TOC.md + the data dictionary are the raw material.
+- Per feature, decide deliberately: build into Odoo vs keep in TIM (lookups/scanning are
+  strong Odoo candidates; recount audit-trail/XLSX storytelling may be fine staying in TIM).
+
 ## Planned
 
 ### GitHub Sync Phase 3 — automatic sync
