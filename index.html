@@ -992,6 +992,17 @@
       </div>
     </div>
 
+    <!-- Catalog Health -->
+    <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        Catalog Health
+        <button onclick="chkRunHealthCheck()" style="font-size:12px;padding:5px 14px;margin:0;">Run check</button>
+        <span id="chkSummary" class="small" style="font-weight:400;color:#64748b;"></span>
+      </h2>
+      <p class="small" style="color:#475569;margin:0 0 12px;">Dedupes vendor-PN aliases (the same Odoo product listed under multiple vendor part numbers) and surfaces orphans (barcode/history references pointing at a missing catalog entry) and incomplete entries. Merges are confirmed per group and keep the folded vendor PNs resolvable.</p>
+      <div id="chkBody"><p class="small" style="color:#94a3b8;margin:0;">Click <strong>Run check</strong> to scan the catalog.</p></div>
+    </div>
+
     <!-- Design Notes & Architecture Decisions -->
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;">

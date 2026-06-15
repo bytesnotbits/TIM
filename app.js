@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.03.02";
+const APP_VERSION = "v2.04.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -169,6 +169,14 @@ function findProductMapMatch(product) {
 
   const foundDefaultCodeKey = Object.keys(PRODUCT_MAP).find(key => PRODUCT_MAP[key] && normalizeProductKey(PRODUCT_MAP[key].default_code) === target);
   if (foundDefaultCodeKey) return { key: foundDefaultCodeKey, entry: PRODUCT_MAP[foundDefaultCodeKey], matchedBy: "hctc" };
+
+  // Vendor-PN aliases folded in by the Catalog Health merge (chkMergeAliasGroup).
+  // Resolves a vendor part number whose own catalog row was collapsed into a canonical entry.
+  const foundAliasKey = Object.keys(PRODUCT_MAP).find(key => {
+    const al = PRODUCT_MAP[key] && PRODUCT_MAP[key].aliases;
+    return Array.isArray(al) && al.some(a => normalizeProductKey(a) === target);
+  });
+  if (foundAliasKey) return { key: foundAliasKey, entry: PRODUCT_MAP[foundAliasKey], matchedBy: "alias" };
 
   return null;
 }
@@ -6267,7 +6275,8 @@ function prodRenderList() {
     var trackingType = getTrackingType(map);
     if (filterTracking && trackingType !== filterTracking) return false;
     if (searchQ) {
-      var haystack = normKey([key, map.hctc || "", map.name || map.description || "", map.vendor || "", trackingType].join(" "));
+      var aliasStr = Array.isArray(map.aliases) ? map.aliases.join(" ") : "";
+      var haystack = normKey([key, map.hctc || "", map.name || map.description || "", map.vendor || "", aliasStr, trackingType].join(" "));
       if (haystack.indexOf(searchQ) === -1) return false;
     }
     return true;
@@ -7983,6 +7992,7 @@ invAutoRestoreSession();
 invLoadOdooQuantMap();
 invLoadQuantsBaseline();
 invLoadLocationMap();
+chkLoadState();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
 (function() {
@@ -7990,6 +8000,361 @@ invLoadLocationMap();
   document.addEventListener("pointerdown", _unlock, { passive: true });
   document.addEventListener("keydown", _unlock, { passive: true });
 })();
+
+
+// ===================================================================
+// CATALOG HEALTH  (chk*)
+// -------------------------------------------------------------------
+// Dedupes vendor-PN aliases (multiple catalog rows for one Odoo
+// product / NISC item), and surfaces orphans (dangling barcode/history
+// references) and incomplete catalog entries. Report-first; merges are
+// confirmed per group and non-lossy (folded vendor PNs are preserved in
+// entry.aliases[] and resolved by findProductMapMatch).
+// ===================================================================
+
+var CHK_STATE_KEY = "tim_catalog_health_v1";
+var chkIgnored = {};          // { groupSignature(odoo_external_id) -> true } — persisted, shared review state
+var chkCanonicalChoice = {};  // { groupSignature -> chosen canonical key } — session only
+var chkLastReport = null;
+
+function chkLoadState() {
+  return TimDB.get(CHK_STATE_KEY).then(function(s) {
+    if (s && s.ignored && typeof s.ignored === "object") chkIgnored = s.ignored;
+  }).catch(function(){});
+}
+function chkSaveState() {
+  TimDB.set(CHK_STATE_KEY, { ignored: chkIgnored }).catch(function(){});
+}
+
+function chkExtId(e) { return normKey((e && (e.odoo_external_id || e.external_id)) || ""); }
+function chkJsStr(s) { return String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); }
+function chkCompleteness(e) {
+  if (!e) return 0;
+  var n = 0;
+  ["hctc", "vendor", "name", "odoo_external_id", "tracking_type"].forEach(function(f) { if (e[f]) n++; });
+  return n;
+}
+function chkPickCanonical(sig, members) {
+  if (chkCanonicalChoice[sig] && members.indexOf(chkCanonicalChoice[sig]) !== -1) return chkCanonicalChoice[sig];
+  // Prefer the NISC-native row (key === its own hctc); shortest key wins ties.
+  var nisc = members.filter(function(k) { var e = PRODUCT_MAP[k] || {}; return e.hctc && normKey(k) === normKey(e.hctc); });
+  if (nisc.length) return nisc.slice().sort(function(a, b) { return a.length - b.length; })[0];
+  // Otherwise the most complete entry, shortest key as tiebreak.
+  return members.slice().sort(function(a, b) {
+    var d = chkCompleteness(PRODUCT_MAP[b]) - chkCompleteness(PRODUCT_MAP[a]);
+    return d !== 0 ? d : a.length - b.length;
+  })[0];
+}
+
+function chkBuildReport() {
+  var pm = PRODUCT_MAP || {};
+  var keys = Object.keys(pm);
+  var bm = BARCODE_MAP || {};
+  var records = (typeof history !== "undefined" && history && history.records) || [];
+
+  // Resolvable item identifiers (for orphan / dangling-reference checks).
+  var keyNorm = {}, hctcNorm = {}, aliasNorm = {};
+  keys.forEach(function(k) {
+    var e = pm[k] || {};
+    keyNorm[normKey(k)] = true;
+    if (e.hctc) hctcNorm[normKey(e.hctc)] = true;
+    if (Array.isArray(e.aliases)) e.aliases.forEach(function(a) { aliasNorm[normKey(a)] = true; });
+  });
+  function resolves(v) { var n = normKey(v); return !!n && (keyNorm[n] || hctcNorm[n] || aliasNorm[n]); }
+
+  // --- Vendor-PN alias groups: catalog rows sharing one Odoo product (odoo_external_id) ---
+  var byExt = {};
+  keys.forEach(function(k) {
+    var ext = chkExtId(pm[k]);
+    if (!ext || /PRODUCT_TEMPLATE/.test(ext)) return; // blank / template IDs handled under "incomplete"
+    (byExt[ext] = byExt[ext] || []).push(k);
+  });
+  var aliasGroups = [];
+  Object.keys(byExt).forEach(function(ext) {
+    var members = byExt[ext];
+    if (members.length < 2 || chkIgnored[ext]) return;
+    aliasGroups.push({ signature: ext, extId: ext, members: members, canonical: chkPickCanonical(ext, members) });
+  });
+
+  // --- Conflicts: same NISC item # (hctc) but DIFFERENT Odoo products — flag only, never auto-merge ---
+  var byHctc = {};
+  keys.forEach(function(k) {
+    var h = normKey(pm[k] && pm[k].hctc);
+    if (h) (byHctc[h] = byHctc[h] || []).push(k);
+  });
+  var conflicts = [];
+  Object.keys(byHctc).forEach(function(h) {
+    var members = byHctc[h];
+    if (members.length < 2) return;
+    var exts = {};
+    members.forEach(function(k) { var x = chkExtId(pm[k]); if (x) exts[x] = true; });
+    if (Object.keys(exts).length > 1) conflicts.push({ hctc: h, members: members, extIds: Object.keys(exts) });
+  });
+
+  // --- Orphans (high severity): dangling references into a missing catalog entry ---
+  var danglingBarcodes = [];
+  Object.keys(bm).forEach(function(bc) {
+    if (!resolves(bm[bc])) danglingBarcodes.push({ barcode: bc, item: bm[bc] });
+  });
+  var dhMap = {};
+  records.forEach(function(r) {
+    var prod = r.calix_product || r.product || "";
+    var h = r.hctc || "";
+    if (!prod && !h) return;                       // skip fully-blank junk rows
+    if (resolves(prod) || resolves(h)) return;
+    var id = prod || ("NISC " + h);
+    dhMap[id] = (dhMap[id] || 0) + 1;
+  });
+  var danglingHistory = Object.keys(dhMap).map(function(id) { return { item: id, count: dhMap[id] }; });
+
+  // --- Orphans (low/info): dead rows — no Odoo ID AND never seen in history ---
+  var histProd = {}, histHctc = {};
+  records.forEach(function(r) { histProd[normKey(r.calix_product || r.product)] = true; histHctc[normKey(r.hctc)] = true; });
+  function refByHist(k) { var e = pm[k] || {}; var n = normKey(k), h = normKey(e.hctc); return histProd[n] || histHctc[n] || histProd[h] || histHctc[h]; }
+  var deadRows = [];
+  keys.forEach(function(k) {
+    var e = pm[k] || {};
+    if (!(e.odoo_external_id || e.external_id) && !refByHist(k)) deadRows.push({ key: k, name: e.name || e.description || "" });
+  });
+
+  // --- Incomplete entries: missing fields required to be useful / importable ---
+  var incomplete = [];
+  keys.forEach(function(k) {
+    var e = pm[k] || {};
+    var ext = e.odoo_external_id || e.external_id || "";
+    var reasons = [];
+    if (e.serial_tracked && !ext) reasons.push("serial-tracked, no Odoo ID");
+    if (e.serial_tracked && /product_template/i.test(ext)) reasons.push("Odoo ID is a product_template (blocked)");
+    if (!(e.name || e.description)) reasons.push("no name/description");
+    if (!e.hctc) reasons.push("no NISC item #");
+    if (reasons.length) incomplete.push({ key: k, reasons: reasons });
+  });
+
+  chkLastReport = {
+    aliasGroups: aliasGroups,
+    conflicts: conflicts,
+    danglingBarcodes: danglingBarcodes,
+    danglingHistory: danglingHistory,
+    deadRows: deadRows,
+    incomplete: incomplete,
+    ignoredCount: Object.keys(chkIgnored).length,
+    totalProducts: keys.length
+  };
+  return chkLastReport;
+}
+
+function chkRunHealthCheck() {
+  if (!PRODUCT_MAP || !Object.keys(PRODUCT_MAP).length) {
+    var bodyEl = $("chkBody");
+    if (bodyEl) bodyEl.innerHTML = '<p class="small" style="color:#94a3b8;">No catalog loaded yet. Load a master JSON or upload products first.</p>';
+    return;
+  }
+  chkBuildReport();
+  chkRenderReport(chkLastReport);
+}
+
+function chkRenderReport(r) {
+  var el = $("chkBody");
+  if (!el) return;
+  if (!r) { el.innerHTML = ""; return; }
+
+  var totalIssues = r.aliasGroups.length + r.conflicts.length + r.danglingBarcodes.length +
+    r.danglingHistory.length + r.incomplete.length;
+  var summaryEl = $("chkSummary");
+  if (summaryEl) {
+    summaryEl.textContent = totalIssues
+      ? totalIssues + " issue" + (totalIssues === 1 ? "" : "s") + " across " + r.totalProducts + " products"
+      : "Clean — " + r.totalProducts + " products, no issues";
+  }
+
+  var h = "";
+
+  // Summary chips
+  var chips = [
+    ["Alias groups", r.aliasGroups.length, r.aliasGroups.length ? "#b45309" : "#16a34a"],
+    ["Mapping conflicts", r.conflicts.length, r.conflicts.length ? "#b91c1c" : "#16a34a"],
+    ["Dangling barcodes", r.danglingBarcodes.length, r.danglingBarcodes.length ? "#b91c1c" : "#16a34a"],
+    ["Dangling history", r.danglingHistory.length, r.danglingHistory.length ? "#b45309" : "#16a34a"],
+    ["Incomplete", r.incomplete.length, r.incomplete.length ? "#b45309" : "#16a34a"],
+    ["Dead rows", r.deadRows.length, r.deadRows.length ? "#64748b" : "#16a34a"]
+  ];
+  h += '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;">';
+  chips.forEach(function(c) {
+    h += '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:8px 14px;min-width:96px;">' +
+      '<div style="font-size:20px;font-weight:700;color:' + c[2] + ';">' + c[1] + '</div>' +
+      '<div class="small" style="color:#64748b;">' + escapeHtml(c[0]) + '</div></div>';
+  });
+  h += '</div>';
+
+  // --- Alias groups ---
+  h += '<h3 style="margin:18px 0 6px;">Vendor-PN alias groups <span class="small" style="font-weight:400;color:#64748b;">— same Odoo product under multiple vendor part numbers</span></h3>';
+  if (!r.aliasGroups.length) {
+    h += '<p class="small" style="color:#16a34a;margin:0 0 4px;">None.' +
+      (r.ignoredCount ? ' <span style="color:#64748b;">(' + r.ignoredCount + ' ignored — <a href="#" onclick="chkClearIgnored();return false;">un-ignore all</a>)</span>' : '') +
+      '</p>';
+  } else {
+    r.aliasGroups.forEach(function(g) {
+      var sig = chkJsStr(g.signature);
+      h += '<div style="border:1px solid #fde68a;background:#fffbeb;border-radius:10px;padding:12px 14px;margin-bottom:10px;">';
+      h += '<div class="small" style="color:#92400e;margin-bottom:6px;">Odoo product: <code>' + escapeHtml(g.extId) + '</code></div>';
+      h += '<label class="small" style="display:block;margin-bottom:8px;">Keep as canonical: ' +
+        '<select onchange="chkSetCanonical(\'' + sig + '\', this.value)" style="padding:4px;border:1px solid #cbd5e1;border-radius:6px;">';
+      g.members.forEach(function(k) {
+        var e = PRODUCT_MAP[k] || {};
+        var lbl = k + (e.hctc && normKey(k) === normKey(e.hctc) ? " (NISC-native)" : "");
+        h += '<option value="' + escapeHtml(k) + '"' + (k === g.canonical ? ' selected' : '') + '>' + escapeHtml(lbl) + '</option>';
+      });
+      h += '</select></label>';
+      h += '<div class="small" style="margin-bottom:8px;">';
+      g.members.forEach(function(k) {
+        var e = PRODUCT_MAP[k] || {};
+        var isCanon = k === g.canonical;
+        h += '<div style="padding:2px 0;">' + (isCanon ? "&#10003; " : "&rarr; ") +
+          '<code>' + escapeHtml(k) + '</code> &mdash; ' + escapeHtml(e.name || e.description || "(no name)") +
+          (isCanon ? ' <span style="color:#16a34a;font-weight:600;">canonical</span>' : ' <span style="color:#92400e;">alias</span>') + '</div>';
+      });
+      h += '</div>';
+      h += '<button onclick="chkMergeAliasGroup(\'' + sig + '\')" style="background:#b45309;padding:5px 12px;font-size:12px;margin:0 6px 0 0;">Merge</button>';
+      h += '<button class="secondary" onclick="chkIgnoreGroup(\'' + sig + '\')" style="padding:5px 12px;font-size:12px;margin:0 6px 0 0;">Ignore</button>';
+      g.members.forEach(function(k) {
+        h += '<button class="secondary" onclick="prodEditProduct(\'' + chkJsStr(k) + '\')" style="padding:5px 12px;font-size:12px;margin:0 6px 0 0;">Edit ' + escapeHtml(k) + '</button>';
+      });
+      h += '</div>';
+    });
+  }
+
+  // --- Conflicts (flag only) ---
+  h += '<h3 style="margin:18px 0 6px;">Mapping conflicts <span class="small" style="font-weight:400;color:#64748b;">— one NISC item # pointing at different Odoo products (review manually)</span></h3>';
+  if (!r.conflicts.length) {
+    h += '<p class="small" style="color:#16a34a;margin:0 0 4px;">None.</p>';
+  } else {
+    r.conflicts.forEach(function(c) {
+      h += '<div style="border:1px solid #fecaca;background:#fef2f2;border-radius:10px;padding:10px 14px;margin-bottom:8px;">';
+      h += '<div class="small" style="color:#991b1b;margin-bottom:4px;">NISC item <code>' + escapeHtml(c.hctc) + '</code> maps to ' + c.extIds.length + ' different Odoo products:</div>';
+      c.members.forEach(function(k) {
+        var e = PRODUCT_MAP[k] || {};
+        h += '<div class="small" style="padding:1px 0;"><code>' + escapeHtml(k) + '</code> &rarr; <code>' + escapeHtml(chkExtId(e)) + '</code> ' +
+          '<button class="secondary" onclick="prodEditProduct(\'' + chkJsStr(k) + '\')" style="padding:2px 8px;font-size:11px;margin:0 0 0 6px;">Edit</button></div>';
+      });
+      h += '</div>';
+    });
+  }
+
+  // --- Orphans: dangling references ---
+  h += '<h3 style="margin:18px 0 6px;">Orphans &mdash; dangling references <span class="small" style="font-weight:400;color:#64748b;">— barcodes / history pointing at a missing catalog entry</span></h3>';
+  if (!r.danglingBarcodes.length && !r.danglingHistory.length) {
+    h += '<p class="small" style="color:#16a34a;margin:0 0 4px;">None.</p>';
+  } else {
+    if (r.danglingBarcodes.length) {
+      h += '<div class="small" style="margin-bottom:4px;font-weight:600;color:#991b1b;">Barcodes (' + r.danglingBarcodes.length + ')</div>';
+      chkRenderCapped(r.danglingBarcodes, 50, function(d) {
+        return '<div class="small" style="padding:1px 0;">Barcode <code>' + escapeHtml(d.barcode) + '</code> &rarr; item <code>' + escapeHtml(d.item) + '</code> (no catalog entry)</div>';
+      }, function(html){ h += html; });
+    }
+    if (r.danglingHistory.length) {
+      h += '<div class="small" style="margin:6px 0 4px;font-weight:600;color:#92400e;">History (' + r.danglingHistory.length + ' distinct items)</div>';
+      chkRenderCapped(r.danglingHistory, 50, function(d) {
+        return '<div class="small" style="padding:1px 0;"><code>' + escapeHtml(d.item) + '</code> &mdash; ' + d.count + ' history record' + (d.count === 1 ? "" : "s") + ', no catalog entry</div>';
+      }, function(html){ h += html; });
+    }
+  }
+
+  // --- Incomplete entries ---
+  h += '<h3 style="margin:18px 0 6px;">Incomplete entries <span class="small" style="font-weight:400;color:#64748b;">— missing fields needed to import or identify</span></h3>';
+  if (!r.incomplete.length) {
+    h += '<p class="small" style="color:#16a34a;margin:0 0 4px;">None.</p>';
+  } else {
+    chkRenderCapped(r.incomplete, 60, function(d) {
+      return '<div class="small" style="padding:2px 0;"><code>' + escapeHtml(d.key) + '</code> &mdash; ' + escapeHtml(d.reasons.join("; ")) +
+        ' <button class="secondary" onclick="prodEditProduct(\'' + chkJsStr(d.key) + '\')" style="padding:2px 8px;font-size:11px;margin:0 0 0 6px;">Edit</button></div>';
+    }, function(html){ h += html; });
+  }
+
+  // --- Dead rows (low/info) ---
+  h += '<h3 style="margin:18px 0 6px;">Dead rows <span class="small" style="font-weight:400;color:#64748b;">— no Odoo ID and never received (low priority)</span></h3>';
+  if (!r.deadRows.length) {
+    h += '<p class="small" style="color:#16a34a;margin:0 0 4px;">None.</p>';
+  } else {
+    chkRenderCapped(r.deadRows, 60, function(d) {
+      return '<div class="small" style="padding:2px 0;color:#64748b;"><code>' + escapeHtml(d.key) + '</code> &mdash; ' + escapeHtml(d.name || "(no name)") +
+        ' <button class="secondary" onclick="prodEditProduct(\'' + chkJsStr(d.key) + '\')" style="padding:2px 8px;font-size:11px;margin:0 0 0 6px;">Edit</button></div>';
+    }, function(html){ h += html; });
+  }
+
+  el.innerHTML = h;
+}
+
+// Render up to `cap` items via `fmt`, appending an honest "+N more" note when truncated.
+function chkRenderCapped(arr, cap, fmt, sink) {
+  var out = "";
+  arr.slice(0, cap).forEach(function(d) { out += fmt(d); });
+  if (arr.length > cap) out += '<div class="small" style="color:#94a3b8;padding:2px 0;">+ ' + (arr.length - cap) + ' more not shown</div>';
+  sink(out);
+}
+
+function chkSetCanonical(sig, key) {
+  chkCanonicalChoice[sig] = key;
+  chkBuildReport();
+  chkRenderReport(chkLastReport);
+}
+
+function chkIgnoreGroup(sig) {
+  chkIgnored[sig] = true;
+  chkSaveState();
+  chkBuildReport();
+  chkRenderReport(chkLastReport);
+}
+
+function chkClearIgnored() {
+  if (!window.confirm("Un-ignore all previously dismissed alias groups?")) return;
+  chkIgnored = {};
+  chkSaveState();
+  chkRunHealthCheck();
+}
+
+// Non-lossy merge: fold every non-canonical vendor-PN row into the canonical entry,
+// preserving the removed keys (and their own aliases) in canonical.aliases[].
+function chkMergeAliasGroup(sig) {
+  if (!chkLastReport) return;
+  var grp = chkLastReport.aliasGroups.filter(function(g) { return g.signature === sig; })[0];
+  if (!grp) return;
+  var canonical = grp.canonical;
+  var canEntry = PRODUCT_MAP[canonical];
+  if (!canEntry) return;
+  var others = grp.members.filter(function(k) { return k !== canonical; });
+  if (!others.length) return;
+
+  var msg = "Merge " + others.length + " vendor-PN " + (others.length === 1 ? "alias" : "aliases") +
+    " into \"" + canonical + "\"?\n\n" +
+    "Folding in: " + others.join(", ") + "\n\n" +
+    "The duplicate catalog rows are removed; their vendor part numbers are kept as aliases on \"" +
+    canonical + "\" and still resolve on import/scan.";
+  if (!window.confirm(msg)) return;
+
+  var aliasList = Array.isArray(canEntry.aliases) ? canEntry.aliases.slice() : [];
+  function addAlias(a) {
+    if (!a) return;
+    if (normKey(a) === normKey(canonical)) return;
+    if (aliasList.map(normKey).indexOf(normKey(a)) === -1) aliasList.push(a);
+  }
+  var FILL_FIELDS = ["hctc", "vendor", "name", "description", "odoo_external_id", "external_id", "tracking_type", "reel_direction", "reel_ids"];
+  others.forEach(function(k) {
+    var e = PRODUCT_MAP[k] || {};
+    addAlias(k);
+    if (Array.isArray(e.aliases)) e.aliases.forEach(addAlias);
+    FILL_FIELDS.forEach(function(f) { if (!canEntry[f] && e[f]) canEntry[f] = e[f]; });
+    delete PRODUCT_MAP[k];
+  });
+  canEntry.aliases = aliasList;
+  canEntry.updated_at = invNow();
+
+  timSaveMasterCache();
+  prodRenderList();
+  if (typeof prodShowSaveToast === "function") {
+    prodShowSaveToast("Merged " + others.length + " alias" + (others.length === 1 ? "" : "es") + " into " + canonical);
+  }
+  chkRunHealthCheck();
+}
 
 
 // ===================================================================
@@ -8357,7 +8722,11 @@ function buildCatalogRowCells(key, map) {
       'onclick="prodEditProduct(\'' + safeKey + '\')">Edit</button>' +
     '<button class="secondary" style="padding:3px 9px;font-size:12px;margin:0;" ' +
       'onclick="prodShowItemHistory(\'' + safeKey + '\')">History</button>';
-  return "<td>" + escapeHtml(key) + "</td>" +
+  var aliasHtml = (Array.isArray(map.aliases) && map.aliases.length)
+    ? '<div class="small" style="color:#92400e;margin-top:2px;">aka ' +
+        map.aliases.map(function(a){ return escapeHtml(a); }).join(", ") + '</div>'
+    : "";
+  return "<td>" + escapeHtml(key) + aliasHtml + "</td>" +
     "<td>" + escapeHtml(map.hctc || "") + "</td>" +
     "<td>" + escapeHtml(map.name || map.description || "") + "</td>" +
     "<td>" + escapeHtml(map.vendor || "") + "</td>" +

@@ -50,6 +50,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_gh_config_v1` | GitHub sync config `{ owner, repo, branch, autoLoad }` |
 | `tim_gh_token_v1` | GitHub fine-grained PAT (Contents: read on the data repo) |
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
+| `tim_catalog_health_v1` | Catalog Health review state `{ ignored: { extId → true } }` (dismissed alias groups) |
 
 `localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`.
 
@@ -211,7 +212,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 | Function | Purpose |
 |----------|---------|
-| `findProductMapMatch(product)` | Find entry by key, HCTC, or default_code — returns `{ key, entry, matchedBy }` |
+| `findProductMapMatch(product)` | Find entry by key, HCTC, default_code, or vendor-PN `aliases[]` — returns `{ key, entry, matchedBy }` (`matchedBy: "alias"` for folded vendor PNs) |
 | `findProductMapEntry(product)` | Wrapper returning just the entry |
 | `resolveCalixProduct(input, mapMatch)` | Resolve final product name with history fallback |
 | `findHistoryProductByHctc(hctc)` | Resolve product name from history by HCTC |
@@ -592,6 +593,26 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `prodCancelUpload()` | Cancel upload |
 | `prodExportMasterJson()` | Download current master JSON |
 | `prodToggleNotes()` | Toggle help text panel |
+
+---
+
+### Catalog Health (`chk*`)
+
+> Products-tab job that dedupes vendor-PN aliases and surfaces orphans / incomplete catalog entries. Report-first; merges are confirmed per group and **non-lossy** — folded vendor part numbers are preserved in `entry.aliases[]` and resolved by `findProductMapMatch` (`matchedBy: "alias"`). Alias groups are keyed on shared `odoo_external_id` (same Odoo product); same-`hctc`-but-different-Odoo-ID cases are flagged as **conflicts**, never auto-merged. Ignored groups persist in `tim_catalog_health_v1`.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `CHK_STATE_KEY` / `chkIgnored` / `chkCanonicalChoice` / `chkLastReport` | TimDB key + state — grep `var CHK_STATE_KEY` |
+| `chkLoadState()` / `chkSaveState()` | Restore / persist dismissed alias groups |
+| `chkBuildReport()` | **Core analysis** → `{ aliasGroups, conflicts, danglingBarcodes, danglingHistory, deadRows, incomplete, ignoredCount, totalProducts }` |
+| `chkRunHealthCheck()` | Build + render report into the Products-tab card |
+| `chkRenderReport(r)` | Render summary chips + all sections |
+| `chkRenderCapped(arr, cap, fmt, sink)` | Render up to `cap` rows; appends honest "+N more" note |
+| `chkPickCanonical(sig, members)` | Default canonical = NISC-native row (key === hctc), else most complete |
+| `chkCompleteness(e)` / `chkExtId(e)` / `chkJsStr(s)` | Scoring / ext-ID normalize / onclick-string escape helpers |
+| `chkSetCanonical(sig, key)` | Override which member survives a merge |
+| `chkMergeAliasGroup(sig)` | **Non-lossy merge** — fold aliases into canonical, preserve in `aliases[]`, save, re-run (confirmed) |
+| `chkIgnoreGroup(sig)` / `chkClearIgnored()` | Dismiss a group / un-ignore all |
 
 ---
 
