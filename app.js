@@ -2411,6 +2411,210 @@ function ghDownloadSeedFiles() {
   ghSetStatus(names.length + " seed files downloading — commit them into the '" + GH_DATA_DIR + "/' folder of your private repo.", "info");
 }
 
+// ===================================================================
+// UNION 3-WAY MERGE ENGINE  (see MERGE_DESIGN.md)
+// Pure / in-memory. Given base, local, remote assembled payloads, returns
+// { merged, conflicts }. No I/O — callers (pull/push wiring, Phase 2) decide
+// what to do with the result. Disjoint changes auto-merge; only the same
+// field set to two different non-empty values is a true conflict.
+// ===================================================================
+
+// Product-catalog fields that participate in field-level merge (scalars +
+// booleans). Array-valued fields are unioned separately.
+var PRODUCT_MERGE_FIELDS = ["hctc", "vendor", "odoo_external_id", "external_id",
+  "name", "description", "tracking_type", "serial_tracked", "requires_fsan", "history_only"];
+var PRODUCT_ARRAY_FIELDS = ["aliases"];
+var HISTORY_ARRAY_FIELDS = ["messages"];
+
+// Order-insensitive deep equality (object key order doesn't matter).
+function _ghStableStringify(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v === undefined ? null : v);
+  if (Array.isArray(v)) return "[" + v.map(_ghStableStringify).join(",") + "]";
+  return "{" + Object.keys(v).sort().map(function(k) {
+    return JSON.stringify(k) + ":" + _ghStableStringify(v[k]);
+  }).join(",") + "}";
+}
+function _ghEqual(a, b) { return _ghStableStringify(a) === _ghStableStringify(b); }
+// Field comparison: normalize() stringifies strings AND booleans uniformly.
+function _ghFieldEqual(a, b) { return normalize(a) === normalize(b); }
+
+function _ghRecordTs(rec) {
+  if (!rec) return "";
+  return rec.updated_at || rec.imported_at || rec.timestamp || rec.createdAt || "";
+}
+function _ghNewer(local, remote) {
+  return _ghRecordTs(remote) > _ghRecordTs(local) ? remote : local;
+}
+
+function _ghCandidate(record, field, who) {
+  var value = field ? (record ? record[field] : undefined) : record;
+  return { value: value === undefined ? null : value, device: who.device || "", user: who.user || "", ts: _ghRecordTs(record) };
+}
+function _ghMakeConflict(collection, key, field, type, baseValue, candidates, provisional, ctx) {
+  return {
+    conflictId: collection + "::" + key + "::" + (field || ""),
+    collection: collection, key: String(key), field: field || "", type: type,
+    baseValue: baseValue === undefined ? null : baseValue,
+    candidates: candidates,
+    provisional: provisional === undefined ? null : provisional,
+    status: "unresolved",
+    detectedAt: ctx.now || "",
+    resolvedAt: null, resolvedBy: null, chosenValue: null
+  };
+}
+
+// Resolve a key present-and-different on both sides (or both-added, or
+// edit-vs-delete). Returns the merged value; pushes any conflicts onto `out`.
+function _ghMergeRecord(key, base, local, remote, cfg, ctx, out) {
+  if (!cfg.fieldMerge) {
+    // Scalar value (e.g. barcode_map: barcode → item string). Can't field-merge.
+    var prov = local; // bias to local (the pushing device); both kept in the log
+    out.push(_ghMakeConflict(cfg.name, key, "", "scalar", base === undefined ? null : base,
+      [_ghCandidate(local, "", ctx.local), _ghCandidate(remote, "", ctx.remote)], prov, ctx));
+    return prov;
+  }
+  var newer = _ghNewer(local, remote);
+  var merged = Object.assign({}, newer); // non-merge metadata follows the newer record
+  (cfg.fields || []).forEach(function(f) {
+    var lCh = !_ghFieldEqual(local[f], base ? base[f] : undefined);
+    var rCh = !_ghFieldEqual(remote[f], base ? base[f] : undefined);
+    if (lCh && rCh && !_ghFieldEqual(local[f], remote[f])) {
+      var newerVal = (newer === remote) ? remote[f] : local[f];
+      merged[f] = newerVal;
+      out.push(_ghMakeConflict(cfg.name, key, f, "field", base ? (base[f] === undefined ? null : base[f]) : null,
+        [_ghCandidate(local, f, ctx.local), _ghCandidate(remote, f, ctx.remote)], newerVal, ctx));
+    } else if (lCh) {
+      merged[f] = local[f];
+    } else if (rCh) {
+      merged[f] = remote[f];
+    } else {
+      merged[f] = base ? base[f] : (local[f] !== undefined ? local[f] : remote[f]);
+    }
+  });
+  // Array-valued fields: union (dedup by string form). Note: ignores base, so a
+  // value one side removed and the other kept is resurrected — acceptable for
+  // aliases/messages; documented in MERGE_DESIGN.md.
+  (cfg.arrayFields || []).forEach(function(f) {
+    var seen = {}, set = [];
+    [].concat(local[f] || [], remote[f] || []).forEach(function(x) {
+      var s = String(x); if (!seen[s]) { seen[s] = 1; set.push(x); }
+    });
+    if (set.length) merged[f] = set;
+  });
+  return merged;
+}
+
+// 3-way merge of a keyed object. Returns the merged object; conflicts pushed to `out`.
+function _gh3MergeKeyed(base, local, remote, cfg, ctx, out) {
+  base = base || {}; local = local || {}; remote = remote || {};
+  var keys = {};
+  [base, local, remote].forEach(function(o) { Object.keys(o).forEach(function(k) { keys[k] = true; }); });
+  var merged = {};
+  Object.keys(keys).forEach(function(k) {
+    var inB = k in base, inL = k in local, inR = k in remote;
+    var b = base[k], l = local[k], r = remote[k];
+    if (inL && inR) {
+      if (_ghEqual(l, r)) { merged[k] = l; return; }              // same on both
+      if (!inB) { merged[k] = _ghMergeRecord(k, undefined, l, r, cfg, ctx, out); return; } // both added differently
+      var lCh = !_ghEqual(l, b), rCh = !_ghEqual(r, b);
+      if (lCh && !rCh) { merged[k] = l; return; }                 // only local edited
+      if (rCh && !lCh) { merged[k] = r; return; }                 // only remote edited
+      merged[k] = _ghMergeRecord(k, b, l, r, cfg, ctx, out);      // both edited
+      return;
+    }
+    if (inL && !inR) {
+      if (!inB) { merged[k] = l; return; }                        // local added
+      if (_ghEqual(l, b)) return;                                 // remote deleted, local untouched → drop
+      merged[k] = l;                                              // local edited vs remote deleted → keep local + flag
+      out.push(_ghMakeConflict(cfg.name, k, "", "edit_vs_delete", b,
+        [_ghCandidate(l, "", ctx.local), _ghCandidate(null, "", ctx.remote)], l, ctx));
+      return;
+    }
+    if (!inL && inR) {
+      if (!inB) { merged[k] = r; return; }                        // remote added
+      if (_ghEqual(r, b)) return;                                 // local deleted, remote untouched → drop
+      merged[k] = r;                                              // remote edited vs local deleted → keep remote + flag
+      out.push(_ghMakeConflict(cfg.name, k, "", "edit_vs_delete", b,
+        [_ghCandidate(null, "", ctx.local), _ghCandidate(r, "", ctx.remote)], r, ctx));
+      return;
+    }
+    // neither side has it → drop
+  });
+  return merged;
+}
+
+// Index an array by key; items with an empty key are returned separately so
+// they can be passed through un-merged (never dropped).
+function _ghToMap(arr, keyFn) {
+  var map = {}, keyless = [];
+  (arr || []).forEach(function(item) {
+    var k = item == null ? "" : keyFn(item);
+    if (k == null || k === "") { keyless.push(item); return; }
+    if (!(k in map)) map[k] = item;
+  });
+  return { map: map, keyless: keyless };
+}
+
+// 3-way merge of an array of records keyed by keyFn. Order: surviving local
+// items in local order, then remote-only items, then keyless passthrough.
+function _gh3MergeArray(baseArr, localArr, remoteArr, cfg, ctx, out) {
+  var b = _ghToMap(baseArr, cfg.keyFn), l = _ghToMap(localArr, cfg.keyFn), r = _ghToMap(remoteArr, cfg.keyFn);
+  var mergedMap = _gh3MergeKeyed(b.map, l.map, r.map, cfg, ctx, out);
+  var result = [], emitted = {};
+  (localArr || []).forEach(function(it) {
+    var k = it == null ? "" : cfg.keyFn(it);
+    if (k && (k in mergedMap) && !emitted[k]) { result.push(mergedMap[k]); emitted[k] = 1; }
+  });
+  (remoteArr || []).forEach(function(it) {
+    var k = it == null ? "" : cfg.keyFn(it);
+    if (k && (k in mergedMap) && !emitted[k]) { result.push(mergedMap[k]); emitted[k] = 1; }
+  });
+  Object.keys(mergedMap).forEach(function(k) { if (!emitted[k]) { result.push(mergedMap[k]); emitted[k] = 1; } });
+  // Keyless items can't be 3-way merged — keep all from local+remote, deduped
+  // by deep value so exact duplicates don't accumulate.
+  var keylessSeen = {};
+  l.keyless.concat(r.keyless).forEach(function(it) {
+    var s = _ghStableStringify(it); if (!keylessSeen[s]) { keylessSeen[s] = 1; result.push(it); }
+  });
+  return result;
+}
+
+// Orchestrate the full master merge across every collection.
+// base/local/remote are assembled payloads (buildExportPayload shape).
+// ctx = { local:{device,user}, remote:{device,user}, now:isoString }.
+function ghMergeMasters(base, local, remote, ctx) {
+  base = base || {}; local = local || {}; remote = remote || {};
+  ctx = ctx || {};
+  ctx.local = ctx.local || {}; ctx.remote = ctx.remote || {};
+  var conflicts = [];
+  var merged = {};
+
+  merged.product_map = _gh3MergeKeyed(base.product_map, local.product_map, remote.product_map,
+    { name: "product_map", fieldMerge: true, fields: PRODUCT_MERGE_FIELDS, arrayFields: PRODUCT_ARRAY_FIELDS }, ctx, conflicts);
+
+  merged.barcode_map = _gh3MergeKeyed(base.barcode_map, local.barcode_map, remote.barcode_map,
+    { name: "barcode_map", fieldMerge: false }, ctx, conflicts);
+
+  merged.history = {
+    records: _gh3MergeArray(
+      base.history && base.history.records, local.history && local.history.records, remote.history && remote.history.records,
+      { name: "history", fieldMerge: true, fields: MERGE_FIELDS, arrayFields: HISTORY_ARRAY_FIELDS,
+        keyFn: function(rec) { return normKey(rec.serial || rec.ref); } }, ctx, conflicts)
+  };
+
+  [["inventory_sessions", "sessionId"], ["inventory_events", "eventId"],
+   ["recount_sessions", "recountId"], ["recount_movements", "movementId"]].forEach(function(pair) {
+    var field = pair[1];
+    merged[pair[0]] = _gh3MergeArray(base[pair[0]], local[pair[0]], remote[pair[0]],
+      { name: pair[0], fieldMerge: false, keyFn: function(x) { return x ? x[field] : ""; } }, ctx, conflicts);
+  });
+
+  // odoo_quants: full Odoo snapshot, not row-merged — newest push (local) wins.
+  merged.odoo_quants = (local.odoo_quants && local.odoo_quants.length) ? local.odoo_quants : (remote.odoo_quants || []);
+
+  return { merged: merged, conflicts: conflicts };
+}
+
 // -- Phase 2: write-back (push local data to the repo) --------------
 
 function _ghUtf8Bytes(str) { return new TextEncoder().encode(str); }

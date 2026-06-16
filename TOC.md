@@ -211,6 +211,25 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ---
 
+### Union 3-Way Merge Engine (`ghMerge*` / `_gh3*`)
+
+> Pure, in-memory merge of two diverged master copies against their common base — see **`MERGE_DESIGN.md`** for the full spec. Disjoint changes auto-merge; only the same field set to two different non-empty values is a true conflict (logged, never silently dropped). **Phase 1 (built, fixture-tested, not yet wired into live sync).**
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `PRODUCT_MERGE_FIELDS` / `PRODUCT_ARRAY_FIELDS` / `HISTORY_ARRAY_FIELDS` | Field lists for product-entry / history field-merge; array fields are unioned |
+| `_ghStableStringify(v)` / `_ghEqual(a,b)` | Order-insensitive deep stringify + deep equality |
+| `_ghFieldEqual(a,b)` | Field compare via `normalize()` (handles strings + booleans) |
+| `_ghRecordTs(rec)` / `_ghNewer(l,r)` | Record timestamp (`updated_at`/`imported_at`/`timestamp`/`createdAt`) + newer-of-two |
+| `_ghCandidate(rec,field,who)` / `_ghMakeConflict(...)` | Build a conflict candidate / a conflict-log entry (see `conflicts.json` shape in spec) |
+| `_ghMergeRecord(key,base,l,r,cfg,ctx,out)` | Resolve a both-changed key: field-merge (records) or scalar conflict; pushes conflicts to `out` |
+| `_gh3MergeKeyed(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed object (add/edit/delete/edit-vs-delete logic) |
+| `_ghToMap(arr,keyFn)` | Index array by key; returns `{ map, keyless }` (keyless items never dropped) |
+| `_gh3MergeArray(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed array; preserves local-then-remote order + keyless passthrough |
+| `ghMergeMasters(base,local,remote,ctx)` | **Orchestrator**: merges every collection → `{ merged, conflicts }`. `odoo_quants` not merged (newest wins) |
+
+---
+
 ### Product Map Lookups
 
 | Function | Purpose |
