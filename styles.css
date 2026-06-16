@@ -25,6 +25,25 @@ h2 { margin-top: 28px; }
 .sidebar-nav-label { transition: opacity .15s; white-space: nowrap; overflow: hidden; }
 .sidebar.collapsed .sidebar-nav-label { opacity: 0; width: 0; overflow: hidden; }
 .sidebar.collapsed .sidebar-nav-btn { justify-content: center; padding: 9px 0; }
+/* Conflicts nav item + badge (Phase 3 merge-conflict review) */
+.sidebar-nav-conflicts { color: #fca5a5; }
+.sidebar-nav-conflicts:hover { background: #7f1d1d; color: #fff; }
+.sidebar-nav-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #dc2626; color: #fff; font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sidebar.collapsed .sidebar-nav-badge { position: absolute; margin: 0; transform: translate(10px,-10px); }
+.sidebar.collapsed .sidebar-nav-conflicts { position: relative; }
+/* Conflict review rows */
+.gh-conflict { border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.gh-conflict.resolved { border-color: #bbf7d0; background: #f0fdf4; }
+.gh-conflict-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.gh-conflict-where { font-weight: 700; color: #0f172a; font-size: 14px; }
+.gh-conflict-meta { font-size: 12px; color: #64748b; }
+.gh-conflict-tag { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: 2px 6px; border-radius: 6px; background: #fee2e2; color: #b91c1c; }
+.gh-conflict.resolved .gh-conflict-tag { background: #dcfce7; color: #15803d; }
+.gh-cand { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 6px; cursor: pointer; }
+.gh-cand:hover { border-color: #94a3b8; }
+.gh-cand.chosen { border-color: #2563eb; background: #eff6ff; }
+.gh-cand-val { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: #0f172a; word-break: break-word; }
+.gh-cand-who { font-size: 11px; color: #64748b; margin-top: 2px; }
 .sidebar-section-divider { padding: 14px 18px 4px; font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .1em; white-space: nowrap; overflow: hidden; flex-shrink: 0; }
 .sidebar.collapsed .sidebar-section-divider { padding: 14px 0 4px; text-align: center; font-size: 8px; }
 .sidebar-setup-scroll { flex: 1; overflow-y: auto; padding: 0 8px 12px; min-height: 0; }

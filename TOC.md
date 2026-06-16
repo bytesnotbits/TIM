@@ -237,6 +237,23 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ---
 
+### Conflict Review UI (Phase 3, v2.08.00)
+
+> Sidebar **Conflicts** nav item (hidden until `ghUnresolvedConflictCount() > 0`) with a red count badge → opens the review modal (`#ghConflictsModal`). Each conflict shows location + candidate values with provenance; clicking **Keep this** resolves it. Resolving writes the chosen value into the master, marks the entry resolved, and marks the push pending. When the **last** conflict is resolved it auto-pushes (Joe's rule); while some remain, **Push resolved now** publishes the resolved subset.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `_GH_ARRAY_ID_FIELDS` | Map of array collection → id field, for resolution write-back |
+| `ghRenderConflictBadge()` | Show/hide the sidebar Conflicts item + update count; called on load, sync, push, resolve |
+| `ghOpenConflictsModal()` / `ghCloseConflictsModal()` | Show/hide the review modal |
+| `_ghFmtConflictVal(v)` | Format a candidate value for display (deleted/empty/object/scalar), escaped |
+| `ghRenderConflictsList()` | Render the conflict rows (unresolved first) + footer |
+| `ghApplyResolution(entry, chosen)` | Write the chosen value back into the in-memory master (by collection/key/field; null = delete) |
+| `ghChooseCandidate(conflictId, idx)` | Resolve one conflict: apply + mark resolved + save + pending + re-render; auto-push when all resolved |
+| `ghPushResolved()` | "Push resolved now" — publish resolved changes while others remain |
+
+---
+
 ### Product Map Lookups
 
 | Function | Purpose |

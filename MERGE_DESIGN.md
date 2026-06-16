@@ -133,7 +133,16 @@ No fields to merge: provisional = newer side (or local for edit-vs-delete); emit
   never overwrites; true collisions logged to `conflicts.json` and pushed. A second
   concurrent race (head moves during the rebase write) fails cleanly with a 422 → "Sync then
   push" (not auto-retried — rare).
-- **Phase 3 (next):** conflict banner/notification + Conflicts review screen + resolution write-back.
+- **Phase 3 (done, v2.08.00):** sidebar **Conflicts** badge (hidden until unresolved > 0) → review
+  modal listing each conflict's candidates with provenance; **Keep this** writes the chosen value
+  back into the master and marks the entry resolved. Auto-push fires only when the last conflict is
+  resolved; **Push resolved now** publishes the resolved subset while others remain (per Joe — don't
+  hold resolved fixes hostage to ones needing field re-verification).
+
+## Status: feature complete (v2.08.00)
+
+All three phases shipped. Remaining non-goals stand: no automatic resolution of true conflicts,
+`odoo_quants` not merged, conflict-log pruning deferred.
 
 ## Open items / non-goals (v1)
 

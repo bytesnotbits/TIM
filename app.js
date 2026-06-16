@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.07.00";
+const APP_VERSION = "v2.08.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2367,6 +2367,7 @@ function ghSyncNow(silent) {
     ghMergeConflictEntries(asm.conflicts);
     ghMergeConflictEntries(res.conflicts);
     ghSaveConflictLog();
+    ghRenderConflictBadge();
 
     // Base = the repo state we merged against. SHAs = what the repo has now.
     TimDB.set(GH_BASE_KEY, remote).catch(function(){});
@@ -2393,7 +2394,7 @@ function ghSyncNow(silent) {
 
 function ghInit() {
   ghBindOnlineRetry();
-  ghLoadConflictLog();
+  ghLoadConflictLog().then(function() { ghRenderConflictBadge(); });
   ghLoadSettings().then(function(configured) {
     if (!configured) return;
     TimDB.get(GH_PENDING_KEY).then(function(pending) {
@@ -2710,6 +2711,143 @@ function ghMergeMasters(base, local, remote, ctx) {
   return { merged: merged, conflicts: conflicts };
 }
 
+// ===================================================================
+// CONFLICT REVIEW UI  (Phase 3 — see MERGE_DESIGN.md)
+// Sidebar badge + review modal + resolution write-back.
+// ===================================================================
+
+var _GH_ARRAY_ID_FIELDS = {
+  inventory_sessions: "sessionId", inventory_events: "eventId",
+  recount_sessions: "recountId", recount_movements: "movementId"
+};
+
+function ghRenderConflictBadge() {
+  var n = ghUnresolvedConflictCount();
+  var btn = $("sideNavConflicts"), badge = $("sideNavConflictsBadge");
+  if (!btn) return;
+  if (n > 0) { btn.classList.remove("hidden"); if (badge) badge.textContent = n > 99 ? "99+" : String(n); }
+  else { btn.classList.add("hidden"); }
+}
+
+function ghOpenConflictsModal() {
+  ghRenderConflictsList();
+  var m = $("ghConflictsModal");
+  if (m) m.classList.remove("hidden");
+}
+function ghCloseConflictsModal() {
+  var m = $("ghConflictsModal");
+  if (m) m.classList.add("hidden");
+}
+
+function _ghFmtConflictVal(v) {
+  if (v === null || v === undefined) return "<em>(deleted / removed)</em>";
+  if (typeof v === "object") {
+    var s = JSON.stringify(v);
+    if (s.length > 160) s = s.slice(0, 157) + "…";
+    return escapeHtml(s);
+  }
+  if (v === "") return "<em>(empty)</em>";
+  return escapeHtml(String(v));
+}
+
+function ghRenderConflictsList() {
+  var list = $("ghConflictsList"), empty = $("ghConflictsEmpty"), footMsg = $("ghConflictsFooterMsg"), pushBtn = $("ghConflictsPushBtn");
+  if (!list) return;
+  var entries = ghConflictLog.slice().sort(function(a, b) {
+    var ar = a.status === "resolved" ? 1 : 0, br = b.status === "resolved" ? 1 : 0;
+    return ar - br;
+  });
+  var unresolved = ghUnresolvedConflictCount();
+  if (empty) empty.style.display = entries.length ? "none" : "block";
+
+  list.innerHTML = entries.map(function(e) {
+    var resolved = e.status === "resolved";
+    var where = escapeHtml(e.collection) + " · " + escapeHtml(e.key) + (e.field ? " · " + escapeHtml(e.field) : "");
+    var typeLabel = e.type === "edit_vs_delete" ? "edit vs delete" : e.type;
+    var cands = (e.candidates || []).map(function(cand, idx) {
+      var who = [cand.user, cand.device].filter(Boolean).join(" @ ") || "unknown";
+      var when = cand.ts ? (" · " + escapeHtml(cand.ts)) : "";
+      var chosenCls = (resolved && _ghEqual(cand.value, e.chosenValue)) ? " chosen" : "";
+      var onclick = resolved ? "" : ' onclick="ghChooseCandidate(\'' + escapeHtml(e.conflictId).replace(/'/g, "\\'") + "', " + idx + ')"';
+      return '<div class="gh-cand' + chosenCls + '"' + onclick + '>' +
+        '<div style="flex:1;"><div class="gh-cand-val">' + _ghFmtConflictVal(cand.value) + '</div>' +
+        '<div class="gh-cand-who">' + escapeHtml(who) + when + '</div></div>' +
+        (resolved ? "" : '<button class="secondary" style="padding:4px 10px;font-size:12px;">Keep this</button>') +
+        '</div>';
+    }).join("");
+    return '<div class="gh-conflict' + (resolved ? " resolved" : "") + '">' +
+      '<div class="gh-conflict-head">' +
+        '<span class="gh-conflict-where">' + where + '</span>' +
+        '<span class="gh-conflict-tag">' + (resolved ? "resolved" : "needs review") + '</span>' +
+        '<span class="gh-conflict-meta">' + escapeHtml(typeLabel) + '</span>' +
+      '</div>' + cands + '</div>';
+  }).join("");
+
+  if (footMsg) footMsg.textContent = unresolved
+    ? (unresolved + " unresolved · resolved changes publish on the next push")
+    : (entries.length ? "All conflicts resolved." : "");
+  if (pushBtn) pushBtn.style.display = (unresolved < entries.length && entries.length) ? "" : "none";
+}
+
+// Write a resolved value back into the in-memory master.
+function ghApplyResolution(entry, chosen) {
+  var col = entry.collection, key = entry.key, field = entry.field;
+  var now = new Date().toISOString();
+  if (col === "product_map") {
+    if (field) { if (PRODUCT_MAP[key]) { PRODUCT_MAP[key][field] = chosen; PRODUCT_MAP[key].updated_at = now; } }
+    else if (chosen == null) { delete PRODUCT_MAP[key]; }
+    else { PRODUCT_MAP[key] = chosen; }
+    appData.product_map = PRODUCT_MAP;
+  } else if (col === "barcode_map") {
+    if (chosen == null) { delete BARCODE_MAP[key]; } else { BARCODE_MAP[key] = chosen; }
+    appData.barcode_map = BARCODE_MAP;
+  } else if (col === "history") {
+    var idx = (history.records || []).findIndex(function(r) { return normKey(r.serial || r.ref) === key; });
+    if (idx >= 0) {
+      if (field) { history.records[idx][field] = chosen; history.records[idx].updated_at = now; }
+      else if (chosen == null) { history.records.splice(idx, 1); }
+      else { history.records[idx] = chosen; }
+    } else if (!field && chosen != null) { history.records.push(chosen); }
+    appData.history = history;
+  } else {
+    var idField = _GH_ARRAY_ID_FIELDS[col];
+    if (!idField) return;
+    var arr = appData[col] || [];
+    var i = arr.findIndex(function(x) { return x && String(x[idField]) === String(key); });
+    if (field) { if (i >= 0) { arr[i][field] = chosen; arr[i].updated_at = now; } }
+    else if (chosen == null) { if (i >= 0) arr.splice(i, 1); }
+    else if (i >= 0) { arr[i] = chosen; }
+    else { arr.push(chosen); }
+    appData[col] = arr;
+  }
+}
+
+function ghChooseCandidate(conflictId, idx) {
+  var e = ghConflictLog.find(function(c) { return c.conflictId === conflictId; });
+  if (!e || e.status === "resolved") return;
+  var chosen = (e.candidates[idx] || {}).value;
+  ghApplyResolution(e, chosen);
+  e.status = "resolved";
+  e.resolvedAt = new Date().toISOString();
+  e.resolvedBy = { device: (ghConfig && ghConfig.deviceLabel) || "", user: timGetUsername() || "" };
+  e.chosenValue = chosen;
+  ghSaveConflictLog();
+  timSaveMasterCache();
+  ghMarkPendingPush();   // resolved change still needs publishing
+  ghBindOnlineRetry();
+  if (typeof renderAll === "function") renderAll();
+  ghRenderConflictBadge();
+  ghRenderConflictsList();
+  if (ghUnresolvedConflictCount() === 0) {
+    // Everything resolved → publish all now (Joe's rule).
+    ghSetStatus("All conflicts resolved — publishing to GitHub…", "info");
+    ghPushToGitHub({ auto: true });
+  }
+}
+
+// "Push resolved now" — publish resolved changes while some conflicts remain.
+function ghPushResolved() { ghPushToGitHub({ auto: true }); }
+
 // -- Phase 2: write-back (push local data to the repo) --------------
 
 function _ghUtf8Bytes(str) { return new TextEncoder().encode(str); }
@@ -2908,6 +3046,7 @@ function ghPushToGitHub(opts) {
             ghMergeConflictEntries(asm.conflicts);
             ghMergeConflictEntries(res.conflicts);
             ghSaveConflictLog();
+            ghRenderConflictBadge();
             TimDB.set(GH_BASE_KEY, remote).catch(function(){});
 
             // Recompute push inputs against the merged local + fresh remote SHAs.
@@ -2958,6 +3097,7 @@ function ghPushToGitHub(opts) {
     TimDB.set(GH_BASE_KEY, pushedPayload).catch(function(){}); // repo == local now → new merge base
     ghClearPendingPush(); // local is now on GitHub
     var uc = ghUnresolvedConflictCount();
+    ghRenderConflictBadge();
     ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
                 " — commit " + commitSha.slice(0, 7) + "." +
                 (uc ? " ⚠ " + uc + " conflict(s) need review." : ""), uc ? "err" : "ok");
