@@ -66,7 +66,7 @@ Then open http://localhost:5173. (See `.claude/launch.json`.) There are no tests
 
 ## Deployment
 
-Deployed as a PWA on **GitHub Pages** at https://bytesnotbits.github.io/TIM/, used on iPad in the warehouse. The default branch for PRs is `Telecom-Inventory-Manager`; active work is on `TIM-2.0`. `manifest.json` must use **absolute** `start_url`/`scope` URLs — relative `./` paths break the PWA on iOS for a GitHub Pages subdirectory repo. An iOS home-screen PWA has isolated storage: clearing Safari data does not clear it; the icon must be deleted and re-added.
+Deployed as a PWA on **GitHub Pages** at https://bytesnotbits.github.io/TIM/, used on iPad in the warehouse. **GitHub Pages builds the live site from the `TIM-2.0` branch** — so `git push origin TIM-2.0` is itself the deploy (Pages rebuilds in ~1 min; then "Check for Updates" in-app offers "Reload now"). `Telecom-Inventory-Manager` is the default/PR base branch only and typically runs versions behind — merging to it does **not** affect the live site. Verify what's deployed by fetching `https://bytesnotbits.github.io/TIM/app.js` and reading its `APP_VERSION`. `manifest.json` must use **absolute** `start_url`/`scope` URLs — relative `./` paths break the PWA on iOS for a GitHub Pages subdirectory repo. An iOS home-screen PWA has isolated storage: clearing Safari data does not clear it; the icon must be deleted and re-added.
 
 ## Data files in the repo
 
