@@ -75,6 +75,15 @@ values* is a true conflict. (Reuses the philosophy of the existing `previewMerge
 
 No fields to merge: provisional = newer side (or local for edit-vs-delete); emit a conflict entry.
 
+## Storage
+
+The conflict log is a normal managed file in the repo's `data/` folder — `data/conflicts.json` —
+built by `ghBuildDataFiles`, pushed in the **same atomic commit** as the data, and pulled back by
+`_ghAssembleRemote` on every sync. This is the shared source of truth all devices read/write. Each
+device also keeps a local mirror in IndexedDB (`GH_CONFLICTS_KEY`) so the badge/list survive reloads
+and work offline; every sync reconciles the mirror against the repo copy (deduped by `conflictId`,
+resolved-wins).
+
 ## Conflict entry shape (`data/conflicts.json`)
 
 ```js
