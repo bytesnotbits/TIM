@@ -203,7 +203,6 @@
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center;">
           <button id="clearMasterDataBtn" class="zone-clear-btn" onclick="clearMasterData()">Clear loaded data</button>
-          <button class="secondary" id="exportHistoryBtn" style="margin:0;">Export History JSON</button>
           <span id="historyStatus" style="font-size:12px;color:#64748b;"></span>
         </div>
       </div>
@@ -983,7 +982,6 @@
           <option value="none">None (bulk qty)</option>
         </select>
         <button class="secondary" onclick="prodRenderList()">Refresh</button>
-        <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
       </div>
       <div class="scroll">
         <table>
@@ -1542,7 +1540,6 @@
       </div>
       <div style="padding:14px 18px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #e5e7eb;margin-top:12px;">
         <button onclick="histMgrClose()" class="secondary" style="margin:0;">Close</button>
-        <button onclick="prodExportMasterJson()" style="background:#166534;margin:0;">Export Master JSON</button>
       </div>
     </div>
   </div>

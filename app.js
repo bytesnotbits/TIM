@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.08.00";
+const APP_VERSION = "v2.08.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -7155,20 +7155,6 @@ function prodShowItemHistory(itemNumber) {
 function prodCloseHistoryModal() {
   var m = $("prodHistoryModal");
   if (m) m.classList.add("hidden");
-}
-
-function prodExportMasterJson() {
-  appData.product_map = PRODUCT_MAP;
-  appData.history = history;
-  downloadText(
-    "Calix_Odoo_Converter_source_data.json",
-    JSON.stringify(buildExportPayload(), null, 2),
-    "application/json"
-  );
-  var banner = $("prodUploadSuccessBanner");
-  if (banner) banner.classList.add("hidden");
-  var statusEl = $("prodUploadStatus");
-  if (statusEl) statusEl.textContent = "Master JSON exported — replace your existing file with the downloaded copy.";
 }
 
 // ═══════════════════════════════════════════════════════════════════════

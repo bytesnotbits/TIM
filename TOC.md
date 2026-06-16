@@ -637,7 +637,6 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `prodShowUploadDiff(diff)` | Show upload diff preview |
 | `prodApplyUpload()` | Apply upload changes |
 | `prodCancelUpload()` | Cancel upload |
-| `prodExportMasterJson()` | Download current master JSON |
 | `prodToggleNotes()` | Toggle help text panel |
 
 ---
