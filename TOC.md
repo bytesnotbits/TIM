@@ -178,16 +178,19 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ### GitHub Data Sync (`gh*`)
 
-> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit; unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing, and conflicts (repo changed since last pull) require explicit overwrite confirmation. The service worker bypasses `api.github.com` so responses are never cached.
+> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files) and is atomic in memory (current data is only replaced after every fetch succeeds). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit (a drop mid-push leaves the repo untouched); unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing. Conflicts (repo changed since last pull) require explicit overwrite confirmation in a **manual** push and are **blocked** in an **auto** push. The three history-commit actions (Mark as Imported / Append to History, Add Batch to History Only, Merge Existing Records) fire an auto push; offline / timed-out pushes are deferred via `GH_PENDING_KEY` and flushed on the `online` event. All fetches are timeout-bounded (`ghFetch`). The service worker bypasses `api.github.com` so responses are never cached. **Planned next:** union auto-merge of concurrent changes (keep both sides; escalate only same-record edits).
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` | TimDB keys — grep `const GH_CONFIG_KEY` |
+| `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` / `GH_PENDING_KEY` | TimDB keys — grep `const GH_CONFIG_KEY`; `GH_PENDING_KEY` = unpushed-local-changes flag (deferred push) |
 | `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad, deviceLabel }` + PAT |
 | `ghConfigured()` | True when token + owner + repo are set |
 | `ghSetStatus(msg, state)` | Update sync status line on the Data Import card |
+| `ghMarkPendingPush()` / `ghClearPendingPush()` | Set/clear the deferred-push flag (local has/has-not changes not yet on GitHub) |
+| `ghBindOnlineRetry()` | Bind a one-time `online` listener that flushes a pending push on reconnect |
 | `ghHeaders(accept)` | Build auth headers for the GitHub API |
-| `ghApi(path, accept, tokenOverride)` | `fetch` wrapper for api.github.com (no-store) |
+| `ghFetch(url, options)` | `fetch` wrapper with AbortController timeout + 1 retry; normalizes timeout→TypeError so callers defer & retry. All GitHub fetches route through this so a hung connection can't stick `ghSyncInFlight` |
+| `ghApi(path, accept, tokenOverride)` | api.github.com GET via `ghFetch` (no-store) |
 | `ghLoadSettings()` | Restore config + token from IDB on startup |
 | `ghOpenConfig()` / `ghCloseConfig()` | Show/hide the config modal |
 | `ghTestConnection()` | GET `/repos/{o}/{r}` with form values; report ok/401/404 |
@@ -195,16 +198,16 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghClearConfig()` | Remove token/config/SHAs from this device |
 | `ghListDataDir(allowMissing)` | List `data/` folder contents (names + blob SHAs); `allowMissing` returns `[]` on 404 |
 | `ghFetchJsonFile(path)` | Fetch one file as raw JSON (`vnd.github.raw+json`) |
-| `ghSyncNow(silent)` | **Main pull**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs |
-| `ghInit()` | Startup hook: load settings, auto-sync if `autoLoad` |
+| `ghSyncNow(silent)` | **Main pull**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs. Atomic: `loadSourceData` runs only after every fetch succeeds, so an interrupted pull never overwrites current data |
+| `ghInit()` | Startup hook: load settings; if a push is pending, PUSH (not pull, which would clobber the offline edit), else auto-sync if `autoLoad`. Runs after `timLoadMasterCache()` resolves |
 | `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
 | `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data (shared by seed + push) |
 | `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
 | `_ghUtf8Bytes(str)` / `_ghB64FromBytes(bytes)` | UTF-8 encode / chunked base64 encode |
 | `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
-| `ghApiWrite(method, path, body)` | JSON-body fetch wrapper for POST/PATCH to api.github.com |
+| `ghApiWrite(method, path, body)` | JSON-body POST/PATCH to api.github.com via `ghFetch` |
 | `_ghCheckWrite(res, what)` | Shared write-response check; maps 403/404→token perms, 409/422→branch conflict |
-| `ghPushToGitHub()` | **Main push**: build files → diff SHAs → confirm (warn on conflicts) → blobs → tree → commit → ref. Prompts for username if blank; commit message includes `deviceLabel` (set it to the token name for attribution) |
+| `ghPushToGitHub(opts)` | **Main push**: build files → diff SHAs → confirm → blobs → tree → commit → ref. `opts.auto` (fired by the three history-commit actions) skips the confirm but **blocks on conflict** (won't overwrite another device) and no-ops when unconfigured/offline. Offline or a mid-push drop marks pending + defers to reconnect. Prompts for username if blank; commit message includes `deviceLabel` |
 
 ---
 

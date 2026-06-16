@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.04.00";
+const APP_VERSION = "v2.05.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1426,7 +1426,10 @@ $("markImportedBtn").addEventListener("click", () => {
   timSaveMasterCache();
   $("historyStatus").textContent = `${history.records.length} history records in memory. Export updated JSON to save it.`;
   renderAll();
-  alert("History updated in memory. Click Export Current History JSON to save it.");
+  alert(ghConfigured()
+    ? "History updated. Pushing the master file to GitHub now — watch the GitHub panel for status."
+    : "History updated in memory. Click Export Current History JSON to save it.");
+  ghPushToGitHub({ auto: true });
 });
 $("exportHistoryBtn").addEventListener("click", () => {
   appData.product_map = PRODUCT_MAP;
@@ -1451,7 +1454,10 @@ $("appendHistoryOnlyBtn").addEventListener("click", () => {
   $("historyStatus").textContent = history.records.length + " history records in memory. Export updated JSON to save it.";
   renderAll();
   scheduleBatchDraftSave();
-  alert("History updated in memory. Any blocked rows were left in the batch for review.");
+  alert(ghConfigured()
+    ? "History updated. Pushing the master file to GitHub now — watch the GitHub panel for status. Any blocked rows were left in the batch for review."
+    : "History updated in memory. Any blocked rows were left in the batch for review.");
+  ghPushToGitHub({ auto: true });
 });
 $("mergeExistingBtn").addEventListener("click", () => {
   const mergeRows = currentBatch.filter(r => r.status === "merge_candidate");
@@ -1493,10 +1499,13 @@ $("mergeExistingBtn").addEventListener("click", () => {
   currentBatch = currentBatch.filter(r => r.status !== "merge_candidate");
   lastExportRows = [];
   importedPending = false;
+  timSaveMasterCache();
   $("historyStatus").textContent = history.records.length + " history records in memory. Export updated JSON to save it.";
   renderAll();
   scheduleBatchDraftSave();
-  alert("Merged " + mergedCount + " records. " + conflictCount + " rows need review.");
+  alert("Merged " + mergedCount + " records. " + conflictCount + " rows need review." +
+    (ghConfigured() ? " Pushing the master file to GitHub now — watch the GitHub panel for status." : ""));
+  ghPushToGitHub({ auto: true });
 });
 $("exportBlockedBtn").addEventListener("click", () => {
   const rows = currentBatch.filter(r => r.status === "blocked");
@@ -2056,11 +2065,32 @@ async function checkForUpdate() {
 const GH_CONFIG_KEY = "tim_gh_config_v1";   // { owner, repo, branch, autoLoad }
 const GH_TOKEN_KEY  = "tim_gh_token_v1";    // fine-grained PAT string
 const GH_SHAS_KEY   = "tim_gh_shas_v1";     // { "data/<file>": blobSha }
+const GH_PENDING_KEY = "tim_gh_pending_push_v1"; // true when local master has changes not yet pushed
 const GH_DATA_DIR   = "data";
 
 var ghConfig = null;
 var ghToken = null;
 var ghSyncInFlight = false;
+var ghOnlineRetryBound = false;
+
+// A push couldn't complete (offline, or a network drop mid-push). Remember
+// it so we can flush the local master to GitHub once connectivity returns.
+function ghMarkPendingPush() { TimDB.set(GH_PENDING_KEY, true).catch(function(){}); }
+function ghClearPendingPush() { TimDB.remove(GH_PENDING_KEY).catch(function(){}); }
+
+// When the device comes back online, flush any deferred push. Bound once.
+function ghBindOnlineRetry() {
+  if (ghOnlineRetryBound || typeof window.addEventListener !== "function") return;
+  ghOnlineRetryBound = true;
+  window.addEventListener("online", function() {
+    if (!ghConfigured()) return;
+    TimDB.get(GH_PENDING_KEY).then(function(pending) {
+      if (!pending) return;
+      ghSetStatus("Back online — pushing pending changes to GitHub…", "info");
+      ghPushToGitHub({ auto: true });
+    }).catch(function(){});
+  });
+}
 
 function ghConfigured() {
   return !!(ghToken && ghConfig && ghConfig.owner && ghConfig.repo);
@@ -2083,12 +2113,50 @@ function ghHeaders(accept) {
   };
 }
 
+// All GitHub fetches go through here so a spotty connection can never hang
+// indefinitely (which would leave ghSyncInFlight stuck and block all future
+// syncs/pushes until reload). Each attempt is bounded by an AbortController
+// timeout; one retry covers a transient blip. A timeout is normalized to a
+// TypeError so callers treat it like a connectivity failure (defer + retry on
+// reconnect), not a hard error.
+var GH_FETCH_TIMEOUT_MS = 20000;
+var GH_FETCH_RETRIES = 1;
+
+function ghFetch(url, options) {
+  options = options || {};
+  function attempt(triesLeft) {
+    var opts = Object.assign({}, options);
+    var ctrl = (typeof AbortController === "function") ? new AbortController() : null;
+    var timer = null;
+    if (ctrl) {
+      opts.signal = ctrl.signal;
+      timer = setTimeout(function() { ctrl.abort(); }, GH_FETCH_TIMEOUT_MS);
+    }
+    return fetch(url, opts).then(function(res) {
+      if (timer) clearTimeout(timer);
+      return res;
+    }, function(err) {
+      if (timer) clearTimeout(timer);
+      var transient = err && (err.name === "AbortError" || err.name === "TypeError");
+      if (transient && triesLeft > 0) return attempt(triesLeft - 1);
+      if (err && err.name === "AbortError") {
+        var e = new Error("Request timed out after " + Math.round(GH_FETCH_TIMEOUT_MS / 1000) +
+                          "s — the connection looks unstable.");
+        e.name = "TypeError";
+        throw e;
+      }
+      throw err;
+    });
+  }
+  return attempt(GH_FETCH_RETRIES);
+}
+
 function ghApi(path, accept, tokenOverride) {
   var saved = ghToken;
   if (tokenOverride) ghToken = tokenOverride;
   var headers = ghHeaders(accept);
   ghToken = saved;
-  return fetch("https://api.github.com" + path, { headers: headers, cache: "no-store" });
+  return ghFetch("https://api.github.com" + path, { headers: headers, cache: "no-store" });
 }
 
 function ghLoadSettings() {
@@ -2278,8 +2346,25 @@ function ghSyncNow(silent) {
 }
 
 function ghInit() {
+  ghBindOnlineRetry();
   ghLoadSettings().then(function(configured) {
-    if (configured && ghConfig.autoLoad !== false) ghSyncNow(true);
+    if (!configured) return;
+    TimDB.get(GH_PENDING_KEY).then(function(pending) {
+      if (pending) {
+        // Local master holds offline edits not yet on GitHub. PUSH them — do
+        // NOT auto-pull, which would overwrite the edits before they're saved.
+        if (navigator.onLine) {
+          ghSetStatus("Unpushed local changes detected — pushing to GitHub…", "info");
+          ghPushToGitHub({ auto: true });
+        } else {
+          ghSetStatus("Offline — local changes will push to GitHub automatically when you reconnect.", "info");
+        }
+      } else if (ghConfig.autoLoad !== false) {
+        ghSyncNow(true);
+      }
+    }).catch(function() {
+      if (ghConfig.autoLoad !== false) ghSyncNow(true);
+    });
   });
 }
 
@@ -2356,7 +2441,7 @@ function ghBlobSha(content) {
 function ghApiWrite(method, path, body) {
   var headers = ghHeaders();
   headers["Content-Type"] = "application/json";
-  return fetch("https://api.github.com" + path, {
+  return ghFetch("https://api.github.com" + path, {
     method: method,
     headers: headers,
     cache: "no-store",
@@ -2375,11 +2460,24 @@ function _ghCheckWrite(res, what) {
   throw new Error(what + " failed (" + res.status + ").");
 }
 
-function ghPushToGitHub() {
+function ghPushToGitHub(opts) {
+  opts = opts || {};
   if (ghSyncInFlight) return;
-  if (!ghConfigured()) { ghOpenConfig(); return; }
+  if (!ghConfigured()) { if (opts.auto) return; ghOpenConfig(); return; }
   if (!Object.keys(PRODUCT_MAP).length && !(history.records || []).length) {
+    if (opts.auto) return;
     alert("Nothing to push — no master data is loaded on this device. Load your master JSON (or Sync) first.");
+    return;
+  }
+  // Offline: don't fire a doomed network call. Remember the change and flush
+  // it on reconnect. navigator.onLine === false is a reliable "no network".
+  if (!navigator.onLine) {
+    ghMarkPendingPush();
+    ghBindOnlineRetry();
+    ghSetStatus(opts.auto
+      ? "Offline — master saved locally; it will push to GitHub automatically when you reconnect."
+      : "You're offline — can't push right now. Your data is saved locally and will push automatically when you reconnect.",
+      "info");
     return;
   }
   if (!timGetUsername()) {
@@ -2432,19 +2530,35 @@ function ghPushToGitHub() {
     if (!changed.length) {
       ghSetStatus("Already up to date — nothing to push.", "ok");
       TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+      ghClearPendingPush(); // local == remote, no deferred work outstanding
       throw { _ghDone: true };
     }
-    var msg = "Push " + changed.length + " file(s) to " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch + "?\n\n" +
-      changed.map(function(c) { return "• " + c.name; }).join("\n");
-    if (conflicts.length) {
-      msg += "\n\n⚠ GitHub has versions of " + conflicts.join(", ") + " that this device never pulled. " +
-             "Pushing OVERWRITES them (the old versions stay recoverable in commit history).";
-    }
-    if (!confirm(msg)) {
-      ghSetStatus("Push cancelled.", "info");
+    // Auto mode never silently overwrites another device's work. If GitHub
+    // has changes this device never pulled, block and require a conscious
+    // manual push (which shows the overwrite warning). Keep the change marked
+    // pending so a later startup PUSHES it rather than pulling and clobbering
+    // the local edit. (The union auto-merge that resolves this cleanly is the
+    // planned next step.)
+    if (opts.auto && conflicts.length) {
+      ghMarkPendingPush();
+      ghBindOnlineRetry();
+      ghSetStatus("Not auto-pushed — GitHub has newer changes to " + conflicts.join(", ") +
+        " from another device. Your work is saved locally. Open the GitHub panel and use Push to review and merge manually.", "err");
       throw { _ghDone: true };
     }
-    ghSetStatus("Pushing " + changed.length + " file(s)…", "info");
+    if (!opts.auto) {
+      var msg = "Push " + changed.length + " file(s) to " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch + "?\n\n" +
+        changed.map(function(c) { return "• " + c.name; }).join("\n");
+      if (conflicts.length) {
+        msg += "\n\n⚠ GitHub has versions of " + conflicts.join(", ") + " that this device never pulled. " +
+               "Pushing OVERWRITES them (the old versions stay recoverable in commit history).";
+      }
+      if (!confirm(msg)) {
+        ghSetStatus("Push cancelled.", "info");
+        throw { _ghDone: true };
+      }
+    }
+    ghSetStatus((opts.auto ? "Auto-pushing " : "Pushing ") + changed.length + " file(s)…", "info");
 
     // Git Data API: blobs → tree → commit → ref. One atomic commit for all
     // files; the ref update fails cleanly if someone else pushed mid-flight.
@@ -2491,11 +2605,22 @@ function ghPushToGitHub() {
       });
   }).then(function(commitSha) {
     TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+    ghClearPendingPush(); // local is now on GitHub
     ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
                 " — commit " + commitSha.slice(0, 7) + ".", "ok");
   }).catch(function(err) {
     if (!err || !err._ghDone) {
-      ghSetStatus("Push failed: " + (err && err.message ? err.message : err), "err");
+      // A network drop mid-push (fetch rejects as TypeError) or going offline
+      // leaves local changes unpushed — defer and retry on reconnect. Other
+      // failures (auth, conflict) won't be fixed by reconnecting, so surface
+      // them without scheduling a retry.
+      if (!navigator.onLine || (err && err.name === "TypeError")) {
+        ghMarkPendingPush();
+        ghBindOnlineRetry();
+        ghSetStatus("Push interrupted — looks like the connection dropped. Your data is saved locally and will push automatically when you reconnect.", "info");
+      } else {
+        ghSetStatus("Push failed: " + (err && err.message ? err.message : err), "err");
+      }
     }
   }).finally(function() {
     ghSyncInFlight = false;
@@ -7984,8 +8109,9 @@ try {
   }
 } catch(e) {}
 
-timLoadMasterCache();
-ghInit();
+// ghInit runs after the local master cache loads, so a pending offline push
+// reads the just-restored data (and a normal startup still auto-syncs).
+timLoadMasterCache().then(ghInit, ghInit);
 timInitUsername();
 renderInvSessionUI();
 invAutoRestoreSession();
