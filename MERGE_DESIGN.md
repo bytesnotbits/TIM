@@ -128,9 +128,12 @@ No fields to merge: provisional = newer side (or local for edit-vs-delete); emit
 - **Phase 2a (done, v2.06.00):** pull merges instead of clobbering; `conflicts.json` plumbed into
   build/pull; merge **base** persisted locally (`GH_BASE_KEY`) on pull + push success.
   Note: base is the last-synced payload, not fetched-by-SHA — simpler and GC-proof.
-- **Phase 2b (next):** push rebases on conflict (fetch remote content → merge → push merged)
-  instead of blocking.
-- **Phase 3:** conflict banner/notification + Conflicts review screen + resolution write-back.
+- **Phase 2b (done, v2.07.00):** push rebases on conflict — fetches remote content,
+  `ghMergeMasters`, then `_ghWriteCommit`s the merged union (auto + manual). Never blocks,
+  never overwrites; true collisions logged to `conflicts.json` and pushed. A second
+  concurrent race (head moves during the rebase write) fails cleanly with a 422 → "Sync then
+  push" (not auto-retried — rare).
+- **Phase 3 (next):** conflict banner/notification + Conflicts review screen + resolution write-back.
 
 ## Open items / non-goals (v1)
 

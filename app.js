@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.06.00";
+const APP_VERSION = "v2.07.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2759,6 +2759,53 @@ function _ghCheckWrite(res, what) {
   throw new Error(what + " failed (" + res.status + ").");
 }
 
+// Write a set of changed files as one atomic commit (blobs → tree → commit →
+// ref). Returns the new commit SHA. The ref PATCH fails cleanly (422) if the
+// branch moved since headSha was read, so a mid-flight race never corrupts.
+function _ghWriteCommit(repoBase, changed) {
+  return ghApi(repoBase + "/git/ref/heads/" + encodeURIComponent(ghConfig.branch))
+    .then(function(res) { return _ghCheckWrite(res, "Reading branch head"); })
+    .then(function(ref) {
+      var headSha = ref.object.sha;
+      return ghApi(repoBase + "/git/commits/" + headSha)
+        .then(function(res) { return _ghCheckWrite(res, "Reading head commit"); })
+        .then(function(commit) {
+          return Promise.all(changed.map(function(c) {
+            return ghApiWrite("POST", repoBase + "/git/blobs", {
+              content: _ghB64FromBytes(_ghUtf8Bytes(c.content)),
+              encoding: "base64"
+            }).then(function(res) { return _ghCheckWrite(res, "Uploading " + c.name); });
+          })).then(function(blobs) {
+            return ghApiWrite("POST", repoBase + "/git/trees", {
+              base_tree: commit.tree.sha,
+              tree: changed.map(function(c, i) {
+                return { path: c.path, mode: "100644", type: "blob", sha: blobs[i].sha };
+              })
+            });
+          }).then(function(res) { return _ghCheckWrite(res, "Building tree"); })
+          .then(function(tree) {
+            var user = timGetUsername() || "TIM user";
+            var label = (ghConfig.deviceLabel || "").trim();
+            return ghApiWrite("POST", repoBase + "/git/commits", {
+              message: "TIM: " + user + (label ? " @ " + label : "") + " — data push (" + APP_VERSION + ")",
+              tree: tree.sha,
+              parents: [headSha],
+              author: {
+                name: user,
+                email: user.toLowerCase().replace(/[^a-z0-9._-]/g, "_") + "@tim-pwa.local"
+              }
+            });
+          }).then(function(res) { return _ghCheckWrite(res, "Creating commit"); })
+          .then(function(newCommit) {
+            return ghApiWrite("PATCH", repoBase + "/git/refs/heads/" + encodeURIComponent(ghConfig.branch), {
+              sha: newCommit.sha
+            }).then(function(res) { return _ghCheckWrite(res, "Updating branch"); })
+            .then(function() { return newCommit.sha; });
+          });
+        });
+    });
+}
+
 function ghPushToGitHub(opts) {
   opts = opts || {};
   if (ghSyncInFlight) return;
@@ -2833,82 +2880,87 @@ function ghPushToGitHub(opts) {
       ghClearPendingPush(); // local == remote, no deferred work outstanding
       throw { _ghDone: true };
     }
-    // Auto mode never silently overwrites another device's work. If GitHub
-    // has changes this device never pulled, block and require a conscious
-    // manual push (which shows the overwrite warning). Keep the change marked
-    // pending so a later startup PUSHES it rather than pulling and clobbering
-    // the local edit. (The union auto-merge that resolves this cleanly is the
-    // planned next step.)
-    if (opts.auto && conflicts.length) {
-      ghMarkPendingPush();
-      ghBindOnlineRetry();
-      ghSetStatus("Not auto-pushed — GitHub has newer changes to " + conflicts.join(", ") +
-        " from another device. Your work is saved locally. Open the GitHub panel and use Push to review and merge manually.", "err");
-      throw { _ghDone: true };
+    // Conflict — the repo moved since this device last pulled. Don't overwrite
+    // and don't block: REBASE. Fetch remote content, 3-way merge it into local
+    // (both sides survive; true collisions logged to conflicts.json), then push
+    // the merged union. Works the same for auto and manual pushes.
+    if (conflicts.length) {
+      ghSetStatus("Merging " + conflicts.length + " remote change(s) before pushing…", "info");
+      return ghListDataDir(true).then(function(listing) {
+        var files = (listing || []).filter(function(f) { return f.type === "file" && /\.json$/i.test(f.name); });
+        var remoteMeta = {};
+        files.forEach(function(f) { remoteMeta[f.name.toLowerCase()] = f; });
+        return Promise.all(files.map(function(f) {
+          return ghFetchJsonFile(f.path).then(function(json) { return { name: f.name.toLowerCase(), json: json }; });
+        })).then(function(fetched) {
+          var asm = _ghAssembleRemote(fetched);
+          var remote = asm.payload;
+          if (!asm.hadHistoryShards) remote.history = history;
+          return TimDB.get(GH_BASE_KEY).then(function(base) {
+            var ctx = {
+              local:  { device: (ghConfig.deviceLabel || "this device"), user: timGetUsername() || "" },
+              remote: { device: "repo", user: "" },
+              now: new Date().toISOString()
+            };
+            var res = ghMergeMasters(base || {}, buildExportPayload(), remote, ctx);
+            loadSourceData(res.merged, "GitHub merge (push rebase)");
+            timSaveMasterCache();
+            ghMergeConflictEntries(asm.conflicts);
+            ghMergeConflictEntries(res.conflicts);
+            ghSaveConflictLog();
+            TimDB.set(GH_BASE_KEY, remote).catch(function(){});
+
+            // Recompute push inputs against the merged local + fresh remote SHAs.
+            local = ghBuildDataFiles();
+            pushedPayload = buildExportPayload();
+            names = Object.keys(local);
+            changed = []; newShas = {};
+            return Promise.all(names.map(function(n) {
+              return ghBlobSha(local[n]).then(function(sha) { return { name: n, sha: sha }; });
+            })).then(function(localShas2) {
+              localShas2.forEach(function(ls) {
+                var path = GH_DATA_DIR + "/" + ls.name;
+                var r = remoteMeta[ls.name];
+                newShas[path] = ls.sha;
+                if (r && r.sha === ls.sha) return;
+                changed.push({ name: ls.name, path: path, content: local[ls.name], localSha: ls.sha });
+              });
+              Object.keys(remoteMeta).forEach(function(n) {
+                var p = GH_DATA_DIR + "/" + n;
+                if (!(p in newShas)) newShas[p] = remoteMeta[n].sha;
+              });
+              if (!changed.length) {
+                ghSetStatus("Merged with GitHub — already up to date.", "ok");
+                TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+                ghClearPendingPush();
+                throw { _ghDone: true };
+              }
+              ghSetStatus("Pushing merged result (" + changed.length + " file(s))…", "info");
+              return _ghWriteCommit(repoBase, changed);
+            });
+          });
+        });
+      });
     }
+
     if (!opts.auto) {
       var msg = "Push " + changed.length + " file(s) to " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch + "?\n\n" +
         changed.map(function(c) { return "• " + c.name; }).join("\n");
-      if (conflicts.length) {
-        msg += "\n\n⚠ GitHub has versions of " + conflicts.join(", ") + " that this device never pulled. " +
-               "Pushing OVERWRITES them (the old versions stay recoverable in commit history).";
-      }
       if (!confirm(msg)) {
         ghSetStatus("Push cancelled.", "info");
         throw { _ghDone: true };
       }
     }
     ghSetStatus((opts.auto ? "Auto-pushing " : "Pushing ") + changed.length + " file(s)…", "info");
-
-    // Git Data API: blobs → tree → commit → ref. One atomic commit for all
-    // files; the ref update fails cleanly if someone else pushed mid-flight.
-    return ghApi(repoBase + "/git/ref/heads/" + encodeURIComponent(ghConfig.branch))
-      .then(function(res) { return _ghCheckWrite(res, "Reading branch head"); })
-      .then(function(ref) {
-        var headSha = ref.object.sha;
-        return ghApi(repoBase + "/git/commits/" + headSha)
-          .then(function(res) { return _ghCheckWrite(res, "Reading head commit"); })
-          .then(function(commit) {
-            return Promise.all(changed.map(function(c) {
-              return ghApiWrite("POST", repoBase + "/git/blobs", {
-                content: _ghB64FromBytes(_ghUtf8Bytes(c.content)),
-                encoding: "base64"
-              }).then(function(res) { return _ghCheckWrite(res, "Uploading " + c.name); });
-            })).then(function(blobs) {
-              return ghApiWrite("POST", repoBase + "/git/trees", {
-                base_tree: commit.tree.sha,
-                tree: changed.map(function(c, i) {
-                  return { path: c.path, mode: "100644", type: "blob", sha: blobs[i].sha };
-                })
-              });
-            }).then(function(res) { return _ghCheckWrite(res, "Building tree"); })
-            .then(function(tree) {
-              var user = timGetUsername() || "TIM user";
-              var label = (ghConfig.deviceLabel || "").trim();
-              return ghApiWrite("POST", repoBase + "/git/commits", {
-                message: "TIM: " + user + (label ? " @ " + label : "") + " — data push (" + APP_VERSION + ")",
-                tree: tree.sha,
-                parents: [headSha],
-                author: {
-                  name: user,
-                  email: user.toLowerCase().replace(/[^a-z0-9._-]/g, "_") + "@tim-pwa.local"
-                }
-              });
-            }).then(function(res) { return _ghCheckWrite(res, "Creating commit"); })
-            .then(function(newCommit) {
-              return ghApiWrite("PATCH", repoBase + "/git/refs/heads/" + encodeURIComponent(ghConfig.branch), {
-                sha: newCommit.sha
-              }).then(function(res) { return _ghCheckWrite(res, "Updating branch"); })
-              .then(function() { return newCommit.sha; });
-            });
-          });
-      });
+    return _ghWriteCommit(repoBase, changed);
   }).then(function(commitSha) {
     TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
     TimDB.set(GH_BASE_KEY, pushedPayload).catch(function(){}); // repo == local now → new merge base
     ghClearPendingPush(); // local is now on GitHub
+    var uc = ghUnresolvedConflictCount();
     ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
-                " — commit " + commitSha.slice(0, 7) + ".", "ok");
+                " — commit " + commitSha.slice(0, 7) + "." +
+                (uc ? " ⚠ " + uc + " conflict(s) need review." : ""), uc ? "err" : "ok");
   }).catch(function(err) {
     if (!err || !err._ghDone) {
       // A network drop mid-push (fetch rejects as TypeError) or going offline

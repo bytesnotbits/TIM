@@ -213,7 +213,8 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
 | `ghApiWrite(method, path, body)` | JSON-body POST/PATCH to api.github.com via `ghFetch` |
 | `_ghCheckWrite(res, what)` | Shared write-response check; maps 403/404→token perms, 409/422→branch conflict |
-| `ghPushToGitHub(opts)` | **Main push**: build files → diff SHAs → confirm → blobs → tree → commit → ref. `opts.auto` (fired by the three history-commit actions) skips the confirm but **blocks on conflict** (won't overwrite another device) and no-ops when unconfigured/offline. Offline or a mid-push drop marks pending + defers to reconnect. On success saves `GH_BASE_KEY` (= pushed payload). Prompts for username if blank; commit message includes `deviceLabel`. *(Push-rebase on conflict = Phase 2b, pending.)* |
+| `_ghWriteCommit(repoBase, changed)` | Atomic write of changed files: blobs → tree → commit → ref; returns commit SHA. Shared by normal + rebase push paths |
+| `ghPushToGitHub(opts)` | **Main push**: build files → diff SHAs → **on conflict, REBASE** (fetch remote → `ghMergeMasters` → push the merged union; both sides survive, collisions logged to `conflicts.json`) → else confirm (manual) → `_ghWriteCommit`. `opts.auto` skips the confirm; no-ops when unconfigured/offline. Offline / mid-push drop marks pending + defers to reconnect. Saves `GH_BASE_KEY` on success. Prompts for username if blank; commit message includes `deviceLabel` |
 
 ---
 
