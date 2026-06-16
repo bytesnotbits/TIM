@@ -182,7 +182,11 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` / `GH_PENDING_KEY` | TimDB keys — grep `const GH_CONFIG_KEY`; `GH_PENDING_KEY` = unpushed-local-changes flag (deferred push) |
+| `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` / `GH_PENDING_KEY` / `GH_BASE_KEY` / `GH_CONFLICTS_KEY` | TimDB keys — grep `const GH_CONFIG_KEY`; `GH_PENDING_KEY` = unpushed-changes flag; `GH_BASE_KEY` = last-synced payload (3-way merge base); `GH_CONFLICTS_KEY` = local conflict log |
+| `ghConflictLog` | In-memory conflict-log array; mirrors `data/conflicts.json` |
+| `ghLoadConflictLog()` / `ghSaveConflictLog()` | Load/persist the conflict log (TimDB) |
+| `ghUnresolvedConflictCount()` | Count of `status !== "resolved"` entries (for the status line / badge) |
+| `ghMergeConflictEntries(incoming)` | Fold new/pulled conflict entries into the log, deduped by `conflictId` (resolved wins) |
 | `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad, deviceLabel }` + PAT |
 | `ghConfigured()` | True when token + owner + repo are set |
 | `ghSetStatus(msg, state)` | Update sync status line on the Data Import card |
@@ -198,16 +202,18 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghClearConfig()` | Remove token/config/SHAs from this device |
 | `ghListDataDir(allowMissing)` | List `data/` folder contents (names + blob SHAs); `allowMissing` returns `[]` on 404 |
 | `ghFetchJsonFile(path)` | Fetch one file as raw JSON (`vnd.github.raw+json`) |
-| `ghSyncNow(silent)` | **Main pull**: list → fetch all → assemble payload → `loadSourceData()` → save SHAs. Atomic: `loadSourceData` runs only after every fetch succeeds, so an interrupted pull never overwrites current data |
+| `ghSyncNow(silent)` | **Main pull = 3-way merge** (v2.06.00): list → fetch all → assemble remote → `ghMergeMasters(base, local, remote)` → `loadSourceData(merged)` → log conflicts + pull repo `conflicts.json` → save base(=remote) & SHAs → mark pending if merged has local-only changes. Atomic; no longer clobbers local. |
+| `_ghAssembleRemote(fetched)` | Assemble fetched repo files → `{ payload, conflicts, hadHistoryShards }` (shared by pull + push-rebase) |
+| `_ghPayloadDiffers(a,b)` | Cheap per-collection deep-compare; true if merged has changes not yet in the repo |
 | `ghInit()` | Startup hook: load settings; if a push is pending, PUSH (not pull, which would clobber the offline edit), else auto-sync if `autoLoad`. Runs after `timLoadMasterCache()` resolves |
 | `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
-| `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data (shared by seed + push) |
+| `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data, incl. `conflicts.json` (shared by seed + push) |
 | `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
 | `_ghUtf8Bytes(str)` / `_ghB64FromBytes(bytes)` | UTF-8 encode / chunked base64 encode |
 | `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
 | `ghApiWrite(method, path, body)` | JSON-body POST/PATCH to api.github.com via `ghFetch` |
 | `_ghCheckWrite(res, what)` | Shared write-response check; maps 403/404→token perms, 409/422→branch conflict |
-| `ghPushToGitHub(opts)` | **Main push**: build files → diff SHAs → confirm → blobs → tree → commit → ref. `opts.auto` (fired by the three history-commit actions) skips the confirm but **blocks on conflict** (won't overwrite another device) and no-ops when unconfigured/offline. Offline or a mid-push drop marks pending + defers to reconnect. Prompts for username if blank; commit message includes `deviceLabel` |
+| `ghPushToGitHub(opts)` | **Main push**: build files → diff SHAs → confirm → blobs → tree → commit → ref. `opts.auto` (fired by the three history-commit actions) skips the confirm but **blocks on conflict** (won't overwrite another device) and no-ops when unconfigured/offline. Offline or a mid-push drop marks pending + defers to reconnect. On success saves `GH_BASE_KEY` (= pushed payload). Prompts for username if blank; commit message includes `deviceLabel`. *(Push-rebase on conflict = Phase 2b, pending.)* |
 
 ---
 

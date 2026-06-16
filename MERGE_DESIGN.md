@@ -125,8 +125,11 @@ No fields to merge: provisional = newer side (or local for edit-vs-delete); emit
 - **Phase 1 (this step):** pure 3-way merge engine + fixture tests. No repo/UI changes.
   - `ghMergeMasters(base, local, remote, ctx)` → `{ merged, conflicts }`
   - `_gh3MergeCollection(...)`, stable-equal + newer-record helpers, collection config.
-- **Phase 2:** wire merge into pull (merge-not-clobber) and push (rebase-not-block);
-  add `conflicts.json` to build/push/pull/load + `GH_SHAS_KEY` base-blob fetch.
+- **Phase 2a (done, v2.06.00):** pull merges instead of clobbering; `conflicts.json` plumbed into
+  build/pull; merge **base** persisted locally (`GH_BASE_KEY`) on pull + push success.
+  Note: base is the last-synced payload, not fetched-by-SHA — simpler and GC-proof.
+- **Phase 2b (next):** push rebases on conflict (fetch remote content → merge → push merged)
+  instead of blocking.
 - **Phase 3:** conflict banner/notification + Conflicts review screen + resolution write-back.
 
 ## Open items / non-goals (v1)

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.05.00";
+const APP_VERSION = "v2.06.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2066,12 +2066,52 @@ const GH_CONFIG_KEY = "tim_gh_config_v1";   // { owner, repo, branch, autoLoad }
 const GH_TOKEN_KEY  = "tim_gh_token_v1";    // fine-grained PAT string
 const GH_SHAS_KEY   = "tim_gh_shas_v1";     // { "data/<file>": blobSha }
 const GH_PENDING_KEY = "tim_gh_pending_push_v1"; // true when local master has changes not yet pushed
+const GH_BASE_KEY   = "tim_gh_base_v1";     // last-synced repo payload — the 3-way merge base
+const GH_CONFLICTS_KEY = "tim_gh_conflicts_v1"; // local copy of the shared conflict log
 const GH_DATA_DIR   = "data";
 
 var ghConfig = null;
 var ghToken = null;
 var ghSyncInFlight = false;
 var ghOnlineRetryBound = false;
+var ghConflictLog = [];   // conflict entries (see MERGE_DESIGN.md); mirrors data/conflicts.json
+
+function ghLoadConflictLog() {
+  return TimDB.get(GH_CONFLICTS_KEY).then(function(arr) {
+    ghConflictLog = Array.isArray(arr) ? arr : [];
+    return ghConflictLog;
+  }).catch(function() { ghConflictLog = []; return ghConflictLog; });
+}
+function ghSaveConflictLog() { TimDB.set(GH_CONFLICTS_KEY, ghConflictLog).catch(function(){}); }
+function ghUnresolvedConflictCount() {
+  return ghConflictLog.filter(function(c) { return c && c.status !== "resolved"; }).length;
+}
+
+// Merge incoming conflict entries (from a local merge or pulled conflicts.json)
+// into the log, deduped by conflictId. A resolved entry always wins over an
+// unresolved one with the same id; otherwise the existing entry is kept and the
+// incoming candidates are folded in.
+function ghMergeConflictEntries(incoming) {
+  if (!Array.isArray(incoming) || !incoming.length) return;
+  var byId = {};
+  ghConflictLog.forEach(function(c) { if (c && c.conflictId) byId[c.conflictId] = c; });
+  incoming.forEach(function(inc) {
+    if (!inc || !inc.conflictId) return;
+    var cur = byId[inc.conflictId];
+    if (!cur) { ghConflictLog.push(inc); byId[inc.conflictId] = inc; return; }
+    if (inc.status === "resolved" && cur.status !== "resolved") {
+      var i = ghConflictLog.indexOf(cur);
+      if (i >= 0) ghConflictLog[i] = inc;
+      byId[inc.conflictId] = inc;
+      return;
+    }
+    // Same id, both unresolved — fold in any new candidate values.
+    (inc.candidates || []).forEach(function(cand) {
+      var dup = (cur.candidates || []).some(function(x) { return _ghEqual(x.value, cand.value); });
+      if (!dup) { cur.candidates = (cur.candidates || []).concat([cand]); }
+    });
+  });
+}
 
 // A push couldn't complete (offline, or a network drop mid-push). Remember
 // it so we can flush the local master to GitHub once connectivity returns.
@@ -2297,46 +2337,52 @@ function ghSyncNow(silent) {
     if (!files.length) throw new Error("The '" + GH_DATA_DIR + "/' folder has no .json files.");
     files.forEach(function(f) { shas[f.path] = f.sha; });
 
-    return Promise.all(files.map(function(f) {
-      return ghFetchJsonFile(f.path).then(function(json) { return { name: f.name.toLowerCase(), json: json }; });
-    }));
-  }).then(function(fetched) {
-    var payload = {};
-    var historyShards = [];
+    return Promise.all([
+      TimDB.get(GH_BASE_KEY),
+      Promise.all(files.map(function(f) {
+        return ghFetchJsonFile(f.path).then(function(json) { return { name: f.name.toLowerCase(), json: json }; });
+      }))
+    ]);
+  }).then(function(arr) {
+    var basePayload = arr[0] || {};
+    var asm = _ghAssembleRemote(arr[1]);
+    var remote = asm.payload;
+    // No history shards in the repo — treat remote history as the current local
+    // history so the merge preserves it instead of dropping every record.
+    if (!asm.hadHistoryShards) remote.history = history;
 
-    fetched.forEach(function(f) {
-      if (f.name === "product_map.json" && f.json && typeof f.json === "object") payload.product_map = f.json;
-      else if (f.name === "barcode_map.json" && f.json && typeof f.json === "object") payload.barcode_map = f.json;
-      else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
-      else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
-        if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
-        if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
-      }
-      else if (f.name === "inventory.json" && f.json && typeof f.json === "object") {
-        if (Array.isArray(f.json.inventory_sessions)) payload.inventory_sessions = f.json.inventory_sessions;
-        if (Array.isArray(f.json.inventory_events))   payload.inventory_events   = f.json.inventory_events;
-      }
-      else if (/^history-.*\.json$/.test(f.name)) {
-        var records = Array.isArray(f.json) ? f.json : (f.json && Array.isArray(f.json.records) ? f.json.records : []);
-        historyShards.push({ name: f.name, records: records });
-      }
-    });
+    // 3-way merge: base (last synced) ← local (in-memory) + remote (repo).
+    var localPayload = buildExportPayload();
+    var ctx = {
+      local:  { device: (ghConfig.deviceLabel || "this device"), user: timGetUsername() || "" },
+      remote: { device: "repo", user: "" },
+      now: new Date().toISOString()
+    };
+    var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
 
-    if (historyShards.length) {
-      historyShards.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
-      payload.history = { records: [].concat.apply([], historyShards.map(function(s) { return s.records; })) };
-    } else {
-      // No history shards in the repo — keep the locally loaded history
-      // (loadSourceData would otherwise reset it to empty).
-      payload.history = history;
-    }
+    loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+    timSaveMasterCache();
 
-    loadSourceData(payload, "GitHub: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+    // Fold conflicts from this merge AND the repo's shared log into ours.
+    ghMergeConflictEntries(asm.conflicts);
+    ghMergeConflictEntries(res.conflicts);
+    ghSaveConflictLog();
+
+    // Base = the repo state we merged against. SHAs = what the repo has now.
+    TimDB.set(GH_BASE_KEY, remote).catch(function(){});
     TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
+
+    // If the merge produced local-only changes, they still need publishing.
+    var needsPush = _ghPayloadDiffers(res.merged, remote);
+    if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
 
     var pCount = Object.keys(PRODUCT_MAP).length;
     var hCount = (history.records || []).length;
-    ghSetStatus("Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.", "ok");
+    var uc = ghUnresolvedConflictCount();
+    var msg = "Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.";
+    if (needsPush) msg += " Merged local changes — push to publish.";
+    if (uc) msg += " ⚠ " + uc + " conflict(s) need review.";
+    ghSetStatus(msg, uc ? "err" : "ok");
   }).catch(function(err) {
     ghSetStatus("Sync failed: " + (err && err.message ? err.message : err), "err");
   }).finally(function() {
@@ -2347,6 +2393,7 @@ function ghSyncNow(silent) {
 
 function ghInit() {
   ghBindOnlineRetry();
+  ghLoadConflictLog();
   ghLoadSettings().then(function(configured) {
     if (!configured) return;
     TimDB.get(GH_PENDING_KEY).then(function(pending) {
@@ -2386,7 +2433,8 @@ function ghBuildDataFiles() {
     "barcode_map.json": payload.barcode_map,
     "quants.json": payload.odoo_quants,
     "recounts.json": { recount_sessions: payload.recount_sessions, recount_movements: payload.recount_movements },
-    "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events }
+    "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
+    "conflicts.json": ghConflictLog || []   // shared conflict log travels with the data
   };
   (payload.history.records || []).forEach(function(r) {
     var name = ghHistoryShardName(r);
@@ -2398,6 +2446,53 @@ function ghBuildDataFiles() {
     out[name] = JSON.stringify(files[name], null, 2) + "\n";
   });
   return out;
+}
+
+// Assemble fetched repo files (from ghListDataDir + ghFetchJsonFile) into a
+// payload (buildExportPayload shape) plus the repo's conflict log. Shared by
+// pull (ghSyncNow) and push-rebase. `fetched` = [{ name:lowercased, json }].
+function _ghAssembleRemote(fetched) {
+  var payload = {};
+  var remoteConflicts = [];
+  var historyShards = [];
+  fetched.forEach(function(f) {
+    if (f.name === "product_map.json" && f.json && typeof f.json === "object") payload.product_map = f.json;
+    else if (f.name === "barcode_map.json" && f.json && typeof f.json === "object") payload.barcode_map = f.json;
+    else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
+    else if (f.name === "conflicts.json" && Array.isArray(f.json)) remoteConflicts = f.json;
+    else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
+      if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
+      if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
+    }
+    else if (f.name === "inventory.json" && f.json && typeof f.json === "object") {
+      if (Array.isArray(f.json.inventory_sessions)) payload.inventory_sessions = f.json.inventory_sessions;
+      if (Array.isArray(f.json.inventory_events))   payload.inventory_events   = f.json.inventory_events;
+    }
+    else if (/^history-.*\.json$/.test(f.name)) {
+      var records = Array.isArray(f.json) ? f.json : (f.json && Array.isArray(f.json.records) ? f.json.records : []);
+      historyShards.push({ name: f.name, records: records });
+    }
+  });
+  if (historyShards.length) {
+    historyShards.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
+    payload.history = { records: [].concat.apply([], historyShards.map(function(s) { return s.records; })) };
+  }
+  return { payload: payload, conflicts: remoteConflicts, hadHistoryShards: historyShards.length > 0 };
+}
+
+// Cheap "do these two payloads differ across merge collections?" check — used
+// after a pull-merge to decide whether the merged result has local-only changes
+// that still need pushing.
+function _ghPayloadDiffers(a, b) {
+  a = a || {}; b = b || {};
+  if (!_ghEqual(a.product_map || {}, b.product_map || {})) return true;
+  if (!_ghEqual(a.barcode_map || {}, b.barcode_map || {})) return true;
+  if (!_ghEqual((a.history && a.history.records) || [], (b.history && b.history.records) || [])) return true;
+  var arrs = ["inventory_sessions", "inventory_events", "recount_sessions", "recount_movements"];
+  for (var i = 0; i < arrs.length; i++) {
+    if (!_ghEqual(a[arrs[i]] || [], b[arrs[i]] || [])) return true;
+  }
+  return false;
 }
 
 function ghDownloadSeedFiles() {
@@ -2698,6 +2793,7 @@ function ghPushToGitHub(opts) {
 
   var repoBase = "/repos/" + ghConfig.owner + "/" + ghConfig.repo;
   var local = ghBuildDataFiles();
+  var pushedPayload = buildExportPayload();  // becomes the merge base once the push lands
   var names = Object.keys(local);
   var lastPulled = {};
   var changed = [];   // { name, path, content, localSha }
@@ -2809,6 +2905,7 @@ function ghPushToGitHub(opts) {
       });
   }).then(function(commitSha) {
     TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
+    TimDB.set(GH_BASE_KEY, pushedPayload).catch(function(){}); // repo == local now → new merge base
     ghClearPendingPush(); // local is now on GitHub
     ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
                 " — commit " + commitSha.slice(0, 7) + ".", "ok");
