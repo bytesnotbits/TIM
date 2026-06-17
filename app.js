@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.08.02";
+const APP_VERSION = "v2.09.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2094,6 +2094,15 @@ function ghSaveConflictLog() { TimDB.set(GH_CONFLICTS_KEY, ghConflictLog).catch(
 function ghUnresolvedConflictCount() {
   return ghConflictLog.filter(function(c) { return c && c.status !== "resolved"; }).length;
 }
+// Resolved on this device but not yet pushed to the repo. These stay editable
+// (the user can change the choice) until a push publishes them.
+function ghUnpublishedResolvedCount() {
+  return ghConflictLog.filter(function(c) { return c && c.status === "resolved" && !c.published; }).length;
+}
+// Things still needing the user: ones to review + resolved-but-not-published.
+function ghPendingConflictCount() {
+  return ghConflictLog.filter(function(c) { return c && (c.status !== "resolved" || !c.published); }).length;
+}
 
 // Merge incoming conflict entries (from a local merge or pulled conflicts.json)
 // into the log, deduped by conflictId. A resolved entry always wins over an
@@ -2730,7 +2739,7 @@ var _GH_ARRAY_ID_FIELDS = {
 };
 
 function ghRenderConflictBadge() {
-  var n = ghUnresolvedConflictCount();
+  var n = ghPendingConflictCount();
   var btn = $("sideNavConflicts"), badge = $("sideNavConflictsBadge");
   if (!btn) return;
   if (n > 0) { btn.classList.remove("hidden"); if (badge) badge.textContent = n > 99 ? "99+" : String(n); }
@@ -2758,43 +2767,141 @@ function _ghFmtConflictVal(v) {
   return escapeHtml(String(v));
 }
 
+// Plain-English field names for the conflict review screen (non-technical users).
+var _GH_FIELD_LABELS = {
+  serial_tracked:   "Serial-number tracking",
+  requires_fsan:    "FSAN requirement",
+  history_only:     "Import setting",
+  tracking_type:    "Tracking type",
+  name:             "Product name",
+  description:      "Description",
+  odoo_external_id: "Odoo external ID",
+  external_id:      "Odoo external ID",
+  hctc:             "HCTC / NISC code",
+  vendor:           "Vendor",
+  aliases:          "Alternate part numbers"
+};
+function _ghFieldLabel(field) {
+  if (!field) return "the whole record";
+  return _GH_FIELD_LABELS[field] || field;
+}
+
+// Plain-English value for a field. Returns null when there's no friendlier form
+// than the raw value (caller falls back to _ghFmtConflictVal).
+function _ghFmtFieldValue(field, v) {
+  if (v === true || v === false) {
+    if (field === "serial_tracked") return v ? "Tracked by serial number" : "Not tracked by serial number";
+    if (field === "requires_fsan")  return v ? "FSAN required" : "FSAN not required";
+    if (field === "history_only")   return v ? "Do NOT import (history only)" : "OK to import to Odoo";
+    return v ? "Yes" : "No";
+  }
+  return null;
+}
+
+// Friendly header for a conflict: what record it's about, in the user's terms.
+// NOTE on product_map: the KEY is the Calix/vendor part number (e.g.
+// "35-0171-001") — which is meaningless to warehouse users. The NISC item number
+// is the `hctc` field (e.g. "6203") and the description is `name`. So we lead
+// with the NISC number + description, and show the part number as a secondary
+// cross-reference (it's also on the small technical line).
+function _ghConflictContext(e) {
+  var noun = e.collection, title = e.key, subtitle = "", aside = "";
+  if (e.collection === "product_map") {
+    noun = "NISC item";
+    var p = PRODUCT_MAP[e.key] || {};
+    title = p.hctc || e.key;                       // NISC item number
+    subtitle = p.name || p.description || "";      // NISC description
+    if (String(e.key) !== String(title)) aside = "part " + e.key;  // Calix/vendor part #
+  } else if (e.collection === "barcode_map") {
+    noun = "Barcode";
+    var it = BARCODE_MAP[e.key];
+    subtitle = it ? ("currently maps to item " + it) : "";
+  } else if (e.collection === "history") {
+    noun = "History record";
+  }
+  return { noun: noun, title: title, subtitle: subtitle, aside: aside };
+}
+
+// Who set a candidate value, in plain terms ("Joe", "the shared database").
+function _ghCandidateWho(cand) {
+  if (cand.user) return cand.user;
+  if (cand.device === "repo") return "the shared database";
+  return cand.device || "unknown";
+}
+
 function ghRenderConflictsList() {
   var list = $("ghConflictsList"), empty = $("ghConflictsEmpty"), footMsg = $("ghConflictsFooterMsg"), pushBtn = $("ghConflictsPushBtn");
   if (!list) return;
-  var entries = ghConflictLog.slice().sort(function(a, b) {
-    var ar = a.status === "resolved" ? 1 : 0, br = b.status === "resolved" ? 1 : 0;
-    return ar - br;
-  });
+  // Order: needs-review first, then resolved-but-not-published, then published.
+  function rank(c) { return c.status !== "resolved" ? 0 : (c.published ? 2 : 1); }
+  var entries = ghConflictLog.slice().sort(function(a, b) { return rank(a) - rank(b); });
   var unresolved = ghUnresolvedConflictCount();
+  var unpublished = ghUnpublishedResolvedCount();
   if (empty) empty.style.display = entries.length ? "none" : "block";
 
   list.innerHTML = entries.map(function(e) {
     var resolved = e.status === "resolved";
-    var where = escapeHtml(e.collection) + " · " + escapeHtml(e.key) + (e.field ? " · " + escapeHtml(e.field) : "");
-    var typeLabel = e.type === "edit_vs_delete" ? "edit vs delete" : e.type;
+    var editable = !e.published;           // can still change the choice until pushed
+    var ctx = _ghConflictContext(e);
+    var fieldLabel = _ghFieldLabel(e.field);
+
+    // Friendly header line + a small technical line for traceability.
+    var head = escapeHtml(ctx.noun) + ': <strong>' + escapeHtml(ctx.title) + '</strong>' +
+      (ctx.aside ? ' <span style="color:#64748b;font-weight:400;">(' + escapeHtml(ctx.aside) + ')</span>' : '') +
+      (ctx.subtitle ? ' — ' + escapeHtml(ctx.subtitle) : '');
+    var tech = escapeHtml(e.collection) + " · " + escapeHtml(e.key) + (e.field ? " · " + escapeHtml(e.field) : "");
+    var tag = resolved ? (e.published ? "published" : "your choice — not published yet") : "needs review";
+
+    // One-sentence prompt in plain language.
+    var prompt = e.field
+      ? ('Two devices set <strong>' + escapeHtml(fieldLabel) + '</strong> differently. Pick the value to keep:')
+      : (e.type === "edit_vs_delete"
+          ? 'One device changed this while another deleted it. Pick what to keep:'
+          : 'Two devices set this differently. Pick the value to keep:');
+
     var cands = (e.candidates || []).map(function(cand, idx) {
-      var who = [cand.user, cand.device].filter(Boolean).join(" @ ") || "unknown";
+      var who = _ghCandidateWho(cand);
       var when = cand.ts ? (" · " + escapeHtml(cand.ts)) : "";
-      var chosenCls = (resolved && _ghEqual(cand.value, e.chosenValue)) ? " chosen" : "";
-      var onclick = resolved ? "" : ' onclick="ghChooseCandidate(\'' + escapeHtml(e.conflictId).replace(/'/g, "\\'") + "', " + idx + ')"';
+      var friendly = _ghFmtFieldValue(e.field, cand.value);
+      var valHtml = friendly !== null ? escapeHtml(friendly) : _ghFmtConflictVal(cand.value);
+      var isChosen = resolved && _ghEqual(cand.value, e.chosenValue);
+      var chosenCls = isChosen ? " chosen" : "";
+      var onclick = editable ? ' onclick="ghChooseCandidate(\'' + escapeHtml(e.conflictId).replace(/'/g, "\\'") + "', " + idx + ')"' : "";
+      var btn;
+      if (!editable) {
+        btn = isChosen ? '<span class="small" style="color:#16a34a;font-weight:600;">✓ Kept</span>' : '';
+      } else if (isChosen) {
+        btn = '<span class="small" style="color:#16a34a;font-weight:600;">✓ Kept (tap another to change)</span>';
+      } else {
+        btn = '<button class="secondary" style="padding:4px 10px;font-size:12px;">' + (resolved ? "Switch to this" : "Keep this") + '</button>';
+      }
       return '<div class="gh-cand' + chosenCls + '"' + onclick + '>' +
-        '<div style="flex:1;"><div class="gh-cand-val">' + _ghFmtConflictVal(cand.value) + '</div>' +
+        '<div style="flex:1;"><div class="gh-cand-val">' + valHtml + '</div>' +
         '<div class="gh-cand-who">' + escapeHtml(who) + when + '</div></div>' +
-        (resolved ? "" : '<button class="secondary" style="padding:4px 10px;font-size:12px;">Keep this</button>') +
+        btn +
         '</div>';
     }).join("");
-    return '<div class="gh-conflict' + (resolved ? " resolved" : "") + '">' +
+
+    return '<div class="gh-conflict' + (resolved ? " resolved" : "") + (e.published ? " published" : "") + '">' +
       '<div class="gh-conflict-head">' +
-        '<span class="gh-conflict-where">' + where + '</span>' +
-        '<span class="gh-conflict-tag">' + (resolved ? "resolved" : "needs review") + '</span>' +
-        '<span class="gh-conflict-meta">' + escapeHtml(typeLabel) + '</span>' +
-      '</div>' + cands + '</div>';
+        '<span class="gh-conflict-where">' + head + '</span>' +
+        '<span class="gh-conflict-tag">' + escapeHtml(tag) + '</span>' +
+      '</div>' +
+      '<div class="gh-conflict-meta" style="margin:2px 0 8px;">' + tech + '</div>' +
+      '<div class="small" style="margin-bottom:6px;color:#334155;">' + prompt + '</div>' +
+      cands + '</div>';
   }).join("");
 
-  if (footMsg) footMsg.textContent = unresolved
-    ? (unresolved + " unresolved · resolved changes publish on the next push")
-    : (entries.length ? "All conflicts resolved." : "");
-  if (pushBtn) pushBtn.style.display = (unresolved < entries.length && entries.length) ? "" : "none";
+  if (footMsg) {
+    if (unresolved && unpublished) footMsg.textContent = unresolved + " still need a choice · " + unpublished + " ready to publish";
+    else if (unresolved) footMsg.textContent = unresolved + " conflict(s) need a choice";
+    else if (unpublished) footMsg.textContent = unpublished + " choice(s) made — not published yet. You can still change them until you publish.";
+    else footMsg.textContent = entries.length ? "All conflicts resolved and published." : "";
+  }
+  if (pushBtn) {
+    pushBtn.style.display = unpublished ? "" : "none";
+    pushBtn.textContent = "Publish " + unpublished + " choice" + (unpublished === 1 ? "" : "s");
+  }
 }
 
 // Write a resolved value back into the in-memory master.
@@ -2830,9 +2937,12 @@ function ghApplyResolution(entry, chosen) {
   }
 }
 
+// Pick (or re-pick) the value to keep. Applies the choice to the in-memory
+// master and saves locally, but does NOT push — the choice stays editable until
+// the user clicks Publish. A published entry is locked (already on the repo).
 function ghChooseCandidate(conflictId, idx) {
   var e = ghConflictLog.find(function(c) { return c.conflictId === conflictId; });
-  if (!e || e.status === "resolved") return;
+  if (!e || e.published) return;
   var chosen = (e.candidates[idx] || {}).value;
   ghApplyResolution(e, chosen);
   e.status = "resolved";
@@ -2841,19 +2951,29 @@ function ghChooseCandidate(conflictId, idx) {
   e.chosenValue = chosen;
   ghSaveConflictLog();
   timSaveMasterCache();
-  ghMarkPendingPush();   // resolved change still needs publishing
-  ghBindOnlineRetry();
   if (typeof renderAll === "function") renderAll();
   ghRenderConflictBadge();
   ghRenderConflictsList();
-  if (ghUnresolvedConflictCount() === 0) {
-    // Everything resolved → publish all now (Joe's rule).
-    ghSetStatus("All conflicts resolved — publishing to GitHub…", "info");
-    ghPushToGitHub({ auto: true });
-  }
 }
 
-// "Push resolved now" — publish resolved changes while some conflicts remain.
+// Lock all resolved conflicts as published — they're now on the repo and can no
+// longer be changed. Called after any successful push (every push carries the
+// current conflicts.json).
+function _ghMarkResolvedPublished() {
+  var changedAny = false;
+  ghConflictLog.forEach(function(c) {
+    if (c && c.status === "resolved" && !c.published) { c.published = true; changedAny = true; }
+  });
+  if (changedAny) {
+    ghSaveConflictLog();
+    ghRenderConflictBadge();
+    ghRenderConflictsList();
+  }
+  return changedAny;
+}
+
+// "Publish choices" — push the resolved choices (and any other local changes) to
+// the repo. Once the push lands the choices lock.
 function ghPushResolved() { ghPushToGitHub({ auto: true }); }
 
 // -- Phase 2: write-back (push local data to the repo) --------------
@@ -3024,6 +3144,7 @@ function ghPushToGitHub(opts) {
       ghSetStatus("Already up to date — nothing to push.", "ok");
       TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
       ghClearPendingPush(); // local == remote, no deferred work outstanding
+      _ghMarkResolvedPublished(); // resolved choices already match the repo → lock them
       throw { _ghDone: true };
     }
     // Conflict — the repo moved since this device last pulled. Don't overwrite
@@ -3080,6 +3201,7 @@ function ghPushToGitHub(opts) {
                 ghSetStatus("Merged with GitHub — already up to date.", "ok");
                 TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
                 ghClearPendingPush();
+                _ghMarkResolvedPublished(); // resolved choices already match the repo → lock them
                 throw { _ghDone: true };
               }
               ghSetStatus("Pushing merged result (" + changed.length + " file(s))…", "info");
@@ -3104,6 +3226,7 @@ function ghPushToGitHub(opts) {
     TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
     TimDB.set(GH_BASE_KEY, pushedPayload).catch(function(){}); // repo == local now → new merge base
     ghClearPendingPush(); // local is now on GitHub
+    _ghMarkResolvedPublished(); // resolved choices are on the repo now → lock them
     var uc = ghUnresolvedConflictCount();
     ghRenderConflictBadge();
     ghSetStatus("Pushed " + changed.length + " file(s) " + new Date().toLocaleTimeString() +
@@ -9392,13 +9515,21 @@ function updateClearBtns() {
 }
 
 function clearAllData() {
-  if (!confirm("Clear ALL app data and start fresh?\n\nThis will permanently delete:\n• Active batch and receiving data\n• Inventory sessions\n• Master data (products, history, barcodes)\n• Your username\n\nThis cannot be undone.")) return;
+  if (!confirm("Clear ALL app data and start fresh?\n\nThis will permanently delete:\n• Active batch and receiving data\n• Inventory sessions\n• Master data (products, history, barcodes)\n• Sync conflicts and sync state (merge base)\n• Your username\n\nYour GitHub connection (repo + token) is kept so you can re-sync.\n\nThis cannot be undone.")) return;
+  // Drop the stale sync bookkeeping too: keeping the merge base (GH_BASE_KEY)
+  // after a wipe makes the next pull read the now-empty local as deletions and
+  // silently drop unchanged records on push. Connection (config/token) is kept.
+  ghConflictLog = [];
   Promise.all([
     TimDB.remove(BATCH_DRAFT_KEY),
     TimDB.remove(INV_STORAGE_KEY),
     TimDB.remove(TIM_MASTER_CACHE_KEY),
     TimDB.remove(BC_STORAGE_KEY),
-    TimDB.remove(BC_BATCH_DRAFT_KEY)
+    TimDB.remove(BC_BATCH_DRAFT_KEY),
+    TimDB.remove(GH_CONFLICTS_KEY),
+    TimDB.remove(GH_PENDING_KEY),
+    TimDB.remove(GH_SHAS_KEY),
+    TimDB.remove(GH_BASE_KEY)
   ]).catch(function(){}).then(function() {
     try { localStorage.removeItem(TIM_USERNAME_KEY); } catch(e) {}
     try { localStorage.removeItem("tim_active_tab"); } catch(e) {}

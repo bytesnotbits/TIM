@@ -147,8 +147,23 @@ resolved-wins).
   back into the master and marks the entry resolved. Auto-push fires only when the last conflict is
   resolved; **Push resolved now** publishes the resolved subset while others remain (per Joe — don't
   hold resolved fixes hostage to ones needing field re-verification).
+- **Phase 3.1 (done, v2.09.00):** review screen made non-technical and choices editable until pushed.
+  - Each conflict shows a friendly header (e.g. *Catalog item: 35-0171-0010 — <NISC description>*),
+    a plain-English field label (`serial_tracked` → "Serial-number tracking"), plain-English values
+    (`true`/`false` → "Tracked by serial number" / "Not tracked by serial number"), and provenance
+    in user terms ("Joe" / "the shared database"). The raw `collection · key · field` line is kept
+    small for traceability. Helpers: `_ghConflictContext`, `_ghFieldLabel`, `_ghFmtFieldValue`,
+    `_ghCandidateWho`.
+  - **Resolve is decoupled from publish.** `ghChooseCandidate` applies the choice to the master and
+    saves locally but no longer pushes; an entry stays editable (re-pick any candidate) until it is
+    **published**. The former auto-push-on-last-resolved was **removed** (superseded by Joe's request
+    for a review window). An explicit **Publish choices** button (`ghPushResolved`) pushes; on any
+    successful push `_ghMarkResolvedPublished` sets `published:true` on resolved entries, which locks
+    them. New entry field: `published` (boolean). New counts: `ghUnpublishedResolvedCount`,
+    `ghPendingConflictCount` (badge now = unresolved + resolved-but-unpublished, so the entry stays
+    visible until choices are published).
 
-## Status: feature complete (v2.08.00)
+## Status: feature complete (v2.09.00)
 
 All three phases shipped. Remaining non-goals stand: no automatic resolution of true conflicts,
 `odoo_quants` not merged, conflict-log pruning deferred.

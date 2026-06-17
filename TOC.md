@@ -185,7 +185,9 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `GH_CONFIG_KEY` / `GH_TOKEN_KEY` / `GH_SHAS_KEY` / `GH_PENDING_KEY` / `GH_BASE_KEY` / `GH_CONFLICTS_KEY` | TimDB keys — grep `const GH_CONFIG_KEY`; `GH_PENDING_KEY` = unpushed-changes flag; `GH_BASE_KEY` = last-synced payload (3-way merge base); `GH_CONFLICTS_KEY` = local conflict log |
 | `ghConflictLog` | In-memory conflict-log array; mirrors `data/conflicts.json` |
 | `ghLoadConflictLog()` / `ghSaveConflictLog()` | Load/persist the conflict log (TimDB) |
-| `ghUnresolvedConflictCount()` | Count of `status !== "resolved"` entries (for the status line / badge) |
+| `ghUnresolvedConflictCount()` | Count of `status !== "resolved"` entries (still need a choice) |
+| `ghUnpublishedResolvedCount()` | Count of resolved-but-not-yet-pushed entries (still editable) |
+| `ghPendingConflictCount()` | Unresolved + unpublished-resolved (drives badge visibility) |
 | `ghMergeConflictEntries(incoming)` | Fold new/pulled conflict entries into the log, deduped by `conflictId` (resolved wins) |
 | `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad, deviceLabel }` + PAT |
 | `ghConfigured()` | True when token + owner + repo are set |
@@ -247,10 +249,15 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghRenderConflictBadge()` | Show/hide the sidebar Conflicts item + update count; called on load, sync, push, resolve |
 | `ghOpenConflictsModal()` / `ghCloseConflictsModal()` | Show/hide the review modal |
 | `_ghFmtConflictVal(v)` | Format a candidate value for display (deleted/empty/object/scalar), escaped |
-| `ghRenderConflictsList()` | Render the conflict rows (unresolved first) + footer |
+| `_ghFieldLabel(field)` / `_GH_FIELD_LABELS` | Plain-English field name for review (e.g. `serial_tracked` → "Serial-number tracking") |
+| `_ghFmtFieldValue(field, v)` | Plain-English value (e.g. `serial_tracked` true → "Tracked by serial number"); null = no friendlier form |
+| `_ghConflictContext(e)` | Friendly `{noun, title, subtitle, aside}` header for a conflict. For product_map: leads with NISC item # (`hctc`) + description (`name`); shows the part-number key as `(part …)` aside when it differs |
+| `_ghCandidateWho(cand)` | Who set a candidate, in user terms ("Joe" / "the shared database") |
+| `ghRenderConflictsList()` | Render conflict rows (needs-review → resolved → published) with friendly labels + footer/Publish button |
 | `ghApplyResolution(entry, chosen)` | Write the chosen value back into the in-memory master (by collection/key/field; null = delete) |
-| `ghChooseCandidate(conflictId, idx)` | Resolve one conflict: apply + mark resolved + save + pending + re-render; auto-push when all resolved |
-| `ghPushResolved()` | "Push resolved now" — publish resolved changes while others remain |
+| `ghChooseCandidate(conflictId, idx)` | Pick/re-pick the value to keep: apply + save locally + re-render. No push; editable until `published` |
+| `_ghMarkResolvedPublished()` | After a successful push, set `published:true` on resolved entries (locks them) |
+| `ghPushResolved()` | "Publish choices" — push resolved choices (+ other local changes) to the repo |
 
 ---
 

@@ -1256,7 +1256,7 @@
       <div class="modal-header">
         <div>
           <h2 id="ghConflictsTitle" style="margin:0;">Sync Conflicts</h2>
-          <div class="small" id="ghConflictsSubtitle">Two devices changed the same field. Pick the value to keep.</div>
+          <div class="small" id="ghConflictsSubtitle">Two devices changed the same thing. Pick the value to keep — you can change your choice until you publish.</div>
         </div>
         <button class="secondary" onclick="ghCloseConflictsModal()">Close</button>
       </div>
@@ -1265,7 +1265,7 @@
         <div id="ghConflictsList"></div>
         <div id="ghConflictsFooter" style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <span class="small" id="ghConflictsFooterMsg" style="flex:1;color:#475569;"></span>
-          <button class="secondary" id="ghConflictsPushBtn" onclick="ghPushResolved()">Push resolved now</button>
+          <button id="ghConflictsPushBtn" onclick="ghPushResolved()">Publish choices</button>
         </div>
       </div>
     </div>
