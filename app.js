@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.08.01";
+const APP_VERSION = "v2.08.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -355,6 +355,14 @@ function downloadText(filename, text, type="text/plain") {
   const a = document.createElement("a");
   a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+// Master source-data export filename, stamped with local date/time:
+// e.g. TIM_source_data_2026_06_16-1356.json
+function timSourceDataFilename() {
+  var d = new Date();
+  var p = function(n) { return String(n).padStart(2, "0"); };
+  return "TIM_source_data_" + d.getFullYear() + "_" + p(d.getMonth() + 1) + "_" +
+         p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + ".json";
 }
 function isLikelyExcelDateSerial(value) {
   return typeof value === "number" && value >= 20000 && value <= 60000;
@@ -1434,7 +1442,7 @@ $("markImportedBtn").addEventListener("click", () => {
 $("exportHistoryBtn").addEventListener("click", () => {
   appData.product_map = PRODUCT_MAP;
   appData.history = history;
-  downloadText("Calix_Odoo_Converter_source_data.json", JSON.stringify(buildExportPayload(), null, 2), "application/json");
+  downloadText(timSourceDataFilename(), JSON.stringify(buildExportPayload(), null, 2), "application/json");
 });
 $("appendHistoryOnlyBtn").addEventListener("click", () => {
   if (!currentBatch.length) return;
@@ -8568,7 +8576,7 @@ function invFinalizeSession() {
 
   appData.product_map = PRODUCT_MAP;
   appData.history = history;
-  downloadText("Calix_Odoo_Converter_source_data.json", JSON.stringify(buildExportPayload(), null, 2), "application/json");
+  downloadText(timSourceDataFilename(), JSON.stringify(buildExportPayload(), null, 2), "application/json");
 
   var finalizeBtn = $("invFinalizeBtn");
   if (finalizeBtn) finalizeBtn.disabled = true;
@@ -9914,7 +9922,7 @@ function invConfirmCsvImport() {
   invCancelCsvImport();
 
   downloadText(
-    "Calix_Odoo_Converter_source_data.json",
+    timSourceDataFilename(),
     JSON.stringify(buildExportPayload(), null, 2),
     "application/json"
   );
