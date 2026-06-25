@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.12.00";
+const APP_VERSION = "v2.12.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3749,7 +3749,17 @@ function invResetSessionState() {
   invSettings   = {};
   invSequence   = 0;
   invReelIdConflicts = [];
+  // Session-scoped runtime state — must also reset so nothing leaks from a
+  // cleared session into the next one (Clear and Start-New both route here).
+  invActivityLog     = [];
+  invLastScannedBox  = "";
+  invLastBulkEventId = null;
+  invBoxClearActive();      // resets invActiveBox/override/prior + re-renders box bar
+  invSetScanMode("auto");   // resets scan mode + its toggle UI
+  invSetLocation("");       // clears current location + its UI
   renderReelIdConflictBanner();
+  renderInvActivityFeed();
+  renderInvSummary();
 }
 
 function invStartNewSession() {
@@ -5046,6 +5056,19 @@ function invBoxRenderBar() {
 }
 
 function invHandleBulkCount(itemNumber, qty, notes, location) {
+  // Guard: a blank/unresolved item must not create a phantom count row.
+  // Reachable when a barcode resolves to an empty mapping or via a type
+  // override with no value — log an exception instead of counting "nothing".
+  itemNumber = (itemNumber || "").trim();
+  if (!itemNumber) {
+    invCreateExceptionEvent("", "item_number",
+      "Scan could not be resolved to an item number",
+      "Re-scan the item number, or check the barcode mapping for this code.",
+      notes);
+    invSetScanFeedback("Could not resolve that scan to an item — exception created.", "warn");
+    return false;
+  }
+
   var mm = findProductMapMatch(itemNumber);
   var description = mm ? getMapDescription(mm.entry) : "";
 
@@ -5633,7 +5656,7 @@ function invProcessScan() {
   invUpdateDetectedBadge("");
   // select() after every scan — on success the field is empty (harmless),
   // on failure the bad value is selected so the next scan overwrites it
-  setTimeout(function() { var si = $("invScanInput"); si.focus(); si.select(); }, 50);
+  setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
 }
 
 function invGetScanMeta(scanType, rawValue) {
