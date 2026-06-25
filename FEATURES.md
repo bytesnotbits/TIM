@@ -63,3 +63,16 @@ Implications to keep in mind:
 Background push on data changes (debounced), pull on app focus, offline queue, sidebar
 sync indicator, record-level merge (needs stable history record IDs; `updated_at` on
 product entries already in place since v2.03.00).
+
+### Durable backup on inventory finalize
+**Motivation:** `invFinalizeSession` merges the closed session into `appData` in memory
+and downloads a master JSON, but — unlike the Receiving commit actions — it does NOT
+persist `inventory_sessions`/`inventory_events` to local cache and does NOT auto-push to
+GitHub. The downloaded file is the *only* durable copy. If that download is silently
+blocked (iOS download/popup blocking), the user still sees a "Session finalized" success
+message but the finalized merge is lost on reload (the active session is recoverable via
+auto-restore; the merged result is not). v2.12.03 added a guard against finalizing with
+no master loaded (catastrophic-overwrite case), but the no-durable-backup gap remains.
+**Proposed:** mirror Receiving — persist `appData` (or at least the inventory arrays) and
+auto-push on finalize, so a blocked download can't silently lose a count. Spec the sync
+implications before building.
