@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.15.00";
+const APP_VERSION = "v2.15.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5154,12 +5154,36 @@ function invRenderBoxManager() {
     var qtyTxt= b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
     var statusPill = b.status === "ready" ? "ok" : "block";
     var expanded = !!_invBoxMgrExpanded[key];
-    var contents = "";
+    var bjs = chkJsStr(b.boxId);
+    var editor = "";
     if (expanded) {
-      contents = '<div style="margin:6px 0 4px;padding:8px;background:#f8fafc;border-radius:6px;font-family:monospace;font-size:12px;word-break:break-all;">' +
-        (n ? (b.expectedSerials || []).map(escapeHtml).join(", ") : "<span style=\"color:#94a3b8\">(empty)</span>") + "</div>";
+      var deviceRows = n
+        ? (b.expectedSerials || []).map(function(s) {
+            return '<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:2px 4px 2px 8px;font-family:monospace;font-size:12px;">' +
+              escapeHtml(s) +
+              '<button class="danger" title="Remove this device" style="padding:0 6px;font-size:12px;line-height:1.4;" ' +
+                'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(s) + '\')">✕</button></span>';
+          }).join(" ")
+        : '<span style="color:#94a3b8">No devices in this box.</span>';
+      editor =
+        '<div style="margin:8px 0 4px;padding:10px;background:#f8fafc;border-radius:6px;">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
+            '<label class="small" style="font-weight:700;">Box ID</label>' +
+            '<input class="box-rename-input" value="' + escapeHtml(b.boxId) + '" ' +
+              'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;" autocomplete="off" />' +
+            '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxRename(\'' + bjs + '\', this)">Rename</button>' +
+          '</div>' +
+          '<div class="small" style="font-weight:700;margin-bottom:4px;">Devices (' + n + ')</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">' + deviceRows + '</div>' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+            '<input class="box-add-input" placeholder="Scan/type a serial to add" ' +
+              'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:200px;" autocomplete="off" ' +
+              'onkeydown="if(event.key===\'Enter\'){event.preventDefault();invBoxAddSerialManual(\'' + bjs + '\', this);}" />' +
+            '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxAddSerialManual(\'' + bjs + '\', this)">Add</button>' +
+          '</div>' +
+        '</div>';
     }
-    return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
+    return '<div data-boxkey="' + escapeHtml(key) + '" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
         '<span style="font-weight:700;font-family:monospace;">' + escapeHtml(b.boxId) + '</span>' +
         '<span class="pill ' + statusPill + '">' + escapeHtml(b.status || "") + '</span>' +
@@ -5167,10 +5191,10 @@ function invRenderBoxManager() {
         (b.location ? '<span class="small">@ ' + escapeHtml(b.location) + '</span>' : "") +
         '<span style="margin-left:auto;display:flex;gap:6px;">' +
           '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerToggleContents(\'' + chkJsStr(key) + '\')">' +
-            (expanded ? "Hide" : "View") + '</button>' +
-          '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + chkJsStr(b.boxId) + '\')">Delete</button>' +
+            (expanded ? "Done" : "Edit") + '</button>' +
+          '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + bjs + '\')">Delete</button>' +
         '</span>' +
-      '</div>' + contents +
+      '</div>' + editor +
       '<div class="small" style="color:#94a3b8;margin-top:4px;">updated ' + invFormatDateTime(b.updatedAt) +
         (b.updatedBy ? " by " + escapeHtml(b.updatedBy) : "") + '</div>' +
     '</div>';
@@ -5192,6 +5216,129 @@ function invBoxManagerDelete(boxId) {
   invRenderBoxManager();
   invBoxRenderBar();
   invSetScanFeedback("Box " + b.boxId + " deleted.", "warn", "", "box");
+}
+
+// Rename a box's ID. Rekeys the registry, retargets this session's count
+// events, and fixes active/last pointers. Rejects a collision with an
+// existing box. Finalized (prior-session) history is left untouched.
+function invBoxRename(oldBoxId, btn) {
+  var inp = btn && btn.parentElement ? btn.parentElement.querySelector(".box-rename-input") : null;
+  var newId = sanitizeScannerValue(inp ? inp.value : "", { uppercase: true });
+  var oldKey = boxNormId(oldBoxId);
+  var b = (appData.boxes || {})[oldKey];
+  if (!b) return;
+  if (!newId) { alert("Enter a box ID."); if (inp) inp.focus(); return; }
+  var newKey = boxNormId(newId);
+  if (newKey !== oldKey && appData.boxes[newKey]) {
+    alert('A box with ID "' + newId + '" already exists. Choose a different ID.');
+    return;
+  }
+  var displayId = normalize(newId);
+  b.boxId = displayId;
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  if (newKey !== oldKey) {
+    appData.boxes[newKey] = b;
+    delete appData.boxes[oldKey];
+    if (boxNormId(invActiveBox)      === oldKey) invActiveBox      = newKey;
+    if (boxNormId(invLastScannedBox) === oldKey) invLastScannedBox = newKey;
+    if (_invBoxMgrExpanded[oldKey]) { delete _invBoxMgrExpanded[oldKey]; _invBoxMgrExpanded[newKey] = true; }
+  }
+  // Retarget this session's count events for the old box ID.
+  if (invSession) {
+    (invEvents || []).forEach(function(e) { if (normKey(e.boxId || "") === oldKey) e.boxId = displayId; });
+    invSession.updatedAt = invNow();
+    scheduleInvAutosave();
+    renderInvEventLog();
+  }
+  boxSaveToStorage();
+  invRenderBoxManager();
+  invBoxRenderBar();
+  invSetScanFeedback("Box renamed to " + displayId + ".", "ok", "", "box");
+}
+
+// Remove one device from a box (manager editor) and void its count event
+// for the current session.
+function invBoxRemoveSerial(boxId, serial) {
+  var b = boxGet(boxId);
+  if (!b) return;
+  if (!confirm("Remove " + serial + " from box " + b.boxId + "?")) return;
+  var sk = normKey(serial);
+  b.expectedSerials = (b.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  if (invSession) {
+    var bk = boxNormId(boxId);
+    (invEvents || []).forEach(function(e) {
+      if (e.status === "voided") return;
+      if (e.eventType !== "serialized_device_scan") return;
+      if (normKey(e.boxId || "") !== bk) return;
+      if (normKey(e.serial || "") === sk || normKey(e.fsan || "") === sk) {
+        e.status = "voided";
+        if (!e.voidLog) e.voidLog = [];
+        e.voidLog.push({ action: "voided", at: invNow(), reason: "removed from box via manager" });
+      }
+    });
+    invSession.updatedAt = invNow();
+    scheduleInvAutosave();
+    renderInvEventLog();
+  }
+  invRenderBoxManager();
+  invBoxRenderBar();
+}
+
+// Add a device to a box (manager editor). Resolves serial/FSAN/MAC, moves it
+// out of any other box, and creates a count event for the current session.
+function invBoxAddSerialManual(boxId, btn) {
+  var inp = btn && btn.parentElement ? btn.parentElement.querySelector(".box-add-input") : null;
+  var val = sanitizeScannerValue(inp ? inp.value : "", { uppercase: true });
+  if (!val) { if (inp) inp.focus(); return; }
+  var b = boxGet(boxId);
+  if (!b) return;
+  var rec    = invBoxResolveDevice(val);
+  var serial = rec ? normalize(rec.serial || rec.ref || val) : val;
+  var fsan   = rec ? normalize(rec.fsan   || rec.name || "") : "";
+  boxAddSerial(boxId, serial, {});   // dedup + move-from-other-box (registry)
+  if (invSession) {
+    // Keep the count event in sync with the registry. If this device is already
+    // counted (possibly under a different box), retarget that event to this box
+    // instead of creating a duplicate; otherwise create a fresh count event.
+    var existing = invFindSerializedDuplicate(serial, fsan);
+    if (existing) {
+      if (normKey(existing.boxId || "") !== boxNormId(boxId)) {
+        existing.boxId = b.boxId;
+        invSession.updatedAt = invNow();
+        scheduleInvAutosave();
+        renderInvEventLog();
+      }
+    } else {
+      invCreateEvent("serialized_device_scan", {
+        scanType: "box_id", scannedValue: val, serial: serial, fsan: fsan,
+        boxId: b.boxId, location: invCurrentLocation || "",
+        itemNumber:  rec ? normalize(rec.hctc || rec.calix_product || "") : "",
+        description: rec ? normalize(rec.odoo_name || rec.calix_description || "") : "",
+        qty: 1, notes: "Added to box " + b.boxId + " via manager"
+      });
+      invSession.updatedAt = invNow();
+      scheduleInvAutosave();
+      renderInvEventLog();
+    }
+  }
+  if (inp) inp.value = "";
+  invRenderBoxManager();
+  invBoxRenderBar();
+  // Restore focus to this box's add field so several devices can be added in a row.
+  var lst = $("invBoxManagerList");
+  if (lst) {
+    var panels = lst.querySelectorAll("[data-boxkey]");
+    for (var i = 0; i < panels.length; i++) {
+      if (panels[i].getAttribute("data-boxkey") === boxNormId(boxId)) {
+        var ai = panels[i].querySelector(".box-add-input"); if (ai) ai.focus();
+        break;
+      }
+    }
+  }
 }
 
 function invBoxClearActive() {

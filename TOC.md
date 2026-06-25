@@ -407,7 +407,9 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxSetExpectedQty(v)` / `invBoxClearActive()` / `invBoxRenderBar()` | Optional qty / cancel active capture / refresh the `#invBoxBar` UI (incl. Boxes count + Undo/Done enable) |
 | `invBoxUndoLast()` | "Undo last" → void the most recent device scan for the active box and drop its serial from the box contents |
 | `invOpenBoxManager()` / `invCloseBoxManager()` / `invRenderBoxManager()` | Box manager modal: list all registry boxes (status, count, location), view contents, delete |
-| `invBoxManagerToggleContents(key)` / `invBoxManagerDelete(boxId)` | Expand a box's serial list / delete a box (voids its current-session counts, clears active if it was the one) |
+| `invBoxManagerToggleContents(key)` / `invBoxManagerDelete(boxId)` | Expand a box's editor / delete a box (voids its current-session counts, clears active if it was the one) |
+| `invBoxRename(oldBoxId, btn)` | Rename a box's ID: rekeys the registry, retargets this session's count events' `boxId`, fixes active/last pointers, rejects collisions (finalized history untouched) |
+| `invBoxRemoveSerial(boxId, serial)` / `invBoxAddSerialManual(boxId, btn)` | Editor: remove one device (voids its session count event) / add a device (resolves serial-FSAN-MAC, moves from other box, creates a session count event) |
 | `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event |
 
 ### Inventory — Scan Handlers
