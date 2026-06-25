@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.14.00";
+const APP_VERSION = "v2.14.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4906,7 +4906,7 @@ function invBoxModeScan(rawValue, notes) {
   var rec = invBoxResolveDevice(v);
   if (rec) {
     if (!invActiveBox) {
-      invSetScanFeedback("Tap New Box and scan the carton ID first, then scan its devices.", "warn");
+      invSetScanFeedback("Tap Save & New and scan the carton ID first, then scan its devices.", "warn");
       return false;
     }
     return invBoxCaptureDevice(rec, v, notes);
@@ -4919,7 +4919,7 @@ function invBoxModeScan(rawValue, notes) {
       // Mid-capture, a different known box — never silently switch.
       var cur = boxGet(invActiveBox);
       invSetScanFeedback("You're capturing box " + (cur ? cur.boxId : invActiveBox) +
-        ". Tap Done to finish it, or New Box to start another.", "warn");
+        ". Tap Done to finish it, or Save & New to start another.", "warn");
       return false;
     }
     if (existing.status === "ready" && !invActiveBox) return invHandleBoxScan(v, "", notes, invCurrentLocation);
@@ -4931,7 +4931,7 @@ function invBoxModeScan(rawValue, notes) {
   // MAC, typo, or device from an unimported shipment no longer becomes a junk
   // carton. The user must explicitly tap New Box to start a carton.
   invSetScanFeedback('"' + v + '" is not a known device or box. ' +
-    "If it's a new carton, tap New Box. If it's a device, the shipment may not be imported.", "warn");
+    "If it's a new carton, tap Save & New. If it's a device, the shipment may not be imported.", "warn");
   return false;
 }
 
@@ -4940,9 +4940,13 @@ function invBoxModeScan(rawValue, notes) {
 function invBoxNewBox() {
   if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return; }
   if (invScanMode !== "box") invSetScanMode("box");
-  if (invActiveBox) invBoxFinish();   // finalizes the current box → ready, clears active
+  // Save the box in progress (invBoxFinish logs its own "…recorded" confirmation
+  // to the activity feed). For the first box there's nothing to save yet — just
+  // play the box tone so the tap is acknowledged. The bar label is the visible
+  // "scan the next carton" prompt in both cases.
+  if (invActiveBox) invBoxFinish();
+  else invSetScanFeedback("Scan the carton/box ID to start.", "info", "", "box");
   invBoxArmed = true;
-  invSetScanFeedback("New box — scan the carton/box ID now.", "info", "", "box");
   invBoxRenderBar();
   setTimeout(function() { var si = $("invScanInput"); if (si) si.focus(); }, 50);
 }
@@ -5100,8 +5104,8 @@ function invBoxRenderBar() {
   } else if (invScanMode === "box") {
     bar.classList.remove("hidden");
     if (label) label.textContent = invBoxArmed
-      ? "New box — scan the carton/box ID now."
-      : "Box mode — tap New Box to start a carton, or scan a known box to fast-count.";
+      ? "Scan the carton/box ID now."
+      : "Box mode — tap Save & New to start a carton, or scan a known box to fast-count.";
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = "";
   } else {
     bar.classList.add("hidden");
