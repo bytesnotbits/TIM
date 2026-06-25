@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.14.01";
+const APP_VERSION = "v2.14.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4992,11 +4992,14 @@ function invBoxCaptureDevice(rec, value, notes) {
 
   var res = boxAddSerial(invActiveBox, serial, {});
   b = res.box;
-  var n      = (b.expectedSerials || []).length;
-  var qtyTxt = b.expectedQty ? (n + " of " + b.expectedQty) : String(n);
-  var moved  = res.movedFrom ? "  (moved from box " + res.movedFrom.boxId + ")" : "";
-  var dupTxt = dup ? "  ⚠ already counted" : "";
-  invSetScanFeedback("Box " + b.boxId + ": captured " + qtyTxt + dupTxt + moved, dup ? "warn" : "ok", "", "box");
+  var n        = (b.expectedSerials || []).length;
+  var countTxt = b.expectedQty ? (n + " of " + b.expectedQty) : (n + " so far");
+  var idTxt    = serial ? ("S/N " + serial) : fsan ? ("FSAN " + fsan) : value;
+  var moved    = res.movedFrom ? "  (moved from box " + res.movedFrom.boxId + ")" : "";
+  var dupTxt   = dup ? "  ⚠ already counted this session" : "";
+  // Name the captured device (serial/FSAN) so "captured 1" isn't ambiguous.
+  invSetScanFeedback("Box " + b.boxId + ": captured " + idTxt + " — " + countTxt + dupTxt + moved,
+    dup ? "warn" : "ok", "", "box");
   invBoxRenderBar();
   return true;
 }
@@ -5112,6 +5115,36 @@ function invBoxRenderBar() {
   }
   // Done only applies while a box is actively being captured.
   var doneBtn = $("invBoxDoneBtn"); if (doneBtn) doneBtn.disabled = !invActiveBox;
+  invUpdateScanPlaceholder();
+}
+
+// Context-aware scan-input prompt: reflects the current mode AND sub-state
+// (box armed/capturing, serial with an item context) so the user always sees
+// what TIM expects next, right where they're scanning/typing.
+function invUpdateScanPlaceholder() {
+  var input = $("invScanInput");
+  if (!input) return;
+  var txt;
+  if (invScanMode === "box") {
+    if (invBoxArmed) {
+      txt = "Scan the carton/box ID now";
+    } else if (invActiveBox) {
+      var b = boxGet(invActiveBox);
+      txt = "Capturing box " + (b ? b.boxId : invActiveBox) + " — scan its devices";
+    } else {
+      txt = "Tap Save & New to start a carton, or scan a known box";
+    }
+  } else if (invScanMode === "serial") {
+    var ctx = $("invScanItem") ? ($("invScanItem").value || "").trim() : "";
+    txt = ctx ? ("Scan the device serial / FSAN for " + ctx) : "Scan serial number or FSAN, then Enter";
+  } else if (invScanMode === "reel") {
+    txt = "Scan reel number, then Enter";
+  } else if (invScanMode === "item") {
+    txt = "Scan item number for bulk count, then Enter";
+  } else {
+    txt = "Scan barcode or type value, then Enter";
+  }
+  input.placeholder = txt;
 }
 
 function invHandleBulkCount(itemNumber, qty, notes, location) {
@@ -5287,16 +5320,8 @@ function invSetScanMode(mode) {
   var overrideMap = { auto: "", serial: "", reel: "", item: "item_number", box: "" };
   var override = $("invScanTypeOverride");
   if (override) override.value = overrideMap[mode] || "";
-  // Update placeholder for user guidance
-  var placeholders = {
-    auto:   "Scan barcode or type value, then press Enter",
-    serial: "Scan serial number or FSAN, then press Enter",
-    reel:   "Scan reel number, then press Enter",
-    item:   "Scan item number for bulk count, then press Enter",
-    box:    "Scan a carton/box ID, then scan its devices"
-  };
-  var input = $("invScanInput");
-  if (input) input.placeholder = placeholders[mode] || placeholders.auto;
+  // Context-aware placeholder reflects the mode and its sub-state.
+  invUpdateScanPlaceholder();
 
   var kp  = $("invQtyKeypad");
   var rip = $("invReelInlinePanel");
@@ -5685,8 +5710,8 @@ function invProcessScan() {
     var _serialMatch = findProductMapMatch(rawValue);
     if (_serialMatch && _serialMatch.entry && getTrackingType(_serialMatch.entry) === "serial") {
       var _sDesc = getMapDescription(_serialMatch.entry);
-      invSetScanMode("serial");
-      var _ci = $("invScanItem"); if (_ci) _ci.value = rawValue;
+      var _ci = $("invScanItem"); if (_ci) _ci.value = rawValue;  // set context first…
+      invSetScanMode("serial");                                    // …so the placeholder shows the item
       invSetScanFeedback("Serial required — " + rawValue + (_sDesc ? " (" + _sDesc + ")" : "") +
         " is serial-tracked. Scan the device serial.", "warn");
       $("invScanInput").value = "";
@@ -7464,6 +7489,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   if (itemInput) {
     itemInput.addEventListener("input", function() {
       itemInput.value = sanitizeScannerValue(itemInput.value, { uppercase: true });
+      invUpdateScanPlaceholder();   // serial-mode prompt shows the item context
     });
     itemInput.addEventListener("blur", invMaybeRefocusScanInput);
   }
