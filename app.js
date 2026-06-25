@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.09.00";
+const APP_VERSION = "v2.11.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8,7 +8,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [] };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {} };
 let PRODUCT_MAP = appData.product_map;
 let BARCODE_MAP = appData.barcode_map;
 let history = appData.history;
@@ -499,8 +499,17 @@ function cleanRmaNumber(value) {
   if (!cleaned || /^[?\s]+$/.test(cleaned)) return "null";
   return cleaned;
 }
+// A real RMA device row has a long numeric serial in column A and/or a CXNK
+// FSAN in column B. Stray label/summary rows (e.g. a bare HCTC code like 7546)
+// match neither and must be dropped so they don't become phantom devices.
+function rmaRowLooksLikeDevice(colA, colB) {
+  var serialLooksReal = /^\d{8,}$/.test(colA);   // device serials are long (12-digit) numbers; HCTC codes are 4 digits
+  var fsanLooksReal = /^CXNK/i.test(colB);        // Calix FSANs start with CXNK
+  return serialLooksReal || fsanLooksReal;
+}
 function parseRmaRows(rawRows) {
   const rows = [];
+  const skipped = [];
   let currentItem = "";
   let currentRma = "";
 
@@ -518,6 +527,13 @@ function parseRmaRows(rawRows) {
     if (!currentItem) return;
     if (!colA && !colB) return;
 
+    // Guard against stray non-device rows (labels, HCTC codes, totals) that
+    // would otherwise be ingested with serial/FSAN set to junk values.
+    if (!rmaRowLooksLikeDevice(colA, colB)) {
+      skipped.push({ row_number: index + 1, colA: colA, colB: colB });
+      return;
+    }
+
     rows.push({
       row_number: index + 1,
       source_type: "rma",
@@ -527,6 +543,10 @@ function parseRmaRows(rawRows) {
       FSAN: colB
     });
   });
+
+  if (skipped.length) {
+    console.warn("parseRmaRows: skipped " + skipped.length + " non-device row(s):", skipped);
+  }
 
   if (!rows.length) {
     throw new Error("No RMA serial rows found. Expected item/RMA header rows followed by serial/CXNK rows in columns A and B.");
@@ -870,6 +890,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.recount_sessions))  appData.recount_sessions  = parsed.recount_sessions;
   if (Array.isArray(parsed.recount_movements)) appData.recount_movements = parsed.recount_movements;
   if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
+  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxSaveToStorage(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -3366,7 +3387,11 @@ let invTabOpenedOnce = false;
 let _invAutoRestoreStarted = false;
 let invCurrentLocation = "";
 let invNotesModalEventId = null;
-let invScanMode = "auto";          // "auto" | "serial" | "reel" | "item"
+let invScanMode = "auto";          // "auto" | "serial" | "reel" | "item" | "box"
+let invActiveBox = "";             // normalized boxId currently being captured (box mode), or ""
+let invLastScannedBox = "";        // normalized boxId of the last box scanned (target for "Open box")
+let invBoxIsOverride = false;      // active capture is an open-box override (diff vs prior on Done)
+let invBoxOverridePrior = [];      // pre-open serial snapshot, for the override diff
 let invLastBulkEventId = null;     // eventId of most recent bulk_quantity_count
 var invOdooQuantMap = {};          // normKey(defCode+"||"+loc+"||"+lot) → { id, onHandQty }
 const INV_QUANT_MAP_KEY = "tim_odoo_quant_map_v1";
@@ -3832,7 +3857,7 @@ function renderInvStatusBar() {
 
   var modePill = $("invStatusModePill");
   if (modePill) {
-    var modeLabel = { auto: "AUTO", serial: "SERIAL", reel: "REEL", item: "ITEM" };
+    var modeLabel = { auto: "AUTO", serial: "SERIAL", reel: "REEL", item: "ITEM", box: "BOX" };
     modePill.textContent = modeLabel[invScanMode] || "AUTO";
     modePill.className   = "inv-status-mode-pill" + (invScanMode !== "auto" ? " mode-" + invScanMode : "");
   }
@@ -4269,6 +4294,9 @@ function invClassifyScan(raw) {
   // Box ID prefix
   if (/^BOX/i.test(v)) return "box_id";
 
+  // Known carton/container in the box registry → box scan (sealed fast-count)
+  if (boxGet(v)) return "box_id";
+
   // Location prefix (warehouse locations start with WH)
   if (/^WH/i.test(v)) return "location";
 
@@ -4452,64 +4480,412 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
   return true;
 }
 
+// ===================================================================
+// BOX REGISTRY — carton/container → device associations (appData.boxes)
+// -------------------------------------------------------------------
+// Maps a scannable container ID (a Calix "Carton No." or a master
+// carton/bin) to the device serials it contains, so a single scan of a
+// sealed box can count every device inside. Associations are built by
+// scanning the carton's serial manifest (the box need not be opened) and
+// overridden by re-scanning when a box is opened. Persisted locally under
+// BOX_STORAGE_KEY and included in master-JSON export/import; GitHub sync
+// of boxes is intentionally deferred. Map keys are normalized-uppercase
+// box IDs. See the Data Dictionary for the BoxEntry shape.
+// ===================================================================
+
+var BOX_STORAGE_KEY = "tim_boxes_v1";
+
+function boxNormId(boxId) { return normKey(boxId); }
+function boxWho() { return (typeof timGetUsername === "function" ? timGetUsername() : "") || ""; }
+
+function boxSaveToStorage() {
+  TimDB.set(BOX_STORAGE_KEY, appData.boxes || {}).catch(function(){});
+}
+function boxLoadFromStorage() {
+  return TimDB.get(BOX_STORAGE_KEY).then(function(saved) {
+    if (saved && typeof saved === "object") appData.boxes = saved;
+  }).catch(function(){});
+}
+
+function boxGet(boxId) {
+  var key = boxNormId(boxId);
+  if (!key || !appData.boxes) return null;
+  return appData.boxes[key] || null;
+}
+function boxAll() {
+  return Object.keys(appData.boxes || {}).map(function(k) { return appData.boxes[k]; });
+}
+
+// Which box currently lists this serial (for move/relocation detection).
+function boxFindBySerial(serial) {
+  var sk = normKey(serial);
+  if (!sk) return null;
+  var boxes = appData.boxes || {};
+  var keys = Object.keys(boxes);
+  for (var i = 0; i < keys.length; i++) {
+    var b = boxes[keys[i]];
+    if (b && (b.expectedSerials || []).some(function(s) { return normKey(s) === sk; })) return b;
+  }
+  return null;
+}
+
+// Create or merge a box record. `fields` may include calixProduct,
+// expectedQty, location, sealed, source. Never overwrites a stored value
+// with empty; stamps audit fields.
+function boxUpsert(boxId, fields) {
+  var key = boxNormId(boxId);
+  if (!key) return null;
+  if (!appData.boxes) appData.boxes = {};
+  fields = fields || {};
+  var now = invNow();
+  var b = appData.boxes[key];
+  if (!b) {
+    b = { boxId: normalize(boxId), expectedSerials: [], status: "capturing", opened: false,
+          source: fields.source || "scanned", createdAt: now, createdBy: boxWho() };
+    appData.boxes[key] = b;
+  }
+  if (fields.calixProduct) b.calixProduct = normalize(fields.calixProduct);
+  if (fields.expectedQty != null && fields.expectedQty !== "") b.expectedQty = Number(fields.expectedQty) || b.expectedQty;
+  if (fields.location) b.location = normalize(fields.location);
+  if (fields.source) b.source = fields.source;
+  b.updatedAt = now;
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return b;
+}
+
+// Add a serial to a box's expected contents (dedup). If the serial was
+// listed in a different box, it is moved here. Returns
+// { box, added:bool, movedFrom:<box|null> }.
+function boxAddSerial(boxId, serial, fields) {
+  var b = boxUpsert(boxId, fields);
+  if (!b) return { box: null, added: false, movedFrom: null };
+  var sk = normKey(serial);
+  if (!sk) return { box: b, added: false, movedFrom: null };
+
+  var prior = boxFindBySerial(serial);
+  var movedFrom = (prior && boxNormId(prior.boxId) !== boxNormId(b.boxId)) ? prior : null;
+  if (movedFrom) {
+    movedFrom.expectedSerials = (movedFrom.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
+    movedFrom.updatedAt = invNow();
+  }
+
+  var already = (b.expectedSerials || []).some(function(s) { return normKey(s) === sk; });
+  var added = false;
+  if (!already) { b.expectedSerials.push(normalize(serial)); added = true; }
+  b.updatedAt = invNow();
+  boxSaveToStorage();
+  return { box: b, added: added, movedFrom: movedFrom };
+}
+
+// Replace a box's entire expected-serial list (open-box override).
+// Marks the box opened (sealed=false). Returns { box, missing:[...], extra:[...] }
+// diffed against the prior contents (normalized-uppercase serials).
+function boxSetSerials(boxId, serials, fields) {
+  var b = boxUpsert(boxId, fields);
+  if (!b) return { box: null, missing: [], extra: [] };
+  var priorKeys = (b.expectedSerials || []).map(normKey);
+  var newList = [], newKeys = {};
+  (serials || []).forEach(function(s) {
+    var k = normKey(s);
+    if (k && !newKeys[k]) { newKeys[k] = 1; newList.push(normalize(s)); }
+  });
+  var missing = priorKeys.filter(function(k) { return !newKeys[k]; });
+  var extra   = Object.keys(newKeys).filter(function(k) { return priorKeys.indexOf(k) === -1; });
+  b.expectedSerials = newList;
+  b.opened = true;
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return { box: b, missing: missing, extra: extra };
+}
+
+function boxDelete(boxId) {
+  var key = boxNormId(boxId);
+  if (key && appData.boxes && appData.boxes[key]) { delete appData.boxes[key]; boxSaveToStorage(); return true; }
+  return false;
+}
+
+// Capture lifecycle: "capturing" = open for scans (re-scan resumes);
+// "ready" = finalized, scanning it triggers a fast-count.
+function boxFinalize(boxId) {
+  var b = boxGet(boxId);
+  if (!b) return null;
+  b.status = "ready";
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return b;
+}
+function boxReopen(boxId) {
+  var b = boxGet(boxId);
+  if (!b) return null;
+  b.status = "capturing";
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return b;
+}
+
+// Sealed fast-count: scan a known "ready" box → count every device in its
+// registry manifest in one action. Counted on trust (the box is sealed); the
+// asserted serial list is snapshotted onto the box_scan event for audit, and
+// each device gets its own serialized_device_scan (so dedup/reporting work).
 function invHandleBoxScan(boxId, contextItem, notes, location) {
-  var vKey = normKey(boxId);
-  var boxDevices = (history.records || []).filter(function(r) {
-    return normKey(r.sale_order || "") === vKey ||
-           normKey(r.box_id     || "") === vKey;
-  });
+  var b = boxGet(boxId);
+  var snapshot = b ? (b.expectedSerials || []).slice() : [];
 
-  // Always record the box_scan event
-  invCreateEvent("box_scan", {
-    scanType:            "box_id",
-    scannedValue:        boxId,
-    boxId:               boxId,
-    location:            location || "",
-    resolvedDeviceCount: boxDevices.length,
-    notes:               notes
-  });
-
-  if (!boxDevices.length) {
+  if (!b || !snapshot.length) {
     invCreateExceptionEvent(boxId, "box_id",
-      "Box ID not found in history — no devices resolved",
-      "Verify the box ID matches a Sale Order or Box ID in the loaded history JSON.",
+      "Box not found or empty in the box registry",
+      "Capture this box first in Box mode (scan the carton, then its devices), or scan devices individually.",
       notes);
-    invSetScanFeedback("Box \"" + boxId + "\" not found in history. Exception created.", "warn");
+    invSetScanFeedback("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
     return false;
   }
 
-  var counted = 0;
-  boxDevices.forEach(function(r) {
-    var serial = normalize(r.serial || r.ref || "");
-    var fsan   = normalize(r.fsan   || r.name || "");
-    var dup    = invFindSerializedDuplicate(serial, fsan);
-    if (dup) {
-      invCreateExceptionEvent(serial || fsan, "serial",
-        "Box device already counted (event #" + dup.sequence + ")",
-        "Review event #" + dup.sequence + " for duplicate.",
-        notes);
-    } else {
-      invCreateEvent("serialized_device_scan", {
-        scanType:     "box_id",
-        scannedValue: boxId,
-        serial:       serial,
-        fsan:         fsan,
-        boxId:        boxId,
-        location:     location || "",
-        itemNumber:   normalize(r.hctc || r.calix_product || ""),
-        description:  normalize(r.odoo_name || r.calix_description || ""),
-        qty:          1,
-        notes:        "From box " + boxId
-      });
-      counted++;
-    }
+  invCreateEvent("box_scan", {
+    scanType:            "box_id",
+    scannedValue:        boxId,
+    boxId:               b.boxId,
+    location:            location || "",
+    resolvedDeviceCount: snapshot.length,
+    expectedSerials:     snapshot,   // audit snapshot of what was asserted
+    sealedTrust:         true,       // counted without opening the box
+    notes:               notes
   });
 
+  var counted = 0, dups = 0;
+  snapshot.forEach(function(s) {
+    var rec    = invResolveBySerial(normKey(s));
+    var serial = rec ? normalize(rec.serial || rec.ref || s) : normalize(s);
+    var fsan   = rec ? normalize(rec.fsan   || rec.name || "") : "";
+    var dup    = invFindSerializedDuplicate(serial, fsan);
+    if (dup) { dups++; return; }
+    invCreateEvent("serialized_device_scan", {
+      scanType:      "box_id",
+      scannedValue:  boxId,
+      serial:        serial,
+      fsan:          fsan,
+      boxId:         b.boxId,
+      location:      location || "",
+      itemNumber:    rec ? normalize(rec.hctc || rec.calix_product || "") : "",
+      description:   rec ? normalize(rec.odoo_name || rec.calix_description || "") : "",
+      qty:           1,
+      fromSealedBox: true,             // distinguishes trusted-box counts in the report
+      notes:         "Sealed box " + b.boxId
+    });
+    counted++;
+  });
+
+  invLastScannedBox = boxNormId(boxId);
   invSetScanFeedback(
-    "Box " + boxId + ": " + counted + " of " + boxDevices.length + " device(s) counted." +
-    (counted < boxDevices.length ? " " + (boxDevices.length - counted) + " duplicate(s) flagged." : ""),
-    counted === boxDevices.length ? "ok" : "warn", "", counted > 0 ? "serialized" : "");
+    "Sealed box " + b.boxId + ": counted " + counted + " of " + snapshot.length + " device(s)" +
+    (dups ? " (" + dups + " already counted this session)" : "") +
+    '. Tap "Open box" if it was opened.',
+    "ok", "", "box");
+  invBoxRenderBar();
   return true;
+}
+
+// ===================================================================
+// BOX SCAN — Phase 2: Box capture mode, open/override
+// -------------------------------------------------------------------
+// Box-mode scan dispatcher and the active-capture lifecycle. Relies on
+// the shipment being imported first, so every device serial is known to
+// history; an in-box-mode scan that does NOT resolve to a known device is
+// treated as a carton/box ID. See invHandleBoxScan for sealed fast-count.
+// ===================================================================
+
+// Decide device vs carton for a scan while in Box mode.
+function invBoxModeScan(rawValue, notes) {
+  var v = sanitizeScannerValue(rawValue, { uppercase: true });
+  if (!v) return false;
+
+  // 1) Known device serial/FSAN → count it into the active capture box.
+  var rec = invResolveBySerial(normKey(v)) || invResolveByFsan(normKey(v));
+  if (rec) {
+    if (!invActiveBox) {
+      invSetScanFeedback("Scan a carton/box ID first, then scan its devices.", "warn");
+      return false;
+    }
+    return invBoxCaptureDevice(rec, v, notes);
+  }
+
+  // 2) Known box → resume capture (if still capturing) or fast-count (if ready).
+  var existing = boxGet(v);
+  if (existing) {
+    if (existing.status === "ready" && !invActiveBox) return invHandleBoxScan(v, "", notes, invCurrentLocation);
+    invBoxStartCapture(v, false);
+    return true;
+  }
+
+  // 3) Unknown value → a new carton ID. Guard against stray short numbers
+  //    (e.g. a scanned Qty barcode) being mistaken for a carton.
+  if (/^\d{1,5}$/.test(v)) {
+    invSetScanFeedback('"' + v + '" is not a known device or box. If this is a quantity, type it in the Expected qty field.', "warn");
+    return false;
+  }
+  invBoxStartCapture(v, false);
+  return true;
+}
+
+function invBoxStartCapture(boxId, isOverride) {
+  var b = boxUpsert(boxId, {});
+  if (!b) return;
+  invActiveBox       = boxNormId(boxId);
+  invLastScannedBox  = invActiveBox;
+  invBoxIsOverride   = !!isOverride;
+  var n = (b.expectedSerials || []).length;
+  invSetScanFeedback(
+    "Box " + b.boxId + " — capturing. " + n + " device(s) so far. Scan devices; tap Done when finished.",
+    "ok", "", "box");
+  invBoxRenderBar();
+}
+
+function invBoxCaptureDevice(rec, value, notes) {
+  var serial = normalize(rec.serial || rec.ref || value);
+  var fsan   = normalize(rec.fsan   || rec.name || "");
+  var dup    = invFindSerializedDuplicate(serial, fsan);
+  var b      = boxGet(invActiveBox);
+  var boxIdDisp = b ? b.boxId : invActiveBox;
+
+  if (dup) {
+    invCreateExceptionEvent(serial || fsan, "serial",
+      "Already counted this session (event #" + dup.sequence + ")",
+      "Device already scanned — not double-counted.", notes);
+  } else {
+    invCreateEvent("serialized_device_scan", {
+      scanType:    "box_id",
+      scannedValue: value,
+      serial:      serial,
+      fsan:        fsan,
+      boxId:       boxIdDisp,
+      location:    invCurrentLocation || "",
+      itemNumber:  normalize(rec.hctc || rec.calix_product || ""),
+      description: normalize(rec.odoo_name || rec.calix_description || ""),
+      qty:         1,
+      notes:       notes || ("Box capture " + boxIdDisp)
+    });
+  }
+
+  var res = boxAddSerial(invActiveBox, serial, {});
+  b = res.box;
+  var n      = (b.expectedSerials || []).length;
+  var qtyTxt = b.expectedQty ? (n + " of " + b.expectedQty) : String(n);
+  var moved  = res.movedFrom ? "  (moved from box " + res.movedFrom.boxId + ")" : "";
+  var dupTxt = dup ? "  ⚠ already counted" : "";
+  invSetScanFeedback("Box " + b.boxId + ": captured " + qtyTxt + dupTxt + moved, dup ? "warn" : "ok", "", "box");
+  invBoxRenderBar();
+  return true;
+}
+
+// "Done / Close box" — finalize the active capture. For an override, diff the
+// new contents against the pre-open snapshot and flag missing/extra devices.
+function invBoxFinish() {
+  if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return; }
+  if (!invActiveBox) { invSetScanFeedback("No box is being captured.", "info"); return; }
+  var b = boxGet(invActiveBox);
+  if (!b) { invBoxClearActive(); return; }
+  var n = (b.expectedSerials || []).length;
+
+  if (invBoxIsOverride) {
+    var priorKeys = (invBoxOverridePrior || []).map(normKey);
+    var curKeys   = (b.expectedSerials || []).map(normKey);
+    var missing = priorKeys.filter(function(k) { return curKeys.indexOf(k) === -1; });
+    var extra   = curKeys.filter(function(k) { return priorKeys.indexOf(k) === -1; });
+    b.opened = true;
+    boxFinalize(b.boxId);
+    if (missing.length) invCreateExceptionEvent(b.boxId, "box_id",
+      "Open box " + b.boxId + ": " + missing.length + " expected device(s) missing",
+      "Missing: " + missing.join(", "), "");
+    if (extra.length) invCreateExceptionEvent(b.boxId, "box_id",
+      "Open box " + b.boxId + ": " + extra.length + " unexpected device(s) found",
+      "Extra: " + extra.join(", "), "");
+    if (missing.length || extra.length) {
+      invSetScanFeedback("Box " + b.boxId + " updated: " + n + " device(s). " +
+        missing.length + " missing, " + extra.length + " extra — flagged.", "warn", "", "box");
+    } else {
+      invSetScanFeedback("Box " + b.boxId + " re-verified: " + n + " device(s), no changes.", "ok", "", "box");
+    }
+  } else {
+    boxFinalize(b.boxId);
+    invSetScanFeedback("Box " + b.boxId + " closed: " + n +
+      " device(s) recorded. Future scans will fast-count it.", "ok", "", "box");
+  }
+  invBoxClearActive();
+}
+
+// "Open box" — reopen the last-scanned box for correction. Voids this session's
+// sealed-count events for that box so re-scans aren't flagged as duplicates,
+// snapshots prior contents for the diff, and clears them so re-scan rebuilds.
+function invBoxOpen() {
+  if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return; }
+  var key = invLastScannedBox || invActiveBox;
+  var b   = key ? boxGet(key) : null;
+  if (!b) { invSetScanFeedback("No box to open — scan a known box first.", "warn"); return; }
+
+  invBoxVoidSessionCounts(b.boxId);
+  invBoxOverridePrior = (b.expectedSerials || []).slice();
+  boxSetSerials(b.boxId, [], {});      // clear contents; sets opened=true
+  boxReopen(b.boxId);
+  invActiveBox     = boxNormId(b.boxId);
+  invLastScannedBox = invActiveBox;
+  invBoxIsOverride = true;
+  invSetScanFeedback("Box " + b.boxId + " opened — scan the devices actually inside, then tap Done.", "info", "", "box");
+  invBoxRenderBar();
+}
+
+// Silently void (not via the confirm dialog) this session's sealed-count
+// events for a box, preserving them in the audit trail as voided.
+function invBoxVoidSessionCounts(boxId) {
+  var key = normKey(boxId);
+  (invEvents || []).forEach(function(e) {
+    if (e.status === "voided") return;
+    if (normKey(e.boxId || "") !== key) return;
+    if (e.eventType === "box_scan" || (e.eventType === "serialized_device_scan" && e.fromSealedBox)) {
+      e.status = "voided";
+      if (!e.voidLog) e.voidLog = [];
+      e.voidLog.push({ action: "voided", at: invNow(), reason: "box reopened" });
+    }
+  });
+  invSession.updatedAt = invNow();
+  scheduleInvAutosave();
+  renderInvEventLog();
+}
+
+function invBoxSetExpectedQty(val) {
+  if (!invActiveBox) return;
+  boxUpsert(invActiveBox, { expectedQty: val });
+  invBoxRenderBar();
+}
+
+function invBoxClearActive() {
+  invActiveBox = "";
+  invBoxIsOverride = false;
+  invBoxOverridePrior = [];
+  invBoxRenderBar();
+}
+
+function invBoxRenderBar() {
+  var bar      = $("invBoxBar");
+  var label    = $("invBoxBarLabel");
+  var qtyInput = $("invBoxExpectedQty");
+  if (!bar) return;
+  var b = invActiveBox ? boxGet(invActiveBox) : null;
+  if (b) {
+    bar.classList.remove("hidden");
+    var n = (b.expectedSerials || []).length;
+    var qtyTxt = b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
+    if (label) label.textContent = (invBoxIsOverride ? "Re-counting box " : "Capturing box ") + b.boxId + " — " + qtyTxt + " device(s)";
+    if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = b.expectedQty || "";
+  } else if (invScanMode === "box") {
+    bar.classList.remove("hidden");
+    if (label) label.textContent = "Box mode — scan a carton/box ID to begin.";
+    if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = "";
+  } else {
+    bar.classList.add("hidden");
+  }
 }
 
 function invHandleBulkCount(itemNumber, qty, notes, location) {
@@ -4660,15 +5036,15 @@ function invClearLocation() {
 
 function invSetScanMode(mode) {
   invScanMode = mode;
-  var modeActiveClass = { auto: "active", serial: "active-serial", reel: "active-reel", item: "active-item" };
-  var modes = ["auto", "serial", "reel", "item"];
+  var modeActiveClass = { auto: "active", serial: "active-serial", reel: "active-reel", item: "active-item", box: "active-box" };
+  var modes = ["auto", "serial", "reel", "item", "box"];
   modes.forEach(function(m) {
     var btn = $("invModeBtn" + m.charAt(0).toUpperCase() + m.slice(1));
     if (!btn) return;
     btn.className = "inv-mode-btn" + (m === mode ? " " + modeActiveClass[mode] : "");
   });
   // Wire hidden override select so existing invProcessScan logic picks it up
-  var overrideMap = { auto: "", serial: "", reel: "", item: "item_number" };
+  var overrideMap = { auto: "", serial: "", reel: "", item: "item_number", box: "" };
   var override = $("invScanTypeOverride");
   if (override) override.value = overrideMap[mode] || "";
   // Update placeholder for user guidance
@@ -4676,7 +5052,8 @@ function invSetScanMode(mode) {
     auto:   "Scan barcode or type value, then press Enter",
     serial: "Scan serial number or FSAN, then press Enter",
     reel:   "Scan reel number, then press Enter",
-    item:   "Scan item number for bulk count, then press Enter"
+    item:   "Scan item number for bulk count, then press Enter",
+    box:    "Scan a carton/box ID, then scan its devices"
   };
   var input = $("invScanInput");
   if (input) input.placeholder = placeholders[mode] || placeholders.auto;
@@ -4735,6 +5112,7 @@ function invSetScanMode(mode) {
     var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
   }
 
+  invBoxRenderBar();
   renderInvStatusBar();
   setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
 }
@@ -4990,10 +5368,10 @@ function invProcessScan() {
   timUnlockAudio();
 
   // Mode-switch barcodes: ##MAUTO, ##MSERIAL, ##MREEL, ##MITEM
-  var modeSwitchMap = { "##MAUTO": "auto", "##MSERIAL": "serial", "##MREEL": "reel", "##MITEM": "item" };
+  var modeSwitchMap = { "##MAUTO": "auto", "##MSERIAL": "serial", "##MREEL": "reel", "##MITEM": "item", "##MBOX": "box" };
   if (modeSwitchMap[rawValue]) {
     invSetScanMode(modeSwitchMap[rawValue]);
-    var modeLabels = { auto: "Auto-Detect", serial: "Serial / FSAN", reel: "Cable Reel", item: "Item # (Bulk)" };
+    var modeLabels = { auto: "Auto-Detect", serial: "Serial / FSAN", reel: "Cable Reel", item: "Item # (Bulk)", box: "Box / Carton" };
     var newLabel = modeLabels[modeSwitchMap[rawValue]];
     var fb = $("invScanFeedback");
     if (fb) { fb.textContent = "Mode: " + newLabel; fb.className = "inv-scan-feedback ok"; }
@@ -5009,6 +5387,15 @@ function invProcessScan() {
   if (invClassifyScan(rawValue) === "location") scanType = "location";
   var contextItem = sanitizeScannerValue($("invScanItem") ? $("invScanItem").value || "" : "", { uppercase: true });
   var notes       = $("invScanNotes") ? ($("invScanNotes").value || "").trim() : "";
+
+  // Box mode: route everything except locations to the box-capture dispatcher
+  if (invScanMode === "box" && !override && scanType !== "location") {
+    invBoxModeScan(rawValue, notes);
+    $("invScanInput").value = "";
+    invUpdateDetectedBadge("");
+    setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
+    return;
+  }
 
   // In serial mode with no override, default unknown scans to serial
   if (invScanMode === "serial" && !override && scanType === "unknown") {
@@ -6895,6 +7282,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
       { id: "invBarcodeSerial", value: "##MSERIAL" },
       { id: "invBarcodeReel",   value: "##MREEL"   },
       { id: "invBarcodeItem",   value: "##MITEM"   },
+      { id: "invBarcodeBox",    value: "##MBOX"    },
       { id: "invBarcodeAuto",   value: "##MAUTO"   }
     ];
     if (typeof JsBarcode === "undefined") return;
@@ -6981,7 +7369,8 @@ function buildExportPayload() {
     barcode_map: BARCODE_MAP,
     odoo_quants: appData.odoo_quants || [],
     recount_sessions:  appData.recount_sessions  || [],
-    recount_movements: appData.recount_movements || []
+    recount_movements: appData.recount_movements || [],
+    boxes: appData.boxes || {}
   };
 }
 
@@ -8728,6 +9117,7 @@ invAutoRestoreSession();
 invLoadOdooQuantMap();
 invLoadQuantsBaseline();
 invLoadLocationMap();
+boxLoadFromStorage();
 chkLoadState();
 
 // Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts

@@ -61,7 +61,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | Variable | Purpose |
 |----------|---------|
 | `APP_VERSION` | Version string shown in UI |
-| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements }` |
+| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, boxes }` |
 | `PRODUCT_MAP` | Alias for `appData.product_map` — item definitions keyed by item number |
 | `BARCODE_MAP` | Alias for `appData.barcode_map` — barcode→item lookup |
 | `currentBatch` | Rows being processed in current receiving batch |
@@ -377,12 +377,40 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ---
 
+### Box Registry — carton/container → device associations (`appData.boxes`)
+
+Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the device serials inside, so one scan of a sealed box counts all its devices. Built by scanning the carton serial manifest; overridden on open. Persisted under `BOX_STORAGE_KEY` (`tim_boxes_v1`) + included in master-JSON export/import. GitHub sync deferred. See Data Dictionary for the `BoxEntry` shape.
+
+| Function | Purpose |
+|----------|---------|
+| `boxGet(boxId)` / `boxAll()` | Look up one box (normalized key) / list all boxes |
+| `boxFindBySerial(serial)` | Find which box currently lists a serial (move detection) |
+| `boxUpsert(boxId, fields)` | Create/merge a box record; stamps audit fields; never overwrites with empty |
+| `boxAddSerial(boxId, serial, fields)` | Add serial to box (dedup), moving it from a prior box if needed |
+| `boxSetSerials(boxId, serials, fields)` | Replace contents (open-box override); returns `{missing, extra}` diff; sets `sealed=false` |
+| `boxFinalize(boxId)` / `boxReopen(boxId)` | Capture lifecycle: set `status` `ready` (fast-countable) / `capturing` (re-scan resumes) |
+| `boxDelete(boxId)` | Remove a box record |
+| `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB |
+
+**Box scan mode (Phase 2)** — a 5th scan mode (`invScanMode === "box"`, mode barcode `##MBOX`). Capture a carton by scanning its ID then its device serials (relies on shipment being imported first, so a scan that doesn't resolve to a known device = a carton ID). Globals: `invActiveBox`, `invLastScannedBox`, `invBoxIsOverride`, `invBoxOverridePrior`.
+
+| Function | Purpose |
+|----------|---------|
+| `invBoxModeScan(raw, notes)` | Box-mode dispatcher: known device → capture into active box; known box → resume (capturing) or fast-count (ready); unknown → new carton |
+| `invBoxStartCapture(boxId, isOverride)` | Set active capture box (new or resume) |
+| `invBoxCaptureDevice(rec, value, notes)` | Count a device + add to active box (dedup-aware) |
+| `invBoxFinish()` | "Done/Close box" → `boxFinalize`; for override, diffs vs pre-open snapshot and flags missing/extra |
+| `invBoxOpen()` | "Open box" → void this session's sealed-count events for the box, snapshot+clear contents, reopen for override |
+| `invBoxVoidSessionCounts(boxId)` | Silently void (no confirm) the box's `box_scan` + `fromSealedBox` events |
+| `invBoxSetExpectedQty(v)` / `invBoxClearActive()` / `invBoxRenderBar()` | Optional qty / cancel active capture / refresh the `#invBoxBar` UI |
+| `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event |
+
 ### Inventory — Scan Handlers
 
 | Function | Purpose |
 |----------|---------|
 | `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception |
-| `invHandleBoxScan(boxId, ctx, notes, loc)` | Process box scan → count devices inside |
+| `invHandleBoxScan(boxId, ctx, notes, loc)` | Sealed fast-count of a known box (see Box Registry section) |
 | `invHandleBulkCount(itemNum, qty, notes, loc)` | Record bulk quantity count |
 | `invHandleMacScan(mac, ctx, notes, loc)` | Process MAC scan → resolve → serial handler |
 | `invHandleReelScan(reelNum, notes, loc)` | Process reel scan → open reel entry panel |

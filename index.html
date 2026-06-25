@@ -416,7 +416,20 @@
           <button class="inv-mode-btn"        id="invModeBtnSerial" onclick="invSetScanMode('serial')">Serial / FSAN</button>
           <button class="inv-mode-btn"        id="invModeBtnReel"   onclick="invSetScanMode('reel')">Cable Reel</button>
           <button class="inv-mode-btn"        id="invModeBtnItem"   onclick="invSetScanMode('item')">Item # (Bulk)</button>
+          <button class="inv-mode-btn"        id="invModeBtnBox"    onclick="invSetScanMode('box')">Box / Carton</button>
           <button class="secondary" style="padding:6px 10px;font-size:12px;margin:0 0 0 6px;" onclick="invToggleModeBarcodes()">Mode Barcodes ▾</button>
+        </div>
+
+        <!-- Box capture / sealed-count bar (Phase 2) -->
+        <div id="invBoxBar" class="inv-box-bar hidden">
+          <span id="invBoxBarLabel" class="inv-box-bar-label">Box mode — scan a carton/box ID to begin.</span>
+          <label class="inv-box-bar-qty">Expected qty
+            <input id="invBoxExpectedQty" type="number" min="1" inputmode="numeric" placeholder="—"
+                   onchange="invBoxSetExpectedQty(this.value)" autocomplete="off" />
+          </label>
+          <button id="invBoxDoneBtn" onclick="invBoxFinish()">✓ Done / Close box</button>
+          <button class="secondary" id="invBoxOpenBtn" onclick="invBoxOpen()">Open box</button>
+          <button class="secondary" id="invBoxCancelBtn" onclick="invBoxClearActive()">Cancel</button>
         </div>
 
         <!-- Mode-switch barcodes (scan to change mode without touching screen) -->
@@ -435,6 +448,11 @@
             <svg id="invBarcodeItem"></svg>
             <div class="inv-mode-barcode-label">Item # Bulk Mode</div>
             <div class="inv-mode-barcode-code">##MITEM</div>
+          </div>
+          <div class="inv-mode-barcode-item">
+            <svg id="invBarcodeBox"></svg>
+            <div class="inv-mode-barcode-label">Box / Carton Mode</div>
+            <div class="inv-mode-barcode-code">##MBOX</div>
           </div>
           <div class="inv-mode-barcode-item">
             <svg id="invBarcodeAuto"></svg>

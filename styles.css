@@ -130,6 +130,7 @@ h2 { margin-top: 28px; }
 .inv-status-mode-pill.mode-serial { background: #7c3aed; }
 .inv-status-mode-pill.mode-reel { background: #059669; }
 .inv-status-mode-pill.mode-item { background: #d97706; }
+.inv-status-mode-pill.mode-box { background: #b45309; }
 .inv-status-loc { display: flex; align-items: center; gap: 3px; background: #334155; border-radius: 6px; padding: 2px 4px 2px 8px; flex-shrink: 0; }
 .inv-status-loc-text { font-size: 12px; font-weight: 600; }
 .inv-status-loc-text.no-loc { color: #64748b; font-weight: 400; }
@@ -352,7 +353,17 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-mode-btn.active-reel { background:#0891b2; color:white; border-color:#0e7490; }
 .inv-mode-btn.active-item { background:#16a34a; color:white; border-color:#15803d; }
 .inv-mode-btn.active-serial { background:#7c3aed; color:white; border-color:#6d28d9; }
+.inv-mode-btn.active-box { background:#b45309; color:white; border-color:#92400e; }
 .inv-mode-toggle-label { font-size:12px; font-weight:700; color:#64748b; white-space:nowrap; margin-right:4px; }
+
+/* Box capture / sealed-count bar (Phase 2) */
+.inv-box-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:8px 0 4px; padding:8px 12px; background:#fffbeb; border:1.5px solid #fcd34d; border-radius:8px; }
+.inv-box-bar.hidden { display:none; }
+.inv-box-bar-label { font-weight:700; font-size:13px; color:#92400e; flex:1 1 auto; min-width:200px; }
+.inv-box-bar-qty { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:.04em; margin:0; }
+.inv-box-bar-qty input { width:64px; padding:5px 7px; border:1.5px solid #fcd34d; border-radius:6px; font-family:monospace; font-size:14px; font-weight:700; text-align:center; }
+.inv-box-bar button { margin:0; padding:8px 14px; font-size:13px; }
+#invBoxDoneBtn { background:#16a34a; border-color:#15803d; }
 
 /* === Mode Switch Barcodes === */
 .inv-mode-barcodes { display:flex; gap:14px; flex-wrap:wrap; padding:12px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:10px; margin-bottom:10px; align-items:flex-start; }
