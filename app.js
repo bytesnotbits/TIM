@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.12.02";
+const APP_VERSION = "v2.12.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -9233,6 +9233,30 @@ function rcExportXlsx(recountId) {
 function invFinalizeSession() {
   if (!invSession) return;
   var activeCount = invEvents.filter(function(e) { return e.status !== "voided"; }).length;
+
+  // Guard: nothing to finalize — don't close an empty session or emit a no-op master.
+  if (activeCount === 0) {
+    alert("This session has no active events to finalize.\n\n" +
+          "Scan items first, or use Clear to discard the empty session.");
+    return;
+  }
+
+  // Guard against the catastrophic overwrite: finalize emits a master JSON the
+  // user is told to replace their real master with. If no master is loaded
+  // (0 products AND 0 history), that file would wipe existing data on replace.
+  var _histCount = (history && history.records) ? history.records.length : 0;
+  var _prodCount = PRODUCT_MAP ? Object.keys(PRODUCT_MAP).length : 0;
+  if (_histCount === 0 && _prodCount === 0) {
+    if (!confirm(
+      "⚠ NO MASTER DATA IS LOADED (0 products, 0 history records).\n\n" +
+      "The master JSON this download produces will NOT contain any existing " +
+      "history or product catalog. If you replace your real master file with " +
+      "it, that data will be permanently lost.\n\n" +
+      "Recommended: Cancel, load your master JSON first (Receiving tab, Step 1), " +
+      "then finalize.\n\nDownload anyway?"
+    )) return;
+  }
+
   if (!confirm(
     "Finalize session \"" + invSession.sessionName + "\"?\n\n" +
     "This will:\n" +
