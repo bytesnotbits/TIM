@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.12.03";
+const APP_VERSION = "v2.12.04";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3923,17 +3923,23 @@ function invImportBackup(input) {
   reader.onload = function(e) {
     try {
       var parsed = JSON.parse(e.target.result);
-      if (!parsed.session || !parsed.events) {
-        throw new Error("Missing session or events array. Is this a valid inventory backup?");
+      // Validate shape BEFORE mutating/persisting any state — a bad file must
+      // not half-replace the session and then crash the render (which would
+      // leave corrupt data autosaved to IndexedDB).
+      if (!parsed || typeof parsed !== "object" ||
+          !parsed.session || typeof parsed.session !== "object" ||
+          !Array.isArray(parsed.events)) {
+        throw new Error("Not a valid inventory backup — expected a session object and an events array. " +
+                        "(A master/source-data JSON is not a session backup.)");
       }
       if (invSession && !confirm("Replace the current active session with the imported backup?")) {
         input.value = ""; return;
       }
       invSession    = parsed.session;
-      invEvents     = parsed.events     || [];
-      invExceptions = parsed.exceptions || [];
-      invRecounts   = parsed.recounts   || [];
-      invSettings   = parsed.settings   || {};
+      invEvents     = parsed.events;
+      invExceptions = Array.isArray(parsed.exceptions) ? parsed.exceptions : [];
+      invRecounts   = Array.isArray(parsed.recounts)   ? parsed.recounts   : [];
+      invSettings   = (parsed.settings && typeof parsed.settings === "object") ? parsed.settings : {};
       invSequence   = invSession.sequenceCounter || 0;
       invSession.status = "active";
       invAutosave();
