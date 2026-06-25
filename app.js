@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.12.04";
+const APP_VERSION = "v2.13.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5623,6 +5623,21 @@ function invProcessScan() {
       : (function() { var m = findProductMapMatch(rawValue); return m && m.entry && m.entry.tracking_type === "reel"; }());
     if (_reelRouteMatch) {
       invPrefillReelItemNumber(rawValue, notes, invCurrentLocation);
+      return;
+    }
+    // Serial-tracked items must not be silently bulk-counted (#1): auto-switch
+    // to Serial mode and prompt for the device serial. The item number is
+    // prefilled as context so the upcoming serial scan links back to it.
+    var _serialMatch = findProductMapMatch(rawValue);
+    if (_serialMatch && _serialMatch.entry && getTrackingType(_serialMatch.entry) === "serial") {
+      var _sDesc = getMapDescription(_serialMatch.entry);
+      invSetScanMode("serial");
+      var _ci = $("invScanItem"); if (_ci) _ci.value = rawValue;
+      invSetScanFeedback("Serial required — " + rawValue + (_sDesc ? " (" + _sDesc + ")" : "") +
+        " is serial-tracked. Scan the device serial.", "warn");
+      $("invScanInput").value = "";
+      invUpdateDetectedBadge("");
+      setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
       return;
     }
     ok = invHandleBulkCount(rawValue, qty, notes, invCurrentLocation);
