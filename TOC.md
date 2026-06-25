@@ -396,7 +396,9 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `invBoxModeScan(raw, notes)` | Box-mode dispatcher: known device → capture into active box; known box → resume (capturing) or fast-count (ready); unknown → new carton |
+| `invBoxModeScan(raw, notes)` | Box-mode dispatcher (v2.14.00, armed-state model): if **armed** (New Box tapped) → take scan as carton ID (guards device-as-carton); known device/MAC → capture into active box; known box → resume/fast-count or warn if a *different* box is mid-capture; unrecognized → warn, never invents a box |
+| `invBoxResolveDevice(v)` | Resolve a scan to a known device by serial, FSAN, or MAC (shared device lookup) |
+| `invBoxNewBox()` | "New Box": auto-finish the active capture, then arm the next scan as the carton/box ID |
 | `invBoxStartCapture(boxId, isOverride)` | Set active capture box (new or resume) |
 | `invBoxCaptureDevice(rec, value, notes)` | Count a device + add to active box (dedup-aware) |
 | `invBoxFinish()` | "Done/Close box" → `boxFinalize`; for override, diffs vs pre-open snapshot and flags missing/extra |

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.13.00";
+const APP_VERSION = "v2.14.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3537,6 +3537,7 @@ let invActiveBox = "";             // normalized boxId currently being captured 
 let invLastScannedBox = "";        // normalized boxId of the last box scanned (target for "Open box")
 let invBoxIsOverride = false;      // active capture is an open-box override (diff vs prior on Done)
 let invBoxOverridePrior = [];      // pre-open serial snapshot, for the override diff
+let invBoxArmed = false;           // "New Box" tapped — next scan is taken as the carton/box ID
 let invLastBulkEventId = null;     // eventId of most recent bulk_quantity_count
 var invOdooQuantMap = {};          // normKey(defCode+"||"+loc+"||"+lot) → { id, onHandQty }
 const INV_QUANT_MAP_KEY = "tim_odoo_quant_map_v1";
@@ -4871,36 +4872,79 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
 // ===================================================================
 
 // Decide device vs carton for a scan while in Box mode.
+// Resolve a scanned value to a known device record by serial, FSAN, or MAC.
+function invBoxResolveDevice(v) {
+  return invResolveBySerial(normKey(v)) ||
+         invResolveByFsan(normKey(v)) ||
+         invResolveByMac(normKey(String(v).replace(/[:\-\.]/g, "")));
+}
+
 function invBoxModeScan(rawValue, notes) {
   var v = sanitizeScannerValue(rawValue, { uppercase: true });
   if (!v) return false;
 
-  // 1) Known device serial/FSAN → count it into the active capture box.
-  var rec = invResolveBySerial(normKey(v)) || invResolveByFsan(normKey(v));
+  // ARMED: the user tapped "New Box" — this scan is the carton/box ID itself.
+  if (invBoxArmed) {
+    // Guard: a "carton ID" that resolves to a known device/MAC is almost
+    // certainly a mis-scan (the device was scanned instead of the carton label).
+    if (invBoxResolveDevice(v)) {
+      invSetScanFeedback('"' + v + '" looks like a device, not a carton ID. ' +
+        "Scan the carton label, or tap Cancel to stop.", "warn");
+      return false; // stay armed so the next scan can be the real carton
+    }
+    invBoxArmed = false;
+    var known = boxGet(v);
+    invBoxStartCapture(v, false);
+    if (known) {
+      invSetScanFeedback("Resuming box " + (known.boxId || v) + " — " +
+        ((known.expectedSerials || []).length) + " device(s) so far. Scan devices.", "ok", "", "box");
+    }
+    return true;
+  }
+
+  // Known device (serial/FSAN/MAC) → count it into the active capture box.
+  var rec = invBoxResolveDevice(v);
   if (rec) {
     if (!invActiveBox) {
-      invSetScanFeedback("Scan a carton/box ID first, then scan its devices.", "warn");
+      invSetScanFeedback("Tap New Box and scan the carton ID first, then scan its devices.", "warn");
       return false;
     }
     return invBoxCaptureDevice(rec, v, notes);
   }
 
-  // 2) Known box → resume capture (if still capturing) or fast-count (if ready).
+  // Known box scanned without arming via New Box.
   var existing = boxGet(v);
   if (existing) {
+    if (invActiveBox && boxNormId(v) !== boxNormId(invActiveBox)) {
+      // Mid-capture, a different known box — never silently switch.
+      var cur = boxGet(invActiveBox);
+      invSetScanFeedback("You're capturing box " + (cur ? cur.boxId : invActiveBox) +
+        ". Tap Done to finish it, or New Box to start another.", "warn");
+      return false;
+    }
     if (existing.status === "ready" && !invActiveBox) return invHandleBoxScan(v, "", notes, invCurrentLocation);
-    invBoxStartCapture(v, false);
+    invBoxStartCapture(v, false); // resume the same/capturing box
     return true;
   }
 
-  // 3) Unknown value → a new carton ID. Guard against stray short numbers
-  //    (e.g. a scanned Qty barcode) being mistaken for a carton.
-  if (/^\d{1,5}$/.test(v)) {
-    invSetScanFeedback('"' + v + '" is not a known device or box. If this is a quantity, type it in the Expected qty field.', "warn");
-    return false;
-  }
-  invBoxStartCapture(v, false);
-  return true;
+  // Unrecognized value — DO NOT invent a box. This is the core fix: a stray
+  // MAC, typo, or device from an unimported shipment no longer becomes a junk
+  // carton. The user must explicitly tap New Box to start a carton.
+  invSetScanFeedback('"' + v + '" is not a known device or box. ' +
+    "If it's a new carton, tap New Box. If it's a device, the shipment may not be imported.", "warn");
+  return false;
+}
+
+// "New Box" — auto-finish the box currently being captured, then arm the next
+// scan to be taken as the new carton/box ID.
+function invBoxNewBox() {
+  if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return; }
+  if (invScanMode !== "box") invSetScanMode("box");
+  if (invActiveBox) invBoxFinish();   // finalizes the current box → ready, clears active
+  invBoxArmed = true;
+  invSetScanFeedback("New box — scan the carton/box ID now.", "info", "", "box");
+  invBoxRenderBar();
+  setTimeout(function() { var si = $("invScanInput"); if (si) si.focus(); }, 50);
 }
 
 function invBoxStartCapture(boxId, isOverride) {
@@ -5037,6 +5081,7 @@ function invBoxClearActive() {
   invActiveBox = "";
   invBoxIsOverride = false;
   invBoxOverridePrior = [];
+  invBoxArmed = false;
   invBoxRenderBar();
 }
 
@@ -5054,11 +5099,15 @@ function invBoxRenderBar() {
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = b.expectedQty || "";
   } else if (invScanMode === "box") {
     bar.classList.remove("hidden");
-    if (label) label.textContent = "Box mode — scan a carton/box ID to begin.";
+    if (label) label.textContent = invBoxArmed
+      ? "New box — scan the carton/box ID now."
+      : "Box mode — tap New Box to start a carton, or scan a known box to fast-count.";
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = "";
   } else {
     bar.classList.add("hidden");
   }
+  // Done only applies while a box is actively being captured.
+  var doneBtn = $("invBoxDoneBtn"); if (doneBtn) doneBtn.disabled = !invActiveBox;
 }
 
 function invHandleBulkCount(itemNumber, qty, notes, location) {
@@ -5222,6 +5271,7 @@ function invClearLocation() {
 
 function invSetScanMode(mode) {
   invScanMode = mode;
+  if (mode !== "box") invBoxArmed = false;   // leaving box mode disarms New Box
   var modeActiveClass = { auto: "active", serial: "active-serial", reel: "active-reel", item: "active-item", box: "active-box" };
   var modes = ["auto", "serial", "reel", "item", "box"];
   modes.forEach(function(m) {
