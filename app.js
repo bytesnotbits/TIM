@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.15.02";
+const APP_VERSION = "v2.16.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3480,6 +3480,101 @@ function timTestSound() {
   setTimeout(timUpdateAudioStatus, 250);
 }
 
+// -- Optional spoken feedback (Web Speech) --------------------------
+// An ADDITIVE layer over the mandatory tone/flash engine: when enabled, TIM
+// speaks SIGNIFICANT events (box saved, location set, duplicate, not found…)
+// so users don't have to memorize beep meanings. Rapid per-device scans stay
+// tone-only on purpose — speech is slower than a tone and would lag behind
+// fast scanning. Opt-in, persisted in localStorage like tim_username.
+//
+// CAVEAT (carry forward): speechSynthesis behavior under the iOS silent/mute
+// switch and after backgrounding CANNOT be verified on a dev box — it MUST be
+// tested on the warehouse iPad before iOS audibility is considered proven.
+// Same hard lesson as the tone engine above.
+var _timVoiceEnabled = false;
+var _timVoicePrimed = false;
+var _timVoiceSupported = (typeof window !== "undefined" &&
+                          "speechSynthesis" in window &&
+                          typeof window.SpeechSynthesisUtterance !== "undefined");
+
+function timVoiceLoadPref() {
+  try { _timVoiceEnabled = (localStorage.getItem("tim_voice_enabled") === "1"); } catch(e) {}
+  return _timVoiceEnabled;
+}
+
+// iOS/Safari requires a user gesture before the first utterance; speaking an
+// empty, silent utterance inside a gesture warms the engine. Safe to call on
+// every gesture (no-op once primed).
+function timVoicePrime() {
+  if (!_timVoiceSupported || _timVoicePrimed) return;
+  try {
+    var u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    window.speechSynthesis.speak(u);
+    _timVoicePrimed = true;
+  } catch(e) {}
+}
+
+// Speak a short phrase. Cancels any in-flight utterance first so phrases never
+// queue up and lag behind the action. No-op unless the user enabled voice.
+function invSpeak(text) {
+  if (!_timVoiceEnabled || !_timVoiceSupported || !text) return;
+  try {
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(String(text));
+    u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
+    window.speechSynthesis.speak(u);
+  } catch(e) {}
+}
+
+// Reflect enabled/supported state on the toggle + status chip.
+function timVoiceUpdateStatus() {
+  var cb = document.getElementById("timVoiceToggle");
+  if (cb) {
+    cb.checked = _timVoiceEnabled;
+    cb.disabled = !_timVoiceSupported;
+  }
+  var chip = document.getElementById("timVoiceStatus");
+  if (chip) {
+    if (!_timVoiceSupported) {
+      chip.textContent = "Voice unavailable on this device";
+      chip.className = "tim-audio-status blocked";
+    } else if (_timVoiceEnabled) {
+      chip.textContent = "🗣 Voice on";
+      chip.className = "tim-audio-status ok";
+    } else {
+      chip.textContent = "";
+      chip.className = "tim-audio-status";
+    }
+  }
+}
+
+// Toggle handler (wired to the "Speak feedback" checkbox).
+function timVoiceSetEnabled(on) {
+  _timVoiceEnabled = !!on && _timVoiceSupported;
+  try { localStorage.setItem("tim_voice_enabled", _timVoiceEnabled ? "1" : "0"); } catch(e) {}
+  if (_timVoiceEnabled) { timVoicePrime(); invSpeak("Voice on"); }  // runs inside the change gesture
+  timVoiceUpdateStatus();
+}
+
+function timTestVoice() {
+  timVoicePrime();            // within this click gesture
+  if (!_timVoiceSupported) { timVoiceUpdateStatus(); return; }
+  // Speak regardless of the toggle so users can preview before enabling.
+  try {
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance("Voice feedback test");
+    u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
+    window.speechSynthesis.speak(u);
+  } catch(e) {}
+}
+
+// Load persisted pref + sync the UI control at startup.
+function timInitVoice() {
+  timVoiceLoadPref();
+  timVoiceUpdateStatus();
+}
+
 // -- Activity feed --------------------------------------------------
 var invActivityLog = [];
 var INV_ACTIVITY_MAX = 8;
@@ -4600,6 +4695,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
       "DUPLICATE: " + value + " was already counted at " +
       invFormatTime(dupEvt.timestamp) + " (event #" + dupEvt.sequence + "). Exception created.",
       "error");
+    invSpeak("Duplicate");
     return false;
   }
 
@@ -4622,6 +4718,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
     invSetScanFeedback(
       "Unknown device: " + value + " — fill in details below and Commit, or Cancel to log an exception.",
       "warn");
+    invSpeak("Item not found");
     invShowSerialPrompt(value, scanType, location || invCurrentLocation);
     return false;
   }
@@ -4807,6 +4904,7 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
       "Capture this box first in Box mode (scan the carton, then its devices), or scan devices individually.",
       notes);
     invSetScanFeedback("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
+    invSpeak("Box not found");
     return false;
   }
 
@@ -4851,12 +4949,14 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
       "Box " + b.boxId + " was already counted this session — all " + dups +
       ' device(s) skipped (not double-counted). Tap "Open box" only if it was opened.',
       "warn", "", "box");
+    invSpeak("Box already counted");
   } else {
     invSetScanFeedback(
       "Sealed box " + b.boxId + ": counted " + counted + " of " + snapshot.length + " device(s)" +
       (dups ? " (" + dups + " already counted this session)" : "") +
       '. Tap "Open box" if it was opened.',
       "ok", "", "box");
+    invSpeak("Box found, " + counted + " counted");
   }
   invBoxRenderBar();
   return true;
@@ -4932,6 +5032,7 @@ function invBoxModeScan(rawValue, notes) {
   // carton. The user must explicitly tap New Box to start a carton.
   invSetScanFeedback('"' + v + '" is not a known device or box. ' +
     "If it's a new carton, tap Save & New. If it's a device, the shipment may not be imported.", "warn");
+  invSpeak("Unrecognized");
   return false;
 }
 
@@ -4944,8 +5045,8 @@ function invBoxNewBox() {
   // to the activity feed). For the first box there's nothing to save yet — just
   // play the box tone so the tap is acknowledged. The bar label is the visible
   // "scan the next carton" prompt in both cases.
-  if (invActiveBox) invBoxFinish();
-  else invSetScanFeedback("Scan the carton/box ID to start.", "info", "", "box");
+  if (invActiveBox) invBoxFinish();   // speaks its own "Box saved" confirmation
+  else { invSetScanFeedback("Scan the carton/box ID to start.", "info", "", "box"); invSpeak("New box"); }
   invBoxArmed = true;
   invBoxRenderBar();
   setTimeout(function() { var si = $("invScanInput"); if (si) si.focus(); }, 50);
@@ -4975,6 +5076,7 @@ function invBoxCaptureDevice(rec, value, notes) {
     invCreateExceptionEvent(serial || fsan, "serial",
       "Already counted this session (event #" + dup.sequence + ")",
       "Device already scanned — not double-counted.", notes);
+    invSpeak("Duplicate");
   } else {
     invCreateEvent("serialized_device_scan", {
       scanType:    "box_id",
@@ -5029,13 +5131,16 @@ function invBoxFinish() {
     if (missing.length || extra.length) {
       invSetScanFeedback("Box " + b.boxId + " updated: " + n + " device(s). " +
         missing.length + " missing, " + extra.length + " extra — flagged.", "warn", "", "box");
+      invSpeak("Box updated, " + missing.length + " missing, " + extra.length + " extra");
     } else {
       invSetScanFeedback("Box " + b.boxId + " re-verified: " + n + " device(s), no changes.", "ok", "", "box");
+      invSpeak("Box verified, " + n + " counted");
     }
   } else {
     boxFinalize(b.boxId);
     invSetScanFeedback("Box " + b.boxId + " closed: " + n +
       " device(s) recorded. Future scans will fast-count it.", "ok", "", "box");
+    invSpeak("Box saved, " + n + " counted");
   }
   invBoxClearActive();
 }
@@ -5057,6 +5162,7 @@ function invBoxOpen() {
   invLastScannedBox = invActiveBox;
   invBoxIsOverride = true;
   invSetScanFeedback("Box " + b.boxId + " opened — scan the devices actually inside, then tap Done.", "info", "", "box");
+  invSpeak("Box ready for edit");
   invBoxRenderBar();
 }
 
@@ -5418,6 +5524,7 @@ function invHandleBulkCount(itemNumber, qty, notes, location) {
       "Re-scan the item number, or check the barcode mapping for this code.",
       notes);
     invSetScanFeedback("Could not resolve that scan to an item — exception created.", "warn");
+    invSpeak("Item not found");
     return false;
   }
 
@@ -5499,6 +5606,7 @@ function invHandleMacScan(mac, contextItem, notes, location) {
     "Scan the serial number instead, or load a history JSON that includes this device.",
     notes);
   invSetScanFeedback("MAC " + mac + " not in history. Exception created.", "warn");
+  invSpeak("Item not found");
   return false;
 }
 
@@ -5941,6 +6049,7 @@ function invProcessScan() {
     var fb = $("invScanFeedback");
     if (fb) { fb.textContent = "Location → " + rawValue; fb.className = "inv-scan-feedback ok"; }
     invAddActivity("location", "Location → " + rawValue, "", "location");
+    invSpeak("Location " + rawValue);
     $("invScanInput").value = "";
     invUpdateDetectedBadge("");
     setTimeout(function() { $("invScanInput").focus(); }, 50);
@@ -5974,6 +6083,7 @@ function invProcessScan() {
       invSetScanMode("serial");                                    // …so the placeholder shows the item
       invSetScanFeedback("Serial required — " + rawValue + (_sDesc ? " (" + _sDesc + ")" : "") +
         " is serial-tracked. Scan the device serial.", "warn");
+      invSpeak("Serial required");
       $("invScanInput").value = "";
       invUpdateDetectedBadge("");
       setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
@@ -5994,6 +6104,7 @@ function invProcessScan() {
       "Select a scan mode or use the hidden type override to manually classify this scan.",
       notes);
     invSetScanFeedback("Unknown scan: \"" + rawValue + "\" — exception created. Select a mode or check the value.", "warn");
+    invSpeak("Unrecognized");
     ok = false;
   }
 
@@ -6675,6 +6786,7 @@ function invCommitSerialPrompt() {
       "Device already counted at " + invFormatTime(dup.timestamp) + " (event #" + dup.sequence + ")",
       "Review event #" + dup.sequence + ". Void it if scanned in error.", notes);
     invSetScanFeedback("DUPLICATE — already counted. Exception created.", "error");
+    invSpeak("Duplicate");
     invHideSerialPrompt();
     return;
   }
@@ -7762,6 +7874,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
         var val = sanitizeScannerValue(locationInput.value, { uppercase: true });
         invSetLocation(val);
         invSetScanFeedback(val ? "Location set to: " + val : "Location cleared.", val ? "ok" : "info");
+        invSpeak(val ? "Location " + val : "Location cleared");
         setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
       }
     });
@@ -9684,6 +9797,7 @@ try {
 // reads the just-restored data (and a normal startup still auto-syncs).
 timLoadMasterCache().then(ghInit, ghInit);
 timInitUsername();
+timInitVoice();
 renderInvSessionUI();
 invAutoRestoreSession();
 invLoadOdooQuantMap();
@@ -9697,7 +9811,7 @@ chkLoadState();
 // re-prime on every gesture and whenever the page becomes visible/focused again.
 (function() {
   timInitAudio();
-  function _prime() { timAudioPrime(); }
+  function _prime() { timAudioPrime(); timVoicePrime(); }
   document.addEventListener("pointerdown", _prime, { passive: true });
   document.addEventListener("keydown", _prime, { passive: true });
   document.addEventListener("visibilitychange", function() {

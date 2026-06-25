@@ -342,6 +342,8 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .tim-audio-status { font-size:12px; font-weight:600; align-self:center; }
 .tim-audio-status.ok      { color:#166534; }
 .tim-audio-status.blocked { color:#991b1b; }
+.tim-voice-toggle { display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:600; align-self:center; cursor:pointer; user-select:none; }
+.tim-voice-toggle input { cursor:pointer; }
 
 @media (max-width: 700px) { .inv-scan-context { grid-template-columns: 1fr; } }
 .inv-location-bar { display:flex; align-items:center; gap:8px; padding:7px 12px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; margin-bottom:8px; font-size:13px; flex-wrap:wrap; }

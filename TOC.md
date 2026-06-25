@@ -52,7 +52,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
 | `tim_catalog_health_v1` | Catalog Health review state `{ ignored: { extId → true } }` (dismissed alias groups) |
 
-`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`.
+`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`.
 
 ---
 
@@ -774,6 +774,10 @@ Scan feedback is **mandatory + dual-channel** (tone + full-screen flash). Tones 
 | `timFeedback(type, toneVariant)` | **Unified entry**: drives tone + flash; severity from `type`, success tone from `toneVariant` |
 | `timUpdateAudioStatus()` / `timTestSound()` | Audio status chip / "Test sound" button handler |
 | `playBeep(type)` | Receiving/blind-scan feedback → routes to `timFeedback` |
+| `invSpeak(text)` | Optional spoken feedback (Web Speech); speaks SIGNIFICANT events only, cancels in-flight phrase; no-op unless enabled. Rapid device scans stay tone-only |
+| `timVoiceSetEnabled(on)` / `timVoiceLoadPref()` | Toggle handler / load persisted `tim_voice_enabled` pref |
+| `timVoicePrime()` | Warm speechSynthesis inside a user gesture (iOS first-utterance unlock) |
+| `timVoiceUpdateStatus()` / `timTestVoice()` / `timInitVoice()` | Voice toggle+chip sync / "Test voice" button / startup init |
 
 ---
 

@@ -514,6 +514,11 @@
                 <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
                 <button class="secondary" onclick="timTestSound()" style="padding:12px 14px;" title="Play a test tone and flash. If you hear nothing, raise the volume or check the tablet's mute switch.">🔊 Test sound</button>
                 <span id="timAudioStatus" class="tim-audio-status"></span>
+                <label class="tim-voice-toggle" title="Speak short phrases for significant events (box saved, duplicate, location set…). Rapid device scans stay tone-only.">
+                  <input type="checkbox" id="timVoiceToggle" onchange="timVoiceSetEnabled(this.checked)" /> 🗣 Speak feedback
+                </label>
+                <button class="secondary" onclick="timTestVoice()" style="padding:12px 14px;" title="Speak a test phrase. On iPad this may need the volume up and the side switch off.">🗣 Test voice</button>
+                <span id="timVoiceStatus" class="tim-audio-status"></span>
               </div>
             </div>
             <div>
