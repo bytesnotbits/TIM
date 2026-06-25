@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.14.02";
+const APP_VERSION = "v2.15.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5084,6 +5084,116 @@ function invBoxSetExpectedQty(val) {
   invBoxRenderBar();
 }
 
+// "Undo last" — remove the most recently captured device from the active box:
+// void its serialized_device_scan event and drop the serial from the box's
+// contents. The common fix for a fat-fingered scan during capture.
+function invBoxUndoLast() {
+  if (!invActiveBox) { invSetScanFeedback("No box is being captured.", "info"); return; }
+  var b = boxGet(invActiveBox);
+  if (!b) { invSetScanFeedback("No box is being captured.", "info"); return; }
+  var key = boxNormId(invActiveBox);
+  var target = null;
+  for (var i = invEvents.length - 1; i >= 0; i--) {
+    var e = invEvents[i];
+    if (e.status === "voided") continue;
+    if (e.eventType !== "serialized_device_scan") continue;
+    if (normKey(e.boxId || "") !== key) continue;
+    target = e; break;
+  }
+  if (!target) { invSetScanFeedback("Nothing to undo for box " + b.boxId + ".", "info"); return; }
+  var label = target.serial || target.fsan || "last device";
+  if (!confirm("Remove " + label + " from box " + b.boxId + "?\n\nThis voids its count for this session.")) return;
+
+  target.status = "voided";
+  if (!target.voidLog) target.voidLog = [];
+  target.voidLog.push({ action: "voided", at: invNow(), reason: "undo last box scan" });
+
+  var sk = normKey(target.serial || target.fsan || "");
+  b.expectedSerials = (b.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
+  b.updatedAt = invNow();
+  boxSaveToStorage();
+  invSession.updatedAt = invNow();
+  scheduleInvAutosave();
+  renderInvEventLog();
+  invSetScanFeedback("Removed " + label + " from box " + b.boxId + " — " +
+    (b.expectedSerials || []).length + " left.", "warn", "", "box");
+  invBoxRenderBar();
+}
+
+// ----- Box manager modal: list / view contents / delete -----------
+function invOpenBoxManager() {
+  var modal = $("invBoxManagerModal");
+  if (!modal) return;
+  invRenderBoxManager();
+  modal.classList.remove("hidden");
+}
+function invCloseBoxManager() {
+  var modal = $("invBoxManagerModal");
+  if (modal) modal.classList.add("hidden");
+}
+var _invBoxMgrExpanded = {};   // boxKey -> true when its contents are shown
+function invBoxManagerToggleContents(boxKey) {
+  _invBoxMgrExpanded[boxKey] = !_invBoxMgrExpanded[boxKey];
+  invRenderBoxManager();
+}
+function invRenderBoxManager() {
+  var list = $("invBoxManagerList");
+  var summary = $("invBoxManagerSummary");
+  if (!list) return;
+  var boxes = boxAll().slice().sort(function(a, b) {
+    return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1;
+  });
+  if (summary) summary.textContent = boxes.length + " box(es) in the registry";
+  if (!boxes.length) {
+    list.innerHTML = '<div style="color:#94a3b8;padding:18px;text-align:center;">No boxes captured yet.</div>';
+    return;
+  }
+  list.innerHTML = boxes.map(function(b) {
+    var key   = boxNormId(b.boxId);
+    var n     = (b.expectedSerials || []).length;
+    var qtyTxt= b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
+    var statusPill = b.status === "ready" ? "ok" : "block";
+    var expanded = !!_invBoxMgrExpanded[key];
+    var contents = "";
+    if (expanded) {
+      contents = '<div style="margin:6px 0 4px;padding:8px;background:#f8fafc;border-radius:6px;font-family:monospace;font-size:12px;word-break:break-all;">' +
+        (n ? (b.expectedSerials || []).map(escapeHtml).join(", ") : "<span style=\"color:#94a3b8\">(empty)</span>") + "</div>";
+    }
+    return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font-weight:700;font-family:monospace;">' + escapeHtml(b.boxId) + '</span>' +
+        '<span class="pill ' + statusPill + '">' + escapeHtml(b.status || "") + '</span>' +
+        '<span class="small">' + qtyTxt + ' device(s)</span>' +
+        (b.location ? '<span class="small">@ ' + escapeHtml(b.location) + '</span>' : "") +
+        '<span style="margin-left:auto;display:flex;gap:6px;">' +
+          '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerToggleContents(\'' + chkJsStr(key) + '\')">' +
+            (expanded ? "Hide" : "View") + '</button>' +
+          '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + chkJsStr(b.boxId) + '\')">Delete</button>' +
+        '</span>' +
+      '</div>' + contents +
+      '<div class="small" style="color:#94a3b8;margin-top:4px;">updated ' + invFormatDateTime(b.updatedAt) +
+        (b.updatedBy ? " by " + escapeHtml(b.updatedBy) : "") + '</div>' +
+    '</div>';
+  }).join("");
+}
+function invBoxManagerDelete(boxId) {
+  var b = boxGet(boxId);
+  if (!b) return;
+  var n = (b.expectedSerials || []).length;
+  if (!confirm('Delete box "' + b.boxId + '"?\n\n' +
+      "This removes the box from the registry" +
+      (invSession ? " and voids its counts in the current session" : "") +
+      ". Finalized history is not affected.\n\n" + n + " device(s) are listed in this box.")) return;
+
+  if (invSession) invBoxVoidSessionCounts(b.boxId);   // void this session's counts for it
+  if (invActiveBox && boxNormId(invActiveBox) === boxNormId(b.boxId)) invBoxClearActive();
+  boxDelete(b.boxId);
+  delete _invBoxMgrExpanded[boxNormId(b.boxId)];
+  invRenderBoxManager();
+  invBoxRenderBar();
+  invSetScanFeedback("Box " + b.boxId + " deleted.", "warn", "", "box");
+}
+
 function invBoxClearActive() {
   invActiveBox = "";
   invBoxIsOverride = false;
@@ -5113,8 +5223,11 @@ function invBoxRenderBar() {
   } else {
     bar.classList.add("hidden");
   }
-  // Done only applies while a box is actively being captured.
+  // Done / Undo apply only while a box is actively being captured.
   var doneBtn = $("invBoxDoneBtn"); if (doneBtn) doneBtn.disabled = !invActiveBox;
+  var undoBtn = $("invBoxUndoBtn"); if (undoBtn) undoBtn.disabled = !invActiveBox;
+  var mgrBtn  = $("invBoxManageBtn");
+  if (mgrBtn) { var nb = boxAll().length; mgrBtn.textContent = nb ? ("Boxes (" + nb + ")") : "Boxes"; }
   invUpdateScanPlaceholder();
 }
 
@@ -7541,6 +7654,13 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     var modal = $("prodHistoryModal");
     if (!modal || modal.classList.contains("hidden")) return;
     if (e.key === "Escape") { e.preventDefault(); prodCloseHistoryModal(); }
+  });
+
+  // Box manager modal: Escape to close
+  document.addEventListener("keydown", function(e) {
+    var modal = $("invBoxManagerModal");
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (e.key === "Escape") { e.preventDefault(); invCloseBoxManager(); }
   });
 
   // Qty keypad: physical keyboard support (item mode only; reel fields and scan input handle their own)

@@ -404,7 +404,10 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxFinish()` | "Done/Close box" → `boxFinalize`; for override, diffs vs pre-open snapshot and flags missing/extra |
 | `invBoxOpen()` | "Open box" → void this session's sealed-count events for the box, snapshot+clear contents, reopen for override |
 | `invBoxVoidSessionCounts(boxId)` | Silently void (no confirm) the box's `box_scan` + `fromSealedBox` events |
-| `invBoxSetExpectedQty(v)` / `invBoxClearActive()` / `invBoxRenderBar()` | Optional qty / cancel active capture / refresh the `#invBoxBar` UI |
+| `invBoxSetExpectedQty(v)` / `invBoxClearActive()` / `invBoxRenderBar()` | Optional qty / cancel active capture / refresh the `#invBoxBar` UI (incl. Boxes count + Undo/Done enable) |
+| `invBoxUndoLast()` | "Undo last" → void the most recent device scan for the active box and drop its serial from the box contents |
+| `invOpenBoxManager()` / `invCloseBoxManager()` / `invRenderBoxManager()` | Box manager modal: list all registry boxes (status, count, location), view contents, delete |
+| `invBoxManagerToggleContents(key)` / `invBoxManagerDelete(boxId)` | Expand a box's serial list / delete a box (voids its current-session counts, clears active if it was the one) |
 | `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event |
 
 ### Inventory — Scan Handlers

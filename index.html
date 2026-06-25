@@ -432,7 +432,9 @@
           </label>
           <button id="invBoxNewBtn" onclick="invBoxNewBox()">＋ Save &amp; New</button>
           <button id="invBoxDoneBtn" onclick="invBoxFinish()">✓ Done / Close box</button>
+          <button class="secondary" id="invBoxUndoBtn" onclick="invBoxUndoLast()">↶ Undo last</button>
           <button class="secondary" id="invBoxOpenBtn" onclick="invBoxOpen()">Open box</button>
+          <button class="secondary" id="invBoxManageBtn" onclick="invOpenBoxManager()">Boxes</button>
           <button class="secondary" id="invBoxCancelBtn" onclick="invBoxClearActive()">Cancel</button>
         </div>
 
@@ -1271,6 +1273,21 @@
           <button onclick="invSaveNotesModal()">Save Notes</button>
           <button class="secondary" onclick="invCloseNotesModal()">Cancel</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="invBoxManagerModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:780px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;">Boxes / Cartons</h2>
+          <div class="small" id="invBoxManagerSummary"></div>
+        </div>
+        <button class="secondary" onclick="invCloseBoxManager()">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="invBoxManagerList"></div>
       </div>
     </div>
   </div>
