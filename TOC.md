@@ -355,7 +355,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `renderInvSummary()` | Render per-item summary (qty, footage) |
 | `renderInvExceptions()` | Render exceptions panel |
 | `renderInvActivityFeed()` | Render activity feed |
-| `invAddActivity(type, msg, detail)` | Append to activity feed + beep |
+| `invAddActivity(type, msg, detail, beepType)` | Append to activity feed + fire `timFeedback` (tone + flash) |
 | `invClearActivityFeed()` | Clear activity feed |
 | `invSetScanFeedback(msg, type, detail)` | Show scan result message + log to activity |
 
@@ -752,13 +752,21 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 ### Audio
 
+Scan feedback is **mandatory + dual-channel** (tone + full-screen flash). Tones are pre-rendered to WAV data-URIs and played via HTMLAudio elements (survives iOS silent mode, unlike Web Audio oscillators); the oscillator path remains as a fallback. No in-app mute — only the tablet's volume/mute controls it.
+
 | Function | Purpose |
 |----------|---------|
-| `_timAudioCtx_get()` | Get/create AudioContext (inventory mode) |
-| `timUnlockAudio()` | Resume suspended AudioContext on user gesture |
-| `timBeep(type)` | Beep: `"ok" \| "warn" \| "error"` (inventory) |
-| `getAudioCtx()` | Get/create AudioContext (receiving mode) |
-| `playBeep(type)` | Beep: `"ok" \| "error"` (receiving mode) |
+| `_timTonePatterns` | Tone designs (success family / `warn` / `error`) as `{f,t,d,v,shape}` lists |
+| `_timToneToWav(pattern)` | Synthesize a pattern → 16-bit mono WAV data-URI |
+| `timInitAudio()` | Render all tones to preloaded `<audio>` elements (once) |
+| `_timAudioCtx_get()` | Get/create AudioContext (fallback synth path only) |
+| `timAudioPrime()` / `timUnlockAudio()` | Unlock media playback within a gesture; resume ctx (alias) |
+| `_timOscFallback(type)` | Live-oscillator synth, used when `<audio>` play() is rejected |
+| `timPlayTone(type)` / `timBeep(type)` | Play a tone by name (audio only); tracks blocked state |
+| `timFlash(severity)` | Full-screen flash overlay: `ok` (subtle green) / `warn` (amber) / `error` (loud red strobe) |
+| `timFeedback(type, toneVariant)` | **Unified entry**: drives tone + flash; severity from `type`, success tone from `toneVariant` |
+| `timUpdateAudioStatus()` / `timTestSound()` | Audio status chip / "Test sound" button handler |
+| `playBeep(type)` | Receiving/blind-scan feedback → routes to `timFeedback` |
 
 ---
 

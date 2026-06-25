@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.11.00";
+const APP_VERSION = "v2.12.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -1722,29 +1722,10 @@ function setBlindScanStatus(message) {
   $("blindScanStatus").innerHTML = message;
 }
 
-let _audioCtx = null;
-function getAudioCtx() {
-  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return _audioCtx;
-}
+// Blind-scan feedback routes through the unified engine (audio + flash).
 function playBeep(type) {
-  try {
-    const ctx = getAudioCtx();
-    const tones = type === "found"
-      ? [{ freq: 880, start: 0, dur: 0.06 }, { freq: 1108, start: 0.09, dur: 0.09 }]
-      : [{ freq: 480, start: 0, dur: 0.08 }];
-    tones.forEach(({ freq, start, dur }) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = freq;
-      osc.type = "sine";
-      gain.gain.setValueAtTime(0.18, ctx.currentTime + start);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
-      osc.start(ctx.currentTime + start);
-      osc.stop(ctx.currentTime + start + dur + 0.02);
-    });
-  } catch(e) {}
+  if (type === "found") timFeedback("ok", "serialized");
+  else                  timFeedback("warn");
 }
 
 function lookupDeviceInHistory(value) {
@@ -3298,7 +3279,90 @@ function timInitUsername() {
   if (inp) { inp.value = val; inp.classList.toggle("needs-value", !val); }
 }
 
-// -- Audio feedback -------------------------------------------------
+// -- Audio + visual feedback ----------------------------------------
+// Scan feedback is SAFETY-CRITICAL on a noisy warehouse floor, so it is
+// mandatory (no in-app mute — only the tablet's volume/mute switch turns
+// it off) and dual-channel: every result fires a tone AND a screen flash,
+// so a silenced tablet can't fail silently.
+//
+// Tones are pre-rendered to WAV data-URIs and played through HTMLAudio
+// elements rather than live Web Audio oscillators. This matters on iOS:
+// oscillator output is treated as "ambient" and is killed by the hardware
+// mute switch even at full volume, whereas media-element playback survives
+// silent mode. A live-oscillator path is kept only as a fallback when the
+// audio element's play() is rejected (e.g. not yet unlocked by a gesture).
+
+// Tone designs — each is a list of {f:freq, t:startSec, d:durSec, v:vol, shape}.
+// Success family is short/affirmative; warn is an insistent double; error is
+// a loud, harsh, repeated buzz so it is impossible to miss.
+var _timTonePatterns = {
+  ok:         [{ f: 880,  t: 0,    d: 0.09, v: 0.30 }],
+  serialized: [{ f: 660,  t: 0,    d: 0.07, v: 0.28 }, { f: 990, t: 0.075, d: 0.10, v: 0.28 }],
+  reel:       [{ f: 880,  t: 0,    d: 0.07, v: 0.26 }, { f: 550, t: 0.075, d: 0.11, v: 0.24 }],
+  bulk:       [{ f: 720,  t: 0,    d: 0.11, v: 0.26, shape: "triangle" }],
+  location:   [{ f: 1100, t: 0,    d: 0.06, v: 0.26 }, { f: 770, t: 0.065, d: 0.09, v: 0.24 }],
+  box:        [{ f: 600,  t: 0,    d: 0.07, v: 0.28 }, { f: 900, t: 0.07,  d: 0.07, v: 0.28 }, { f: 1200, t: 0.14, d: 0.11, v: 0.28 }],
+  mode:       [{ f: 520,  t: 0,    d: 0.05, v: 0.16 }],
+  info:       [{ f: 520,  t: 0,    d: 0.05, v: 0.14 }],
+  warn:       [{ f: 440,  t: 0,    d: 0.16, v: 0.34, shape: "square" }, { f: 440, t: 0.21, d: 0.16, v: 0.34, shape: "square" }],
+  error:      [{ f: 240,  t: 0,    d: 0.18, v: 0.50, shape: "square" }, { f: 175, t: 0.22, d: 0.20, v: 0.50, shape: "square" },
+               { f: 240,  t: 0.48, d: 0.18, v: 0.50, shape: "square" }, { f: 175, t: 0.70, d: 0.28, v: 0.50, shape: "square" }]
+};
+
+// Synthesize a tone pattern into a 16-bit mono WAV data-URI.
+function _timToneToWav(pattern) {
+  var sr = 16000;  // ample for tones under ~1.2 kHz; keeps data-URIs small
+  var total = 0.03;
+  pattern.forEach(function(p) { total = Math.max(total, p.t + p.d + 0.02); });
+  var n = Math.ceil(total * sr);
+  var buf = new Float32Array(n);
+  pattern.forEach(function(p) {
+    var shape = p.shape || "sine";
+    var s0 = Math.floor(p.t * sr), s1 = Math.floor((p.t + p.d) * sr);
+    var att = Math.max(1, Math.floor(0.004 * sr));  // 4ms attack to avoid clicks
+    for (var i = s0; i < s1 && i < n; i++) {
+      var ph = 2 * Math.PI * p.f * ((i - s0) / sr), w;
+      if      (shape === "square")   w = Math.sin(ph) >= 0 ? 1 : -1;
+      else if (shape === "triangle") w = (2 / Math.PI) * Math.asin(Math.sin(ph));
+      else                           w = Math.sin(ph);
+      var env = (i - s0 < att) ? (i - s0) / att : Math.pow((s1 - i) / (s1 - s0), 1.4);
+      buf[i] += w * p.v * env;
+    }
+  });
+  var bytes = 44 + n * 2, ab = new ArrayBuffer(bytes), dv = new DataView(ab);
+  function ws(o, s) { for (var i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); }
+  ws(0, "RIFF"); dv.setUint32(4, bytes - 8, true); ws(8, "WAVE"); ws(12, "fmt ");
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  ws(36, "data"); dv.setUint32(40, n * 2, true);
+  var off = 44;
+  for (var j = 0; j < n; j++) { var s = Math.max(-1, Math.min(1, buf[j])); dv.setInt16(off, s * 0.95 * 32767, true); off += 2; }
+  var u8 = new Uint8Array(ab), bin = "", CH = 0x8000;
+  for (var k = 0; k < u8.length; k += CH) bin += String.fromCharCode.apply(null, u8.subarray(k, k + CH));
+  return "data:audio/wav;base64," + btoa(bin);
+}
+
+var _timToneAudio = {};       // type -> preloaded HTMLAudioElement
+var _timAudioReady = false;   // tones rendered yet?
+var _timAudioPrimed = false;  // unlocked by a user gesture yet?
+var _timAudioBlocked = false; // last play() was rejected (likely muted/locked)
+var _timUnlockEl = null;
+
+// Render every tone to an Audio element once (cheap; warms decode).
+function timInitAudio() {
+  if (_timAudioReady) return;
+  try {
+    Object.keys(_timTonePatterns).forEach(function(type) {
+      var a = new Audio(_timToneToWav(_timTonePatterns[type]));
+      a.preload = "auto";
+      _timToneAudio[type] = a;
+    });
+    _timUnlockEl = new Audio(_timToneToWav([{ f: 20, t: 0, d: 0.02, v: 0.0006 }]));
+    _timAudioReady = true;
+  } catch (e) { /* synthesis unsupported — oscillator fallback still works */ }
+}
+
+// Legacy Web Audio context, used ONLY as the fallback synth path now.
 var _timAudioCtx = null;
 function _timAudioCtx_get() {
   if (_timAudioCtx && _timAudioCtx.state === "closed") _timAudioCtx = null;
@@ -3307,32 +3371,113 @@ function _timAudioCtx_get() {
   }
   return _timAudioCtx;
 }
-function timUnlockAudio() {
-  var ctx = _timAudioCtx_get();
-  if (ctx && ctx.state === "suspended") ctx.resume().catch(function(){});
+
+// Unlock media playback within a user gesture (required by iOS/Safari) and
+// resume the fallback context. Safe to call on every gesture.
+function timAudioPrime() {
+  timInitAudio();
+  try { var ctx = _timAudioCtx_get(); if (ctx && ctx.state === "suspended") ctx.resume().catch(function(){}); } catch(e) {}
+  if (_timAudioPrimed || !_timUnlockEl) return;
+  try {
+    var pr = _timUnlockEl.play();
+    if (pr && pr.then) pr.then(function(){ _timAudioPrimed = true; }).catch(function(){});
+    else _timAudioPrimed = true;
+  } catch(e) {}
 }
-function timBeep(type) {
-  var ctx = _timAudioCtx_get();
-  if (!ctx) return;
-  if (ctx.state === "suspended") { ctx.resume().then(function(){ timBeep(type); }).catch(function(){}); return; }
-  var t = ctx.currentTime;
-  function tone(freq, dur, vol, shape, delay) {
-    delay = delay || 0;
-    var osc = ctx.createOscillator(), g = ctx.createGain();
-    osc.connect(g); g.connect(ctx.destination);
-    osc.type = shape || "sine";
-    osc.frequency.setValueAtTime(freq, t + delay);
-    g.gain.setValueAtTime(vol, t + delay);
-    g.gain.exponentialRampToValueAtTime(0.001, t + delay + dur);
-    osc.start(t + delay); osc.stop(t + delay + dur);
+// Back-compat alias — older call sites still call timUnlockAudio().
+function timUnlockAudio() { timAudioPrime(); }
+
+// Fallback: synth the pattern live via Web Audio if the audio element fails.
+function _timOscFallback(type) {
+  try {
+    var ctx = _timAudioCtx_get();
+    if (!ctx) return;
+    if (ctx.state === "suspended") { ctx.resume().then(function(){ _timOscFallback(type); }).catch(function(){}); return; }
+    var pat = _timTonePatterns[type] || _timTonePatterns.ok, t0 = ctx.currentTime;
+    pat.forEach(function(p) {
+      var osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.connect(g); g.connect(ctx.destination);
+      osc.type = p.shape || "sine";
+      osc.frequency.setValueAtTime(p.f, t0 + p.t);
+      g.gain.setValueAtTime(p.v, t0 + p.t);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + p.t + p.d);
+      osc.start(t0 + p.t); osc.stop(t0 + p.t + p.d + 0.02);
+    });
+  } catch(e) {}
+}
+
+// Play a tone by name. Media element first (survives iOS silent mode),
+// oscillator as fallback. Tracks whether audio is being blocked.
+function timPlayTone(type) {
+  timInitAudio();
+  var a = _timToneAudio[type] || _timToneAudio.ok;
+  if (!a) { _timOscFallback(type); return; }
+  try {
+    a.currentTime = 0;
+    var pr = a.play();
+    if (pr && pr.catch) {
+      pr.then(function(){ if (_timAudioBlocked) { _timAudioBlocked = false; timUpdateAudioStatus(); } })
+        .catch(function(){ _timAudioBlocked = true; timUpdateAudioStatus(); _timOscFallback(type); });
+    }
+  } catch(e) { _timAudioBlocked = true; timUpdateAudioStatus(); _timOscFallback(type); }
+}
+// Legacy audio-only entry point.
+function timBeep(type) { timPlayTone(type); }
+
+// Full-screen visual flash. Subtle green on success, insistent amber on warn,
+// loud strobing red on error. CSS animations live in styles.css (#timFlash).
+var _timFlashTimer = null;
+function timFlash(severity) {
+  var el = document.getElementById("timFlash");
+  if (!el) return;
+  var cls = severity === "error" ? "flash-error"
+          : severity === "warn"  ? "flash-warn"
+          : severity === "ok"    ? "flash-ok" : "";
+  if (!cls) return;
+  el.classList.remove("flash-ok", "flash-warn", "flash-error");
+  void el.offsetWidth;  // restart the animation even on back-to-back results
+  el.classList.add(cls);
+  clearTimeout(_timFlashTimer);
+  var dur = severity === "error" ? 1350 : severity === "warn" ? 750 : 380;
+  _timFlashTimer = setTimeout(function(){ el.classList.remove(cls); }, dur);
+}
+
+// Unified scan feedback: one call drives both channels. `type` carries the
+// severity (ok/warn/error/info/location/mode); `toneVariant` optionally
+// refines the success tone (serialized/reel/bulk/box/location).
+function timFeedback(type, toneVariant) {
+  var t = type || "info";
+  var severity = (t === "error") ? "error"
+               : (t === "warn")  ? "warn"
+               : (t === "ok" || t === "location" || t === "serialized" || t === "reel" || t === "bulk" || t === "box") ? "ok"
+               : "info";
+  var tone = (severity === "error") ? "error"
+           : (severity === "warn")  ? "warn"
+           : (toneVariant || t);
+  if (!_timTonePatterns[tone]) tone = (severity === "ok") ? "ok" : "info";
+  timPlayTone(tone);
+  timFlash(severity);  // no-op for info/mode
+}
+
+// Optional status chip + "Test sound" affordance (see index.html).
+function timUpdateAudioStatus() {
+  var chip = document.getElementById("timAudioStatus");
+  if (!chip) return;
+  if (_timAudioBlocked) {
+    chip.textContent = "🔇 Sound blocked — check the side mute switch / raise volume";
+    chip.className = "tim-audio-status blocked";
+  } else {
+    chip.textContent = "🔊 Sound on";
+    chip.className = "tim-audio-status ok";
   }
-  if      (type === "ok")         { tone(880, 0.08, 0.25, "sine"); }
-  else if (type === "serialized") { tone(660, 0.07, 0.22, "sine"); tone(990, 0.09, 0.22, "sine", 0.08); }
-  else if (type === "reel")       { tone(880, 0.07, 0.22, "sine"); tone(550, 0.10, 0.20, "sine", 0.08); }
-  else if (type === "bulk")       { tone(720, 0.10, 0.20, "triangle"); }
-  else if (type === "location")   { tone(1100, 0.06, 0.20, "sine"); tone(770, 0.08, 0.18, "sine", 0.07); }
-  else if (type === "warn")       { tone(440, 0.12, 0.18, "sine"); }
-  else if (type === "error")      { tone(200, 0.06, 0.18, "square", 0); tone(200, 0.06, 0.18, "square", 0.1); }
+}
+function timTestSound() {
+  _timAudioPrimed = false;   // re-unlock within this click gesture
+  timAudioPrime();
+  _timAudioBlocked = false;
+  timFeedback("ok", "ok");
+  // Reflect the result shortly after play() resolves/rejects.
+  setTimeout(timUpdateAudioStatus, 250);
 }
 
 // -- Activity feed --------------------------------------------------
@@ -3341,7 +3486,7 @@ var INV_ACTIVITY_MAX = 8;
 var _invActivityIcons = { ok:"✓", warn:"⚠", error:"✗", info:"i", location:"⊙", mode:"⇄" };
 
 function invAddActivity(type, message, detail, beepType) {
-  timBeep(beepType || type);
+  timFeedback(type, beepType);
   invActivityLog.unshift({ type: type, message: message, detail: detail || "", time: new Date() });
   if (invActivityLog.length > INV_ACTIVITY_MAX) invActivityLog.length = INV_ACTIVITY_MAX;
   renderInvActivityFeed();
@@ -4002,6 +4147,9 @@ function renderInvSummary() {
   invEvents.forEach(function(evt) {
     if (evt.status === "voided")           return;
     if (evt.eventType === "void_event")    return;
+    // box_scan is an audit marker only; its per-device fromSealedBox
+    // serialized_device_scan events carry the actual count.
+    if (evt.eventType === "box_scan")      return;
 
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) {
@@ -4020,7 +4168,6 @@ function renderInvSummary() {
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
 
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "box_scan")               { r.countedQty += (evt.resolvedDeviceCount || evt.qty || 1); r.serializedCount += (evt.resolvedDeviceCount || 0); }
     else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (evt.qty || 1); }
     else if (evt.eventType === "cable_reel_count") {
       r.reelFootage += (evt.totalAvailableFt || 0);
@@ -4114,13 +4261,15 @@ function buildInvSummaryMap(events) {
   events.forEach(function(evt) {
     if (evt.status === "voided")        return;
     if (evt.eventType === "void_event") return;
+    // box_scan is an audit marker only; its per-device fromSealedBox
+    // serialized_device_scan events carry the actual count.
+    if (evt.eventType === "box_scan")   return;
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) map[key] = { item: key, description: evt.description || "", countedQty: 0, serializedCount: 0, reelFootage: 0, exceptions: 0, flagged: 0, lastCounted: evt.timestamp || "" };
     var r = map[key];
     if (evt.description && !r.description) r.description = evt.description;
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "box_scan")               { r.countedQty += (evt.resolvedDeviceCount || evt.qty || 1); r.serializedCount += (evt.resolvedDeviceCount || 0); }
     else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (evt.qty || 1); }
     else if (evt.eventType === "cable_reel_count")       { r.reelFootage += (evt.totalAvailableFt || 0); }
     else if (evt.eventType === "exception")              { r.exceptions += 1; }
@@ -4679,11 +4828,19 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
   });
 
   invLastScannedBox = boxNormId(boxId);
-  invSetScanFeedback(
-    "Sealed box " + b.boxId + ": counted " + counted + " of " + snapshot.length + " device(s)" +
-    (dups ? " (" + dups + " already counted this session)" : "") +
-    '. Tap "Open box" if it was opened.',
-    "ok", "", "box");
+  if (counted === 0 && dups > 0) {
+    // Whole box was already counted this session — make that the headline.
+    invSetScanFeedback(
+      "Box " + b.boxId + " was already counted this session — all " + dups +
+      ' device(s) skipped (not double-counted). Tap "Open box" only if it was opened.',
+      "warn", "", "box");
+  } else {
+    invSetScanFeedback(
+      "Sealed box " + b.boxId + ": counted " + counted + " of " + snapshot.length + " device(s)" +
+      (dups ? " (" + dups + " already counted this session)" : "") +
+      '. Tap "Open box" if it was opened.',
+      "ok", "", "box");
+  }
   invBoxRenderBar();
   return true;
 }
@@ -6606,19 +6763,19 @@ function buildOdooAdjustmentRows(events) {
     rows.push([f.defCode, resolveLocation(evt.location), lotName, 1]);
   });
 
-  // Bulk quantity counts and box scans — aggregate by item + location
+  // Bulk quantity counts — aggregate by item + location.
+  // (box_scan is an audit marker; its fromSealedBox serial events are
+  // already emitted as individual lot rows in the loop above.)
   var bulkMap = {};
   events.forEach(function(evt) {
     if (evt.status === "voided" || evt.eventType === "void_event") return;
-    if (evt.eventType !== "bulk_quantity_count" && evt.eventType !== "box_scan") return;
+    if (evt.eventType !== "bulk_quantity_count") return;
     var key = (evt.itemNumber || "") + "\x00" + (evt.location || "");
     if (!bulkMap[key]) {
       var f2 = pmFields(evt.itemNumber);
       bulkMap[key] = { extId: f2.extId, defCode: f2.defCode, loc: evt.location || "", qty: 0 };
     }
-    bulkMap[key].qty += (evt.eventType === "box_scan")
-      ? (evt.resolvedDeviceCount || evt.qty || 1)
-      : (evt.qty || 1);
+    bulkMap[key].qty += (evt.qty || 1);
   });
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
@@ -7728,14 +7885,14 @@ function invBuildGapReport() {
     } else if (e.eventType === "serialized_device_scan") {
       var lot = normKey(e.serial || e.fsan || e.scannedValue || "");
       countedSerials[defCode + "||" + loc + "||" + lot] = e;
-    } else if (e.eventType === "bulk_quantity_count" || e.eventType === "box_scan") {
+    } else if (e.eventType === "bulk_quantity_count") {
+      // box_scan is an audit marker; its fromSealedBox serial events are
+      // reconciled via countedSerials above.
       var bk = defCode + "||" + loc;
       if (!countedBulk[bk]) {
         countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "" };
       }
-      countedBulk[bk].qty += (e.eventType === "box_scan")
-        ? (e.resolvedDeviceCount || e.qty || 1)
-        : (e.qty || 1);
+      countedBulk[bk].qty += (e.qty || 1);
     }
   });
 
@@ -9120,11 +9277,18 @@ invLoadLocationMap();
 boxLoadFromStorage();
 chkLoadState();
 
-// Keep AudioContext alive on every user gesture — browsers can re-suspend idle contexts
+// Render tones up front, and keep audio unlocked across gestures and wake-ups.
+// Browsers (esp. iOS) suspend idle audio and re-lock after backgrounding, so we
+// re-prime on every gesture and whenever the page becomes visible/focused again.
 (function() {
-  function _unlock() { timUnlockAudio(); }
-  document.addEventListener("pointerdown", _unlock, { passive: true });
-  document.addEventListener("keydown", _unlock, { passive: true });
+  timInitAudio();
+  function _prime() { timAudioPrime(); }
+  document.addEventListener("pointerdown", _prime, { passive: true });
+  document.addEventListener("keydown", _prime, { passive: true });
+  document.addEventListener("visibilitychange", function() {
+    if (!document.hidden) { _timAudioPrimed = false; timAudioPrime(); }
+  });
+  window.addEventListener("focus", function() { _timAudioPrimed = false; timAudioPrime(); });
 })();
 
 

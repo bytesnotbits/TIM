@@ -16,6 +16,9 @@
 </head>
 <body>
 
+  <!-- Full-screen scan-feedback flash overlay (green=ok, amber=warn, red=error) -->
+  <div id="timFlash" aria-hidden="true"></div>
+
   <!-- Hidden utility element (referenced by JS, not displayed) -->
   <textarea id="mapPreview" style="display:none;" readonly></textarea>
 
@@ -506,6 +509,8 @@
               <div class="inv-scan-btn-line">
                 <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
                 <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
+                <button class="secondary" onclick="timTestSound()" style="padding:12px 14px;" title="Play a test tone and flash. If you hear nothing, raise the volume or check the tablet's mute switch.">🔊 Test sound</button>
+                <span id="timAudioStatus" class="tim-audio-status"></span>
               </div>
             </div>
             <div>
