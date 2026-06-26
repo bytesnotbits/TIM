@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.20.00";
+const APP_VERSION = "v2.20.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -11565,8 +11565,16 @@ function invConfirmCsvImport() {
 
   appData.inventory_sessions.push(importSession);
 
+  // Persist + push like the history-commit actions so the import is durable
+  // without a manual Step-1 file swap.
+  appData.product_map = PRODUCT_MAP;
+  timSaveMasterCache();
+
   invCancelCsvImport();
 
+  var configured = ghConfigured();
+
+  // Offline backup download (the only durable copy when GitHub sync is off).
   downloadText(
     timSourceDataFilename(),
     JSON.stringify(buildExportPayload(), null, 2),
@@ -11575,9 +11583,12 @@ function invConfirmCsvImport() {
 
   alert(
     "Import complete: " + toImport.length + " reel(s) imported.\n\n" +
-    "The updated master JSON has been downloaded.\n" +
-    "Replace your existing Step 1 file with it to make the import permanent."
+    (configured
+      ? "Pushing the master file to GitHub now — watch the GitHub panel for status. A backup JSON was also downloaded."
+      : "The updated master JSON has been downloaded.\nReplace your existing Step 1 file with it to make the import permanent.")
   );
+
+  ghPushToGitHub({ auto: true });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
