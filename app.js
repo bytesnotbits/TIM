@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.17.01";
+const APP_VERSION = "v2.19.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4697,7 +4697,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
       "DUPLICATE: " + value + " was already counted at " +
       invFormatTime(dupEvt.timestamp) + " (event #" + dupEvt.sequence + "). Exception created.",
       "error");
-    invSpeak("Duplicate");
+    invSpeak("Already counted");
     return false;
   }
 
@@ -4985,30 +4985,31 @@ function invBoxModeScan(rawValue, notes) {
   var v = sanitizeScannerValue(rawValue, { uppercase: true });
   if (!v) return false;
 
-  // ARMED: the user tapped "New Box" — this scan is the carton/box ID itself.
+  // ARMED: box mode with nothing being captured — this scan is the carton/box ID
+  // itself (auto-armed on entering the empty state; no "Save & New" tap needed).
   if (invBoxArmed) {
     // Guard: a "carton ID" that resolves to a known device/MAC is almost
     // certainly a mis-scan (the device was scanned instead of the carton label).
     if (invBoxResolveDevice(v)) {
       invSetScanFeedback('"' + v + '" looks like a device, not a carton ID. ' +
-        "Scan the carton label, or tap Cancel to stop.", "warn");
+        "Scan the carton label first, then its devices.", "warn");
       return false; // stay armed so the next scan can be the real carton
     }
     invBoxArmed = false;
-    var known = boxGet(v);
-    invBoxStartCapture(v, false);
-    if (known) {
-      invSetScanFeedback("Resuming box " + (known.boxId || v) + " — " +
-        ((known.expectedSerials || []).length) + " device(s) so far. Scan devices.", "ok", "", "box");
+    // Brand-new carton (unknown ID) → start capturing it. A KNOWN box falls
+    // through to the shared dispatch below so a sealed box still fast-counts
+    // and an in-progress one resumes — arming must not silently reopen them.
+    if (!boxGet(v)) {
+      invBoxStartCapture(v, false);
+      return true;
     }
-    return true;
   }
 
   // Known device (serial/FSAN/MAC) → count it into the active capture box.
   var rec = invBoxResolveDevice(v);
   if (rec) {
     if (!invActiveBox) {
-      invSetScanFeedback("Tap Save & New and scan the carton ID first, then scan its devices.", "warn");
+      invSetScanFeedback("Scan the carton/box ID first, then scan its devices.", "warn");
       return false;
     }
     return invBoxCaptureDevice(rec, v, notes);
@@ -5035,7 +5036,7 @@ function invBoxModeScan(rawValue, notes) {
     if (invBoxCountedThisSession(v)) {
       invSetScanFeedback('Box ' + existing.boxId + ' was already counted this session (' +
         ((existing.expectedSerials || []).length) + ' device(s)). Tap "Open box" to re-count it, ' +
-        'or "Save & New" for a different box.', "warn", "", "box");
+        'or scan a different carton ID.', "warn", "", "box");
       invSpeak("Already counted");
       invLastScannedBox = boxNormId(v);
       return false;
@@ -5075,6 +5076,7 @@ function invBoxStartCapture(boxId, isOverride) {
   invActiveBox       = boxNormId(boxId);
   invLastScannedBox  = invActiveBox;
   invBoxIsOverride   = !!isOverride;
+  invBoxArmed        = false;   // a box is now being captured; subsequent scans are its devices
   var n = (b.expectedSerials || []).length;
   invSetScanFeedback(
     "Box " + b.boxId + " — capturing. " + n + " device(s) so far. Scan devices; tap Done when finished.",
@@ -5093,7 +5095,7 @@ function invBoxCaptureDevice(rec, value, notes) {
     invCreateExceptionEvent(serial || fsan, "serial",
       "Already counted this session (event #" + dup.sequence + ")",
       "Device already scanned — not double-counted.", notes);
-    invSpeak("Duplicate");
+    invSpeak("Already counted");
   } else {
     invCreateEvent("serialized_device_scan", {
       scanType:    "box_id",
@@ -5601,7 +5603,7 @@ function invBoxClearActive() {
   invActiveBox = "";
   invBoxIsOverride = false;
   invBoxOverridePrior = [];
-  invBoxArmed = false;
+  invBoxArmed = (invScanMode === "box");  // in box mode, the empty state stays ready for the next carton ID
   invBoxRenderBar();
 }
 
@@ -5619,14 +5621,14 @@ function invBoxRenderBar() {
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = b.expectedQty || "";
   } else if (invScanMode === "box") {
     bar.classList.remove("hidden");
-    if (label) label.textContent = invBoxArmed
-      ? "Scan the carton/box ID now."
-      : "Box mode — tap Save & New to start a carton, or scan a known box to fast-count.";
+    if (label) label.textContent = "Scan a new carton ID to start, or a known box to fast-count.";
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = "";
   } else {
     bar.classList.add("hidden");
   }
-  // Done / Undo apply only while a box is actively being captured.
+  // Save & New / Done / Undo apply only while a box is actively being captured —
+  // nothing to save or close until the first carton ID is scanned.
+  var newBtn  = $("invBoxNewBtn");  if (newBtn)  newBtn.disabled  = !invActiveBox;
   var doneBtn = $("invBoxDoneBtn"); if (doneBtn) doneBtn.disabled = !invActiveBox;
   var undoBtn = $("invBoxUndoBtn"); if (undoBtn) undoBtn.disabled = !invActiveBox;
   var mgrBtn  = $("invBoxManageBtn");
@@ -5642,13 +5644,11 @@ function invUpdateScanPlaceholder() {
   if (!input) return;
   var txt;
   if (invScanMode === "box") {
-    if (invBoxArmed) {
-      txt = "Scan the carton/box ID now";
-    } else if (invActiveBox) {
+    if (invActiveBox) {
       var b = boxGet(invActiveBox);
       txt = "Capturing box " + (b ? b.boxId : invActiveBox) + " — scan its devices";
     } else {
-      txt = "Tap Save & New to start a carton, or scan a known box";
+      txt = "Scan a carton or box ID to start";
     }
   } else if (invScanMode === "serial") {
     var ctx = $("invScanItem") ? ($("invScanItem").value || "").trim() : "";
@@ -5664,6 +5664,15 @@ function invUpdateScanPlaceholder() {
 }
 
 function invHandleBulkCount(itemNumber, qty, notes, location) {
+  // Location-first: a bulk count with no location can't be reconciled against
+  // stock, so block until one is loaded and prompt for it. Sticky once set, so
+  // this only fires at the start of a run, not on every item.
+  if (!(location || invCurrentLocation)) {
+    invSetScanFeedback("Scan a location to get started, then scan items.", "warn");
+    invSpeak("Scan a location to get started");
+    return false;
+  }
+
   // Guard: a blank/unresolved item must not create a phantom count row.
   // Reachable when a barcode resolves to an empty mapping or via a type
   // override with no value — log an exception instead of counting "nothing".
@@ -5826,7 +5835,8 @@ function invClearLocation() {
 
 function invSetScanMode(mode) {
   invScanMode = mode;
-  if (mode !== "box") invBoxArmed = false;   // leaving box mode disarms New Box
+  if (mode !== "box") invBoxArmed = false;        // leaving box mode disarms
+  else if (!invActiveBox) invBoxArmed = true;     // empty box mode: the first scan IS the carton ID (no Save & New tap needed)
   var modeActiveClass = { auto: "active", serial: "active-serial", reel: "active-reel", item: "active-item", box: "active-box" };
   var modes = ["auto", "serial", "reel", "item", "box"];
   modes.forEach(function(m) {
@@ -5897,6 +5907,18 @@ function invSetScanMode(mode) {
 
   invBoxRenderBar();
   renderInvStatusBar();
+
+  // Spoken "get started" prompt on entering a mode. Location-first always: with
+  // no location loaded, every mode prompts for one before anything else. Once a
+  // location is set, box mode additionally prompts for the carton ID (unless one
+  // is already mid-capture).
+  if (!invCurrentLocation) {
+    invSetScanFeedback("Scan a location to get started, then scan items.", "info");
+    invSpeak("Scan a location to get started");
+  } else if (mode === "box" && !invActiveBox) {
+    invSpeak("Scan a box to get started");
+  }
+
   setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
 }
 
@@ -6171,6 +6193,33 @@ function invProcessScan() {
   var contextItem = sanitizeScannerValue($("invScanItem") ? $("invScanItem").value || "" : "", { uppercase: true });
   var notes       = $("invScanNotes") ? ($("invScanNotes").value || "").trim() : "";
 
+  // Location scan: update sticky location and return. Handled before everything
+  // else (including the location-first gate below) so a location can always be
+  // scanned/changed, in any mode, even when none is loaded yet.
+  if (scanType === "location") {
+    invSetLocation(rawValue);
+    var fb = $("invScanFeedback");
+    if (fb) { fb.textContent = "Location → " + rawValue; fb.className = "inv-scan-feedback ok"; }
+    invAddActivity("location", "Location → " + rawValue, "", "location");
+    invSpeak("Location updated");
+    $("invScanInput").value = "";
+    invUpdateDetectedBadge("");
+    setTimeout(function() { $("invScanInput").focus(); }, 50);
+    return;
+  }
+
+  // Location-first mandate: nothing is counted until a location is loaded.
+  // Applies to every scan type and mode — only a location scan (above) is
+  // accepted while none is set. Sticky once set, so this only gates the start.
+  if (!invCurrentLocation) {
+    invSetScanFeedback("Scan a location to get started, then scan items.", "warn");
+    invSpeak("Scan a location to get started");
+    $("invScanInput").value = "";
+    invUpdateDetectedBadge("");
+    setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
+    return;
+  }
+
   // Box mode: route everything except locations to the box-capture dispatcher
   if (invScanMode === "box" && !override && scanType !== "location") {
     invBoxModeScan(rawValue, notes);
@@ -6191,19 +6240,6 @@ function invProcessScan() {
   // In reel mode with no override, unknown scans default to reel_number
   if (invScanMode === "reel" && !override && scanType === "unknown") {
     scanType = "reel_number";
-  }
-
-  // Location scan: update sticky location and return
-  if (scanType === "location") {
-    invSetLocation(rawValue);
-    var fb = $("invScanFeedback");
-    if (fb) { fb.textContent = "Location → " + rawValue; fb.className = "inv-scan-feedback ok"; }
-    invAddActivity("location", "Location → " + rawValue, "", "location");
-    invSpeak("Location " + rawValue);
-    $("invScanInput").value = "";
-    invUpdateDetectedBadge("");
-    setTimeout(function() { $("invScanInput").focus(); }, 50);
-    return;
   }
 
   // Qty is always 1 at scan time for bulk items; keypad adjusts it afterward
@@ -6936,7 +6972,7 @@ function invCommitSerialPrompt() {
       "Device already counted at " + invFormatTime(dup.timestamp) + " (event #" + dup.sequence + ")",
       "Review event #" + dup.sequence + ". Void it if scanned in error.", notes);
     invSetScanFeedback("DUPLICATE — already counted. Exception created.", "error");
-    invSpeak("Duplicate");
+    invSpeak("Already counted");
     invHideSerialPrompt();
     return;
   }
@@ -8024,7 +8060,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
         var val = sanitizeScannerValue(locationInput.value, { uppercase: true });
         invSetLocation(val);
         invSetScanFeedback(val ? "Location set to: " + val : "Location cleared.", val ? "ok" : "info");
-        invSpeak(val ? "Location " + val : "Location cleared");
+        invSpeak(val ? "Location updated" : "Location cleared");
         setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
       }
     });
