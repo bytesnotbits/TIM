@@ -449,6 +449,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invReelSpanTypeChange()` | Show/hide Span B section; recalc footage |
 | `invCalcReelFt()` | Calculate footage from inner/outer seq numbers |
 | `invReelUpdateHistoryPanel(item, reel, ft)` | Show previous footage comparison |
+| `invReelDetectConflict(itemNum, reelNum)` | Detect a reel conflict: `cross_item` (reel on record under a different item) or `session_dup` (already counted this session); null for the normal same-item prefill case |
+| `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning from `invReelDetectConflict` as item/reel fields change |
 | `invFindReelMaster(reelNum)` | **Reverse lookup**: find any event with this reel# across all sessions |
 | `invGetReelHistory(itemNum, reelNum)` | Find most recent event for item+reel pair |
 | `invSubmitReelEntry(silent)` | Validate + save reel count event |

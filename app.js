@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.21.01";
+const APP_VERSION = "v2.22.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6580,6 +6580,7 @@ function invOpenReelModal(reelNumber, notes, location) {
   if (notesEl) notesEl.value = notes || "";
   invReelSpanTypeChange();
   invCalcReelFt();
+  invReelCheckDuplicate();
 
   var rip = $("invReelInlinePanel");
   if (rip) {
@@ -6638,6 +6639,7 @@ function invReelUpdateSpanTypeFromContext() {
   }
 
   invReelSpanTypeChange();
+  invReelCheckDuplicate();
 }
 
 function invReelSpanTypeChange() {
@@ -6725,11 +6727,79 @@ function invGetReelHistory(itemNum, reelNum) {
   return matches[matches.length - 1];
 }
 
+// Detect a duplicate/conflict for a reel being entered. Returns null, or
+// { type, other } where type is:
+//   "cross_item"  — reel is on record (master or session) under a different item
+//   "session_dup" — reel was already counted in the current session
+// The normal prefill case (same reel + same item from a prior session) is NOT a
+// conflict and returns null, so it stays quiet.
+function invReelDetectConflict(itemNum, reelNum) {
+  var rk = normKey(reelNum || "");
+  if (!rk) return null;
+  var ik = normKey(itemNum || "");
+
+  if (ik) {
+    var all = (appData.inventory_events || []).concat(invEvents || []);
+    var cross = all.find(function(e) {
+      return e.eventType === "cable_reel_count" && e.status !== "voided"
+          && normKey(e.reelNumber || "") === rk
+          && normKey(e.itemNumber || "") && normKey(e.itemNumber || "") !== ik;
+    });
+    if (cross) return { type: "cross_item", other: cross };
+  }
+
+  var sess = (invEvents || []).find(function(e) {
+    return e.eventType === "cable_reel_count" && e.status !== "voided"
+        && normKey(e.reelNumber || "") === rk;
+  });
+  if (sess) return { type: "session_dup", other: sess };
+
+  return null;
+}
+
+// Live warning in the reel panel as the user types/scans item + reel.
+function invReelCheckDuplicate() {
+  var note = $("invReelDupNote");
+  if (!note) return;
+  var item = ($("invReelItemNumber") ? $("invReelItemNumber").value : "").trim().toUpperCase();
+  var reel = ($("invReelNumber")     ? $("invReelNumber").value     : "").trim().toUpperCase();
+
+  var c = invReelDetectConflict(item, reel);
+  if (!c) { note.style.display = "none"; note.innerHTML = ""; return; }
+
+  var oft = (c.other.totalAvailableFt != null ? c.other.totalAvailableFt : (c.other.qty || 0));
+  var msg;
+  if (c.type === "cross_item") {
+    msg = "⚠️ Reel " + escapeHtml(reel) + " is already on record for item <strong>"
+        + escapeHtml(c.other.itemNumber || "?") + "</strong> (" + Number(oft).toLocaleString() + " ft). "
+        + "You entered item <strong>" + escapeHtml(item) + "</strong>. A reel number should belong to one item — confirm before saving.";
+  } else {
+    msg = "⚠️ Reel " + escapeHtml(reel) + " was already counted this session ("
+        + Number(oft).toLocaleString() + " ft"
+        + (c.other.timestamp ? " at " + escapeHtml(invFormatTime(c.other.timestamp)) : "") + "). "
+        + "Saving will add a second entry for it.";
+  }
+  note.innerHTML = msg;
+  note.style.display = "block";
+}
+
 function invSubmitReelEntry(silent) {
   var itemNumber = ($("invReelItemNumber").value || "").trim().toUpperCase();
   var reelNumber = ($("invReelNumber").value     || "").trim().toUpperCase();
   if (!itemNumber) { if (!silent) { alert("Item number is required."); $("invReelItemNumber").focus(); } return; }
   if (!reelNumber) { if (!silent) { alert("Reel number is required."); $("invReelNumber").focus();     } return; }
+
+  // Duplicate/conflict guard — deliberate confirm before creating messy data.
+  if (!silent) {
+    var conflict = invReelDetectConflict(itemNumber, reelNumber);
+    if (conflict) {
+      var prompt = conflict.type === "cross_item"
+        ? "Reel " + reelNumber + " is already on record for item " + (conflict.other.itemNumber || "?") +
+          ".\nYou're saving it under item " + itemNumber + ".\n\nA reel number should belong to one item. Save anyway?"
+        : "Reel " + reelNumber + " was already counted this session.\nSaving will add a second entry for it.\n\nSave anyway?";
+      if (!confirm(prompt)) { $("invReelNumber").focus(); return; }
+    }
+  }
 
   var innerA = parseFloat($("invReelInnerA").value) || 0;
   var outerA = parseFloat($("invReelOuterA").value) || 0;
@@ -6793,6 +6863,7 @@ function invClearReelFields() {
   var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
   var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
+  var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; }
   invReelModalScannedValue = "";
   // Pre-fill item # from sticky context if set
   var ctxItem = $("invScanItem");
