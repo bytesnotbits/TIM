@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.22.00";
+const APP_VERSION = "v2.23.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3692,7 +3692,49 @@ function switchTab(name) {
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") { prodRenderList(); reelLookupRender(); }
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
+  // Inventory sub-screens: show the sub-nav and apply the active sub-view.
+  var invSubnav = $("invSubnav");
+  if (invSubnav) invSubnav.classList.toggle("hidden", name !== "inventory");
+  if (name === "inventory") {
+    var savedSub = "count";
+    try { savedSub = localStorage.getItem("tim_inv_subview") || "count"; } catch(e) {}
+    invShowSubview(savedSub);
+  }
   try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
+}
+
+// -- Inventory sub-screens -------------------------------------------
+// The Inventory tab is split into sub-views (scan/count, exceptions, summary,
+// gap analysis, event log) selected from indented sidebar children. Each
+// section card carries a data-inv-subview attribute; we show the matching
+// card(s) and hide the rest. The Count view keeps the scan panel + recount
+// cards together.
+var invActiveSubview = "count";
+var INV_SUBVIEWS = ["count", "exceptions", "summary", "gap", "eventlog"];
+function invShowSubview(name) {
+  if (INV_SUBVIEWS.indexOf(name) === -1) name = "count";
+  invActiveSubview = name;
+  // Mode/LOC controls only make sense while counting — collapse the toolbar to
+  // just session/count info on the table sub-screens.
+  var statusBar = $("invStatusBar");
+  if (statusBar) statusBar.classList.toggle("toolbar-compact", name !== "count");
+  var cards = document.querySelectorAll("[data-inv-subview]");
+  for (var i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    var match = c.getAttribute("data-inv-subview") === name;
+    if (!match) {
+      c.classList.add("hidden");
+    } else if (c.id !== "invRecountCard") {
+      // invRecountCard manages its own visibility (recount walk-through);
+      // don't force it open just because the Count view is active.
+      c.classList.remove("hidden");
+    }
+  }
+  for (var j = 0; j < INV_SUBVIEWS.length; j++) {
+    var b = $("invSub_" + INV_SUBVIEWS[j]);
+    if (b) b.classList.toggle("active", INV_SUBVIEWS[j] === name);
+  }
+  try { localStorage.setItem("tim_inv_subview", name); } catch(e) {}
 }
 
 // -- Sidebar toggle --------------------------------------------------
@@ -4111,35 +4153,23 @@ function renderInvSidebarSession() {
 function renderInvStatusBar() {
   var bar = $("invStatusBar");
   if (!bar) return;
+  // Toolbar is always visible on the Inventory tab now that it holds the
+  // location + mode controls (no longer session-gated). Mode is shown by the
+  // active mode button; location by the LOC chip — passive mirrors removed.
+  bar.classList.remove("hidden");
   var hasSession = !!invSession;
-  bar.classList.toggle("hidden", !hasSession);
-  if (!hasSession) return;
-
-  var modePill = $("invStatusModePill");
-  if (modePill) {
-    var modeLabel = { auto: "AUTO", serial: "SERIAL", reel: "REEL", item: "ITEM", box: "BOX" };
-    modePill.textContent = modeLabel[invScanMode] || "AUTO";
-    modePill.className   = "inv-status-mode-pill" + (invScanMode !== "auto" ? " mode-" + invScanMode : "");
-  }
-
-  var locText = $("invStatusLocText");
-  if (locText) {
-    if (invCurrentLocation) {
-      locText.textContent = invCurrentLocation;
-      locText.classList.remove("no-loc");
-    } else {
-      locText.textContent = "No location";
-      locText.classList.add("no-loc");
-    }
-  }
 
   var sessEl = $("invStatusSession");
-  if (sessEl) sessEl.textContent = invSession.sessionName;
+  if (sessEl) sessEl.textContent = hasSession ? invSession.sessionName : "No session";
 
   var countsEl = $("invStatusCounts");
   if (countsEl) {
-    var exc = invEvents.filter(function(e) { return e.eventType === "exception"; }).length;
-    countsEl.textContent = invEvents.length + " events" + (exc ? " · " + exc + " exc." : "");
+    if (!hasSession) {
+      countsEl.textContent = "0 events";
+    } else {
+      var exc = invEvents.filter(function(e) { return e.eventType === "exception"; }).length;
+      countsEl.textContent = invEvents.length + " events" + (exc ? " · " + exc + " exc." : "");
+    }
   }
 }
 

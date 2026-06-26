@@ -1,5 +1,18 @@
 ﻿/* ── Base ── */
-:root { font-family: Arial, sans-serif; color: #1f2937; background: #f8fafc; }
+:root {
+  font-family: Arial, sans-serif; color: #1f2937; background: #f8fafc;
+
+  /* ── Design tokens (TIM 2.0 UI cleanup) ──
+     Spacing, touch, radius, and core brand colors. Reuse these going
+     forward instead of hard-coding px/hex so every screen stays consistent. */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --touch-min: 48px;            /* minimum hit area for primary tablet controls */
+  --touch-min-sm: 40px;         /* dense/secondary controls */
+  --radius-sm: 6px; --radius: 8px; --radius-lg: 12px;
+  --c-primary: #2563eb;  --c-primary-strong: #1d4ed8;
+  --c-secondary: #475569; --c-danger: #dc2626; --c-disabled: #94a3b8;
+  --c-border: #e5e7eb; --c-muted: #64748b; --c-text: #1f2937;
+}
 body { margin: 0; padding: 0; height: 100vh; height: 100dvh; overflow: hidden; }
 h1 { margin: 0 0 8px; }
 h2 { margin-top: 28px; }
@@ -25,6 +38,13 @@ h2 { margin-top: 28px; }
 .sidebar-nav-label { transition: opacity .15s; white-space: nowrap; overflow: hidden; }
 .sidebar.collapsed .sidebar-nav-label { opacity: 0; width: 0; overflow: hidden; }
 .sidebar.collapsed .sidebar-nav-btn { justify-content: center; padding: 9px 0; }
+
+/* Inventory sub-screen nav (indented children under Inventory) */
+.sidebar-subnav { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px; padding-left: 30px; }
+.sidebar-subnav-btn { width: 100%; text-align: left; background: none; border: none; color: #94a3b8; font-size: 13px; font-weight: 500; padding: 6px 10px; border-radius: 6px; cursor: pointer; margin: 0; white-space: nowrap; transition: background .12s, color .12s; }
+.sidebar-subnav-btn:hover { background: #1e293b; color: #e2e8f0; }
+.sidebar-subnav-btn.active { background: #1e293b; color: #fff; font-weight: 600; box-shadow: inset 2px 0 0 #3b82f6; }
+.sidebar.collapsed .sidebar-subnav { display: none; }
 /* Conflicts nav item + badge (Phase 3 merge-conflict review) */
 .sidebar-nav-conflicts { color: #fca5a5; }
 .sidebar-nav-conflicts:hover { background: #7f1d1d; color: #fff; }
@@ -138,6 +158,19 @@ h2 { margin-top: 28px; }
 .inv-status-loc-clear:hover { color: #f87171; }
 .inv-status-session { flex: 1; color: #34d399; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 80px; font-weight: 600; font-size: 11px; }
 .inv-status-counts { color: #94a3b8; white-space: nowrap; flex-shrink: 0; font-size: 11px; }
+
+/* ── Sticky inventory toolbar (v2.23): holds the LOC + scan-mode controls so
+   they stay in reach while the scan body scrolls. ── */
+.inv-toolbar { position: sticky; top: 0; z-index: 20; gap: var(--sp-3); }
+.inv-toolbar-loc { position: relative; display: flex; align-items: center; flex-shrink: 0; }
+.inv-toolbar .inv-mode-toggle { margin-bottom: 0; }
+.inv-toolbar-modes { flex: 1 1 auto; row-gap: 6px; }
+.inv-toolbar .inv-status-session { flex: 0 1 auto; margin-left: auto; }
+.inv-modebar-btn { padding: 6px 10px; font-size: 12px; margin: 0; }
+/* Compact toolbar (table sub-screens): hide mode + LOC, keep session/count info */
+.inv-toolbar.toolbar-compact .inv-toolbar-loc,
+.inv-toolbar.toolbar-compact .inv-toolbar-modes { display: none; }
+.inv-toolbar.toolbar-compact .inv-status-session { margin-left: 0; }
 .inv-status-save { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #166534; color: #bbf7d0; flex-shrink: 0; transition: background .2s; }
 .inv-status-save.unsaved { background: #713f12; color: #fde68a; }
 .inv-status-save.hidden { display: none; }
@@ -255,7 +288,10 @@ th { background: #f1f5f9; position: sticky; top: 0; z-index: 1; }
 .summary { display: flex; gap: 10px; flex-wrap: wrap; }
 .summary div { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; }
 .small { color: #64748b; font-size: 13px; }
-.hidden { display: none; }
+/* Authoritative hide utility. !important so it always wins over component
+   display rules (e.g. .inv-key-focus-row{display:grid}); this is why the
+   per-component .X.hidden patches elsewhere are no longer strictly needed. */
+.hidden { display: none !important; }
 .scroll { max-height: 460px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
 textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12px; }
 
@@ -308,8 +344,31 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-context input, .inv-scan-context select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; margin-top: 4px; font-size: 13px; }
 .inv-scan-main-row { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .inv-scan-input-line { display: flex; gap: 8px; align-items: stretch; }
-.inv-scan-btn-line { display: flex; gap: 8px; }
-.inv-scan-main-input { flex: 1; padding: 10px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 22px; font-family: monospace; font-weight: 600; }
+.inv-scan-btn-line { display: flex; gap: var(--sp-2); align-items: stretch; flex-wrap: wrap; }
+
+/* ── Reusable touch-target button helpers (TIM 2.0 UI cleanup) ──
+   Guarantee a comfortable tablet hit area instead of per-button inline padding. */
+.inv-btn-touch, .inv-btn-touch-sm, .inv-btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; margin: 0;
+}
+.inv-btn-touch    { min-height: var(--touch-min);    padding: var(--sp-2) var(--sp-4); font-size: 15px; }
+.inv-btn-touch-sm { min-height: var(--touch-min-sm); padding: var(--sp-2) var(--sp-3); font-size: 13px; }
+.inv-btn-primary  { min-height: var(--touch-min);    padding: var(--sp-2) var(--sp-5); font-size: 16px; font-weight: 700; flex: 0 0 auto; }
+
+/* ── Sound & voice: collapsible, kept off the scan hot path ── */
+.inv-audio-details { margin: var(--sp-2) 0 0; }
+.inv-audio-details > summary {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--c-muted);
+  list-style: none; padding: var(--sp-2) 0; user-select: none;
+}
+.inv-audio-details > summary::-webkit-details-marker { display: none; }
+.inv-audio-details[open] > summary { color: var(--c-text); }
+.inv-audio-details-body {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-1) 0 var(--sp-2);
+}
+.inv-scan-main-input { flex: 1; max-width: 22ch; padding: 10px 14px; border: 2px solid #3b82f6; border-radius: 8px; font-size: 22px; font-family: monospace; font-weight: 600; }
 .inv-scan-main-input:focus { border-color: #1d4ed8; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
 @keyframes scan-ready-flash { 0%,50% { outline:3px solid #16a34a; outline-offset:2px; box-shadow:0 0 0 5px rgba(22,163,74,.2); } 100% { outline:none; box-shadow:none; } }
 .inv-scan-main-input.scan-ready { animation:scan-ready-flash 0.75s ease-out forwards; }
@@ -371,7 +430,7 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 
 /* === Scan Mode Toggle === */
 .inv-mode-toggle { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
-.inv-mode-btn { background:#e2e8f0; color:#374151; border:2px solid transparent; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; margin:0; transition:background .15s,border-color .15s,color .15s; }
+.inv-mode-btn { background:#e2e8f0; color:#374151; border:2px solid transparent; border-radius:8px; min-height:var(--touch-min-sm); padding:8px 14px; font-size:13px; font-weight:700; cursor:pointer; margin:0; transition:background .15s,border-color .15s,color .15s; }
 .inv-mode-btn:hover { background:#cbd5e1; }
 .inv-mode-btn.active { background:#1d4ed8; color:white; border-color:#1e40af; }
 .inv-mode-btn.active-reel { background:#0891b2; color:white; border-color:#0e7490; }
@@ -444,7 +503,11 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
 .inv-activity-feed-inline { flex:1; margin-top:10px; min-height:120px; display:flex; flex-direction:column; }
 .inv-activity-feed-inline .inv-activity-list { flex:1; max-height:none; overflow-y:auto; }
-@media (max-width:660px) {
+/* Stack scan fields above the keypad whenever the content area is narrow.
+   Breakpoint is raised to 900px because the sidebar (~300px) eats viewport
+   width — at iPad portrait (768px) the two-column layout was badly cramped,
+   so portrait stacks (keypad below the scan field) and landscape stays 2-col. */
+@media (max-width:900px) {
   .inv-scan-two-col { flex-direction:column; }
   .inv-scan-keypad-col { flex:none; width:100%; }
 }

@@ -51,6 +51,14 @@
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg></span>
         <span class="sidebar-nav-label">Inventory</span>
       </button>
+      <!-- Inventory sub-screens (shown only while the Inventory tab is active) -->
+      <div id="invSubnav" class="sidebar-subnav hidden">
+        <button class="sidebar-subnav-btn active" id="invSub_count"      onclick="invShowSubview('count')">Count</button>
+        <button class="sidebar-subnav-btn"        id="invSub_exceptions" onclick="invShowSubview('exceptions')">Exceptions</button>
+        <button class="sidebar-subnav-btn"        id="invSub_summary"    onclick="invShowSubview('summary')">Summary</button>
+        <button class="sidebar-subnav-btn"        id="invSub_gap"        onclick="invShowSubview('gap')">Gap Analysis</button>
+        <button class="sidebar-subnav-btn"        id="invSub_eventlog"   onclick="invShowSubview('eventlog')">Event Log</button>
+      </div>
       <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
         <span class="sidebar-nav-label">Products</span>
@@ -374,12 +382,38 @@
   <div id="tabInventory" class="tab-panel">
 
     <!-- Persistent status bar (replaces session card + autosave bar) -->
-    <div id="invStatusBar" class="inv-status-bar hidden">
-      <span id="invStatusModePill" class="inv-status-mode-pill">AUTO</span>
-      <div class="inv-status-loc">
-        <span id="invStatusLocText" class="inv-status-loc-text no-loc">No location</span>
-        <button class="inv-status-loc-clear" onclick="invClearLocation()" title="Clear location">&#215;</button>
+    <!-- Persistent sticky toolbar (v2.23): location + scan mode live here so they
+         stay in reach while the scan body scrolls. -->
+    <div id="invStatusBar" class="inv-status-bar inv-toolbar">
+      <!-- Location control -->
+      <div id="invLocChipWrap" class="inv-toolbar-loc">
+        <button id="invLocChip" class="inv-loc-chip" onclick="invToggleLocPopover(event)" title="Set location">
+          <span class="inv-loc-chip-label">LOC</span>
+          <span id="invLocBarValue" class="inv-loc-chip-value inv-loc-chip-none">&mdash;</span>
+        </button>
+        <div id="invLocPopover" class="inv-loc-popover hidden">
+          <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Type or scan a location (e.g. WH-RACK1)</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="invLocPopoverInput" type="text" placeholder="WH-RACK1"
+                   autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+                   style="flex:1;padding:7px 10px;border:1.5px solid #86efac;border-radius:6px;font-family:monospace;font-size:14px;font-weight:700;text-transform:uppercase;"
+                   onkeydown="if(event.key==='Enter'){invLocPopoverSet();}if(event.key==='Escape'){invCloseLocPopover();}" />
+            <button style="padding:7px 14px;font-size:13px;margin:0;" onclick="invLocPopoverSet()">Set</button>
+            <button class="secondary" style="padding:7px 10px;font-size:13px;margin:0;" onclick="invCloseLocPopover()">&#10005;</button>
+          </div>
+          <button class="secondary" style="padding:4px 8px;font-size:11px;margin:6px 0 0;width:100%;text-align:center;" onclick="invClearLocation();invCloseLocPopover()">Clear Location</button>
+        </div>
       </div>
+      <!-- Scan mode toggle -->
+      <div class="inv-mode-toggle inv-toolbar-modes">
+        <button class="inv-mode-btn active" id="invModeBtnAuto"   onclick="invSetScanMode('auto')">Auto-Detect</button>
+        <button class="inv-mode-btn"        id="invModeBtnSerial" onclick="invSetScanMode('serial')">Serial / FSAN</button>
+        <button class="inv-mode-btn"        id="invModeBtnReel"   onclick="invSetScanMode('reel')">Cable Reel</button>
+        <button class="inv-mode-btn"        id="invModeBtnItem"   onclick="invSetScanMode('item')">Item # (Bulk)</button>
+        <button class="inv-mode-btn"        id="invModeBtnBox"    onclick="invSetScanMode('box')">Box / Carton</button>
+        <button class="secondary inv-modebar-btn" onclick="invToggleModeBarcodes()">Mode Barcodes &#9662;</button>
+      </div>
+      <!-- Session / count info -->
       <span id="invStatusSession" class="inv-status-session">No session</span>
       <span id="invStatusCounts" class="inv-status-counts">0 events</span>
       <span id="invStatusSave" class="inv-status-save hidden">Saved</span>
@@ -395,9 +429,9 @@
     </div>
 
     <!-- Scan / Entry Panel -->
-    <div class="card" id="invScanCard">
+    <div class="card inv-subview" data-inv-subview="count" id="invScanCard">
       <h2>Scan / Entry Panel</h2>
-      <p class="small">Scan or type any value. Any string starting with <b>WH</b> automatically sets the location. Barcode scanners that send Enter will auto-submit.</p>
+      <p class="small">Scan or type any value. Codes starting with <b>WH</b> set the location; scanners that send Enter auto-submit.</p>
       <!-- Location chip (inline in scan row — see inv-scan-main-row below) -->
       <!-- Hidden legacy display element — JS still writes to it safely -->
       <span id="invLocationDisplay" style="display:none;"></span>
@@ -412,16 +446,7 @@
 
       <div class="inv-scan-panel">
 
-        <!-- Mode Toggle -->
-        <div class="inv-mode-toggle">
-          <span class="inv-mode-toggle-label">Mode:</span>
-          <button class="inv-mode-btn active" id="invModeBtnAuto"   onclick="invSetScanMode('auto')">Auto-Detect</button>
-          <button class="inv-mode-btn"        id="invModeBtnSerial" onclick="invSetScanMode('serial')">Serial / FSAN</button>
-          <button class="inv-mode-btn"        id="invModeBtnReel"   onclick="invSetScanMode('reel')">Cable Reel</button>
-          <button class="inv-mode-btn"        id="invModeBtnItem"   onclick="invSetScanMode('item')">Item # (Bulk)</button>
-          <button class="inv-mode-btn"        id="invModeBtnBox"    onclick="invSetScanMode('box')">Box / Carton</button>
-          <button class="secondary" style="padding:6px 10px;font-size:12px;margin:0 0 0 6px;" onclick="invToggleModeBarcodes()">Mode Barcodes ▾</button>
-        </div>
+        <!-- Mode toggle relocated to the sticky toolbar (#invStatusBar) in v2.23 -->
 
         <!-- Box capture / sealed-count bar (Phase 2) -->
         <div id="invBoxBar" class="inv-box-bar hidden">
@@ -486,51 +511,37 @@
             <div class="inv-scan-main-row">
               <!-- Input line: location chip + scan field -->
               <div class="inv-scan-input-line">
-                <div id="invLocChipWrap" style="position:relative;display:flex;align-items:center;">
-                  <button id="invLocChip" class="inv-loc-chip" onclick="invToggleLocPopover(event)" title="Set location">
-                    <span class="inv-loc-chip-label">LOC</span>
-                    <span id="invLocBarValue" class="inv-loc-chip-value inv-loc-chip-none">—</span>
-                  </button>
-                  <div id="invLocPopover" class="inv-loc-popover hidden">
-                    <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Type or scan a location (e.g. WH-RACK1)</div>
-                    <div style="display:flex;gap:6px;align-items:center;">
-                      <input id="invLocPopoverInput" type="text" placeholder="WH-RACK1"
-                             autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
-                             style="flex:1;padding:7px 10px;border:1.5px solid #86efac;border-radius:6px;font-family:monospace;font-size:14px;font-weight:700;text-transform:uppercase;"
-                             onkeydown="if(event.key==='Enter'){invLocPopoverSet();}if(event.key==='Escape'){invCloseLocPopover();}" />
-                      <button style="padding:7px 14px;font-size:13px;margin:0;" onclick="invLocPopoverSet()">Set</button>
-                      <button class="secondary" style="padding:7px 10px;font-size:13px;margin:0;" onclick="invCloseLocPopover()">✕</button>
-                    </div>
-                    <button class="secondary" style="padding:4px 8px;font-size:11px;margin:6px 0 0;width:100%;text-align:center;" onclick="invClearLocation();invCloseLocPopover()">Clear Location</button>
-                  </div>
-                </div>
                 <input id="invScanInput" class="inv-scan-main-input" type="text"
                        placeholder="Scan barcode or type value..."
                        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
               </div>
-              <!-- Button line: action buttons -->
+              <!-- Button line: primary actions only (hot path) -->
               <div class="inv-scan-btn-line">
-                <button id="invScanAddBtn" onclick="invProcessScan()" style="padding:12px 18px;font-size:15px;">Add</button>
-                <button class="secondary" onclick="invClearScanInput()" style="padding:12px 14px;">Clear</button>
-                <button class="secondary" onclick="timTestSound()" style="padding:12px 14px;" title="Play a test tone and flash. If you hear nothing, raise the volume or check the tablet's mute switch.">🔊 Test sound</button>
-                <span id="timAudioStatus" class="tim-audio-status"></span>
-                <label class="tim-voice-toggle" title="Speak short phrases for significant events (box saved, duplicate, location set…). Rapid device scans stay tone-only.">
-                  <input type="checkbox" id="timVoiceToggle" onchange="timVoiceSetEnabled(this.checked)" /> 🗣 Speak feedback
-                </label>
-                <button class="secondary" onclick="timTestVoice()" style="padding:12px 14px;" title="Speak a test phrase. On iPad this may need the volume up and the side switch off.">🗣 Test voice</button>
-                <span id="timVoiceStatus" class="tim-audio-status"></span>
+                <button id="invScanAddBtn" class="inv-btn-primary" onclick="invProcessScan()">Add</button>
+                <button class="secondary inv-btn-touch" onclick="invClearScanInput()">Clear</button>
               </div>
+              <!-- Sound &amp; voice: configure-once controls, kept off the hot path -->
+              <details class="inv-audio-details">
+                <summary>🔊 Sound &amp; voice</summary>
+                <div class="inv-audio-details-body">
+                  <button class="secondary inv-btn-touch-sm" onclick="timTestSound()" title="Play a test tone and flash. If you hear nothing, raise the volume or check the tablet's mute switch.">🔊 Test sound</button>
+                  <span id="timAudioStatus" class="tim-audio-status"></span>
+                  <label class="tim-voice-toggle" title="Speak short phrases for significant events (box saved, duplicate, location set…). Rapid device scans stay tone-only.">
+                    <input type="checkbox" id="timVoiceToggle" onchange="timVoiceSetEnabled(this.checked)" /> 🗣 Speak feedback
+                  </label>
+                  <button class="secondary inv-btn-touch-sm" onclick="timTestVoice()" title="Speak a test phrase. On iPad this may need the volume up and the side switch off.">🗣 Test voice</button>
+                  <span id="timVoiceStatus" class="tim-audio-status"></span>
+                </div>
+              </details>
             </div>
             <div>
               <span id="invDetectedBadge" class="inv-detected-badge unknown">type: —</span>
             </div>
             <div id="invScanMetaRow" class="inv-scan-meta-row" style="display:none;"></div>
-            <!-- Context fields -->
-            <div class="inv-scan-context" style="grid-template-columns:1fr;margin-top:10px;">
-              <label>NISC Item # Context <span style="font-weight:400;color:#94a3b8;">(sticky — stays set between scans)</span>
-                <input id="invScanItem" type="text" placeholder="Scan or type NISC Item # to pre-fill context" autocomplete="off" style="padding:6px 8px;font-size:13px;" />
-              </label>
-            </div>
+            <!-- NISC Item # context field removed from the UI (v2.23). The hidden
+                 stub keeps the existing scan-processing JS (7 references) working;
+                 it stays empty since the feature is intentionally unused. -->
+            <input id="invScanItem" type="hidden" value="" />
             <label class="small" style="display:block;margin-bottom:6px;">Notes (optional — applies to this scan)
               <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
             </label>
@@ -706,7 +717,7 @@
     </div>
 
     <!-- Exceptions -->
-    <div class="card" id="invExceptionsCard">
+    <div class="card inv-subview" data-inv-subview="exceptions" id="invExceptionsCard">
       <div class="collapsible-header" id="invExceptionsHeader" onclick="toggleCollapsible('invExceptionsCollapse','invExceptionsHeader','invExceptionsChevron')">
         <h2 style="margin:0;">Exceptions <span id="invExceptionCount" class="small" style="font-weight:400;">0 exceptions</span></h2>
         <svg id="invExceptionsChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -727,7 +738,7 @@
     </div>
 
     <!-- Inventory Summary -->
-    <div class="card" id="invSummaryCard">
+    <div class="card inv-subview" data-inv-subview="summary" id="invSummaryCard">
       <div class="collapsible-header open" id="invSummaryHeader" onclick="toggleCollapsible('invSummaryCollapse','invSummaryHeader','invSummaryChevron')">
         <h2 style="margin:0;">Inventory Summary</h2>
         <svg id="invSummaryChevron" class="collapsible-chevron" style="transform:rotate(180deg);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -787,7 +798,7 @@
     </div>
 
     <!-- Gap Analysis -->
-    <div class="card" id="invGapAnalysisCard">
+    <div class="card inv-subview" data-inv-subview="gap" id="invGapAnalysisCard">
       <div class="collapsible-header" id="invGapAnalysisHeader" onclick="toggleCollapsible('invGapAnalysisCollapse','invGapAnalysisHeader','invGapAnalysisChevron')">
         <h2 style="margin:0;">Gap Analysis <span id="invGapBadge" class="small" style="font-weight:400;"></span></h2>
         <svg id="invGapAnalysisChevron" class="collapsible-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -845,7 +856,7 @@
     </div>
 
     <!-- Phase 3: Recount Sessions -->
-    <div class="card" id="rcSessionsCard">
+    <div class="card inv-subview" data-inv-subview="count" id="rcSessionsCard">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;">
         <h2 style="margin:0;">Recount Sessions</h2>
         <button onclick="rcShowCreate(false)" id="rcNewBtn" class="secondary">+ New Session</button>
@@ -886,7 +897,7 @@
     </div>
 
     <!-- Event Log -->
-    <div class="card" id="invEventLogCard">
+    <div class="card inv-subview" data-inv-subview="eventlog" id="invEventLogCard">
       <h2>Inventory Event Log</h2>
       <p class="small">Every inventory action creates a permanent timestamped event. Scroll right to see all columns.</p>
 
@@ -936,7 +947,7 @@
     </div>
 
     <!-- Phase 7: Recount Card -->
-    <div class="card hidden" id="invRecountCard">
+    <div class="card hidden inv-subview" data-inv-subview="count" id="invRecountCard">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <h2 style="margin:0;">&#8635; Recount Session</h2>
         <button onclick="exportRecountXlsx()">Export Recount XLSX</button>

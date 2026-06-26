@@ -350,7 +350,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `renderInvSessionUI()` | Top-level: show/hide all session sections |
 | `renderInvSessionMeta()` | Update session name/date/counts header |
 | `renderInvSidebarSession()` | Update sidebar session indicator + stats |
-| `renderInvStatusBar()` | Update mode pill, location, event count |
+| `renderInvStatusBar()` | Keep sticky toolbar visible; update session name + event count (mode/loc shown by their own controls) |
 | `renderInvEventLog()` | Render event log table (filterable) |
 | `renderInvSummary()` | Render per-item summary (qty, footage) |
 | `renderInvExceptions()` | Render exceptions panel |
@@ -765,7 +765,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `switchTab(name)` | Switch main tab; persists to localStorage |
+| `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory sub-nav + applies sub-view |
+| `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/eventlog) by toggling `[data-inv-subview]` cards |
 | `toggleSidebar()` | Collapse/expand left sidebar |
 | `updateSidebarStatus(step, rows)` | Update sidebar file-loaded indicators |
 | `toggleMoreDropdown(e)` | Toggle "More" menu |
