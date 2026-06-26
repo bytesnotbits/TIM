@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.21.00";
+const APP_VERSION = "v2.21.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4588,6 +4588,10 @@ function invClassifyScan(raw) {
   // Barcode map check — after product map to avoid misclassifying item numbers
   if (BARCODE_MAP[normKey(v)]) return "barcode";
 
+  // Known reel number (matches a counted reel in the DB) — before MAC/serial so
+  // serial-shaped reel numbers like 48R37 are recognized as reels, not serials.
+  if (invFindReelMaster(v)) return "reel_number";
+
   // MAC detection — only after history/product map checks to avoid false positives.
   // Formatted MAC (AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF): accept unambiguously.
   // Bare 12-hex-char string: only accept if it matches a known MAC in history,
@@ -6238,8 +6242,10 @@ function invProcessScan() {
   if (invScanMode === "item" && !override && scanType !== "location") {
     scanType = "item_number";
   }
-  // In reel mode with no override, unknown scans default to reel_number
-  if (invScanMode === "reel" && !override && scanType === "unknown") {
+  // In reel mode with no override, treat the scan as a reel number unless it's a
+  // known item number (which prefills the reel's item context). Reel numbers often
+  // look like serials (e.g. 48R37), so the serial heuristic must not win here.
+  if (invScanMode === "reel" && !override && scanType !== "item_number") {
     scanType = "reel_number";
   }
 
