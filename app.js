@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.19.00";
+const APP_VERSION = "v2.20.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -11070,9 +11070,28 @@ function invImportReelsCsv(inputEl, onDone) {
   reader.onload = function(e) {
     try {
       var rows = _parseReelCsv(e.target.result);
-      // Skip header row if present
-      if (rows.length && /sku|reel/i.test(rows[0][0])) rows = rows.slice(1);
-      var parsed = _analyzeReelCsvRows(rows);
+      // Detect columns by header name so any export order imports correctly.
+      // Falls back to the legacy positional order if no recognizable header.
+      var colMap = null;
+      var headerRow = null;
+      if (rows.length) {
+        colMap = _reelCsvDetectCols(rows[0]);
+        if (colMap) {
+          headerRow = rows[0]; rows = rows.slice(1);   // recognized header → drop it
+        } else if (/sku|reel|item/i.test(rows[0][0])) {
+          headerRow = rows[0]; rows = rows.slice(1);   // unrecognized header → drop, use legacy order
+          colMap = _REEL_CSV_LEGACY;
+        } else {
+          colMap = _REEL_CSV_LEGACY;                   // headerless → assume legacy order
+        }
+      }
+      var parsed = _analyzeReelCsvRows(rows, colMap);
+      // Within-file duplicate detection (keyed on reel number). Defaults the
+      // winner of each set to the most recent record so timeline can't be lost.
+      var dupSets = _reelCsvDuplicateSets(parsed);
+      var picks = {};
+      dupSets.forEach(function(s) { picks[s.reelKey] = _reelCsvDefaultWinnerIdx(s.rows); });
+      _reelCsvImportMeta = { header: headerRow, dataRows: rows, colMap: colMap, dupSets: dupSets, picks: picks };
       _csvImportPending = parsed;
       _showCsvImportModal(parsed);
       if (onDone) onDone(null);
@@ -11115,21 +11134,60 @@ function _parseReelCsv(text) {
   return rows;
 }
 
-// columns: SKU(0), Reels No(1), Description(2), Inner Seq(3), Outer Seq(4), Qty(5), Last Updated(6), Notes(7)
-function _analyzeReelCsvRows(rows) {
+// Legacy positional column order (used when no recognizable header is present):
+// SKU(0), Reels No(1), Description(2), Inner Seq(3), Outer Seq(4), Qty(5), Last Updated(6), Notes(7)
+var _REEL_CSV_LEGACY = { itemNum:0, reelNum:1, desc:2, inner:3, outer:4, qty:5, date:6, notes:7 };
+
+// Accepted header names (lowercased, exact match) for each field. Lets the importer
+// read a reel export by column NAME regardless of column order.
+var _REEL_CSV_FIELDS = {
+  itemNum: ["sku","item","item number","item no","item #","itemnum","material"],
+  reelNum: ["reels no","reel no","reel number","reel #","reel","reelno","reels","reels number"],
+  desc:    ["description","desc","product name"],
+  inner:   ["inner sequence no","inner seq","inner sequence","inner","inner no"],
+  outer:   ["outer sequence no","outer seq","outer sequence","outer","outer no"],
+  qty:     ["quantity","qty","footage","available ft","total ft","feet","length"],
+  date:    ["last updated on","last updated","updated on","updated","date","last count","count date"],
+  notes:   ["notes","note","comment","comments","remarks"]
+};
+
+// Build a { field -> columnIndex } map from a header row, or null if it isn't
+// recognizable as a header (requires item + reel + at least one more known field).
+function _reelCsvDetectCols(headerRow) {
+  if (!headerRow || !headerRow.length) return null;
+  var norm = headerRow.map(function(h) { return (h || "").trim().toLowerCase(); });
+  var map = {};
+  Object.keys(_REEL_CSV_FIELDS).forEach(function(field) {
+    var syns = _REEL_CSV_FIELDS[field];
+    for (var i = 0; i < norm.length; i++) {
+      if (map[field] != null) continue;
+      if (syns.indexOf(norm[i]) !== -1) { map[field] = i; break; }
+    }
+  });
+  if (map.itemNum == null || map.reelNum == null) return null;
+  if (Object.keys(map).length < 3) return null;
+  return map;
+}
+
+function _analyzeReelCsvRows(rows, colMap) {
+  colMap = colMap || _REEL_CSV_LEGACY;
+  var g = function(cols, field) {
+    var idx = colMap[field];
+    return (idx == null || idx >= cols.length) ? "" : (cols[idx] || "");
+  };
   var result = [];
-  rows.forEach(function(cols) {
+  rows.forEach(function(cols, idx) {
     if (cols.length < 2) return;
-    var itemNum = normKey(cols[0] || "");
-    var reelNum = normKey(cols[1] || "");
+    var itemNum = normKey(g(cols, "itemNum"));
+    var reelNum = normKey(g(cols, "reelNum"));
     if (!itemNum || !reelNum) return;
 
-    var desc = (cols[2] || "").trim().replace(/^\[[^\]]+\]\s*/, "");
-    var innerRaw = (cols[3] || "").trim();
-    var outerRaw = (cols[4] || "").trim();
-    var qty      = parseFloat((cols[5] || "").trim()) || 0;
-    var dateRaw  = (cols[6] || "").trim();
-    var notes    = (cols[7] || "").trim();
+    var desc = g(cols, "desc").trim().replace(/^\[[^\]]+\]\s*/, "");
+    var innerRaw = g(cols, "inner").trim();
+    var outerRaw = g(cols, "outer").trim();
+    var qty      = parseFloat(g(cols, "qty").trim()) || 0;
+    var dateRaw  = g(cols, "date").trim();
+    var notes    = g(cols, "notes").trim();
 
     var innerA = innerRaw !== "" ? parseFloat(innerRaw) : null;
     var outerA = outerRaw !== "" ? parseFloat(outerRaw) : null;
@@ -11138,11 +11196,7 @@ function _analyzeReelCsvRows(rows) {
     var mapEntry = PRODUCT_MAP[itemNum];
     var spanType = (mapEntry && mapEntry.reel_direction === "two_way") ? "two_way" : "single";
 
-    var csvDate = null;
-    if (dateRaw) {
-      var d = new Date(dateRaw.replace(" ", "T"));
-      if (!isNaN(d.getTime())) csvDate = d;
-    }
+    var csvDate = _reelCsvParseDate(dateRaw);
 
     // Find most recent existing master event for this reel
     var k1 = normKey(itemNum), k2 = normKey(reelNum);
@@ -11186,13 +11240,73 @@ function _analyzeReelCsvRows(rows) {
       innerA: innerA, outerA: outerA, ftA: ftA,
       spanType: spanType, totalFt: qty, qty: qty,
       csvDate: csvDate, dateRaw: dateRaw, notes: notes,
-      action: action, existingEvent: existingEvent
+      action: action, existingEvent: existingEvent,
+      reelKey: k2, rawCols: cols, dataRowIndex: idx + 1
     });
   });
   return result;
 }
 
+// Parse a reel CSV date. Handles ISO ("YYYY-MM-DD HH:MM") and US slash
+// ("M/D/YYYY H:MM") formats. Returns a Date or null. (A naive
+// replace(" ","T") breaks slash dates, so only ISO strings get the T swap.)
+function _reelCsvParseDate(raw) {
+  if (raw == null) return null;
+  raw = String(raw).trim();
+  if (!raw) return null;
+  var s = /^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}/.test(raw) ? raw.replace(" ", "T") : raw;
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// ── Within-file reel duplicate detection ──────────────────────────────────
+var _reelCsvImportMeta = null;  // { header, dataRows, colMap, dupSets, picks }
+var _REEL_CSV_DUP_LIMIT = 10;   // > this many duplicate reels = report-only (bad data)
+
+// Group parsed rows by reel number; return only the sets with more than one row.
+function _reelCsvDuplicateSets(parsed) {
+  var byKey = {};
+  parsed.forEach(function(r) {
+    var k = r.reelKey || normKey(r.reelNum);
+    (byKey[k] = byKey[k] || []).push(r);
+  });
+  var sets = [];
+  Object.keys(byKey).forEach(function(k) {
+    if (byKey[k].length > 1) sets.push({ reelKey: k, reelNum: byKey[k][0].reelNum, rows: byKey[k] });
+  });
+  return sets;
+}
+
+// Default winner of a duplicate set = most recent dated record; if none dated,
+// the last occurrence in the file.
+function _reelCsvDefaultWinnerIdx(rows) {
+  var best = 0;
+  for (var i = 1; i < rows.length; i++) {
+    var a = rows[i].csvDate, b = rows[best].csvDate;
+    if (a && (!b || a > b)) best = i;
+    else if (!a && !b) best = i;
+  }
+  return best;
+}
+
+// Parsed rows surviving de-duplication: non-duplicate rows + the chosen winner
+// of each duplicate set.
+function _reelCsvSurviving(parsed, meta) {
+  if (!meta || !meta.dupSets || !meta.dupSets.length) return parsed.slice();
+  var losers = new Set();
+  meta.dupSets.forEach(function(s) {
+    var win = meta.picks[s.reelKey];
+    s.rows.forEach(function(r, i) { if (i !== win) losers.add(r); });
+  });
+  return parsed.filter(function(r) { return !losers.has(r); });
+}
+
 function _showCsvImportModal(parsed) {
+  // Within-file duplicate reels take priority over the normal preview.
+  var dupSets = _reelCsvImportMeta ? _reelCsvImportMeta.dupSets : null;
+  if (dupSets && dupSets.length > _REEL_CSV_DUP_LIMIT) { _showCsvDupReportModal(dupSets); return; }
+  if (dupSets && dupSets.length)                       { _showCsvDupResolveModal(parsed, dupSets); return; }
+
   var counts = {};
   parsed.forEach(function(r) { counts[r.action] = (counts[r.action] || 0) + 1; });
   var nAdd    = counts.add    || 0;
@@ -11254,8 +11368,134 @@ function _csvStatCard(n, label, bg, border, labelColor, numColor) {
        + '</div>';
 }
 
+// ── Duplicate-reel resolve modal (1–10 duplicate reels) ───────────────────
+function _showCsvDupResolveModal(parsed, dupSets) {
+  var meta = _reelCsvImportMeta || { picks: {} };
+  var surviving = _reelCsvSurviving(parsed, meta);
+  var nAction = surviving.filter(function(r) { return r.action === "add" || r.action === "update"; }).length;
+  var nRows   = dupSets.reduce(function(t, s) { return t + s.rows.length; }, 0);
+
+  var html = '<div class="modal" style="max-width:560px;">'
+    + '<div class="modal-header">'
+    +   '<h2 style="margin:0;font-size:16px;">Duplicate Reels Found</h2>'
+    +   '<button onclick="invCancelCsvImport()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;line-height:1;">&times;</button>'
+    + '</div>'
+    + '<div class="modal-body" style="font-size:13px;max-height:60vh;overflow:auto;">'
+    +   '<p style="margin:0 0 6px;"><strong>' + dupSets.length + '</strong> reel number'
+    +     (dupSets.length !== 1 ? 's' : '') + ' appear more than once in this file (' + nRows + ' rows). '
+    +     'The most recent record is pre-selected for each. Confirm the correct one, then import.</p>'
+    +   '<p style="margin:0 0 14px;font-size:12px;color:#b45309;">⚠ Your source file still contains these duplicates. '
+    +     'Download the corrected file to replace your original, or fix the source and re-import.</p>';
+
+  dupSets.forEach(function(s) {
+    var win = meta.picks[s.reelKey];
+    var diffItems = s.rows.some(function(r) { return r.itemNum !== s.rows[0].itemNum; });
+    html += '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:10px;">'
+      +   '<div style="font-weight:700;margin-bottom:6px;">Reel ' + escapeHtml(s.reelNum)
+      +     (diffItems ? ' <span style="color:#dc2626;font-weight:600;font-size:11px;">⚠ conflicting item numbers</span>' : '')
+      +   '</div>';
+    s.rows.forEach(function(r, i) {
+      var checked = (i === win) ? ' checked' : '';
+      var ft = (r.innerA != null && r.outerA != null) ? Math.abs(r.outerA - r.innerA) : r.qty;
+      html += '<label style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer;">'
+        +   '<input type="radio" name="dup_' + escapeHtml(s.reelKey) + '" style="margin-top:3px;"'
+        +     ' onclick="invCsvResolvePick(\'' + chkJsStr(s.reelKey) + '\',' + i + ')"' + checked + '>'
+        +   '<span style="font-size:12px;line-height:1.4;">'
+        +     '<strong>' + escapeHtml(r.itemNum) + '</strong> · '
+        +     (r.dateRaw ? escapeHtml(r.dateRaw) : '<em style="color:#94a3b8;">no date</em>')
+        +     '<br>inner ' + (r.innerA != null ? r.innerA.toLocaleString() : '—')
+        +     ' · outer ' + (r.outerA != null ? r.outerA.toLocaleString() : '—')
+        +     ' · qty ' + (r.qty || 0).toLocaleString()
+        +     ' · ' + ft.toLocaleString() + ' ft'
+        +     (r.dataRowIndex ? ' <span style="color:#94a3b8;">(row ' + r.dataRowIndex + ')</span>' : '')
+        +   '</span>'
+        + '</label>';
+    });
+    html += '</div>';
+  });
+
+  html += '</div>'
+    + '<div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">'
+    +   '<button class="secondary" onclick="invCsvDownloadCorrectedSource()" style="margin:0;">Download corrected file</button>'
+    +   '<button class="secondary" onclick="invCancelCsvImport()" style="margin:0;">Cancel</button>'
+    +   '<button onclick="invConfirmCsvImport()" style="margin:0;background:#166534;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;">'
+    +     'Import ' + nAction + ' Reel' + (nAction !== 1 ? 's' : '')
+    +   '</button>'
+    + '</div></div>';
+
+  var modal = $("invCsvImportModal");
+  if (modal) { modal.innerHTML = html; modal.classList.remove("hidden"); }
+}
+
+// ── Duplicate-reel report modal (> limit duplicate reels = bad data) ───────
+function _showCsvDupReportModal(dupSets) {
+  var nRows = dupSets.reduce(function(t, s) { return t + s.rows.length; }, 0);
+  var html = '<div class="modal" style="max-width:460px;">'
+    + '<div class="modal-header">'
+    +   '<h2 style="margin:0;font-size:16px;">Too Many Duplicate Reels</h2>'
+    +   '<button onclick="invCancelCsvImport()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;line-height:1;">&times;</button>'
+    + '</div>'
+    + '<div class="modal-body" style="font-size:13px;">'
+    +   '<p style="margin:0 0 12px;"><strong>' + dupSets.length + '</strong> reel numbers appear more than once ('
+    +     nRows + ' rows). This usually means the source data needs cleanup before import.</p>'
+    +   '<p style="margin:0;font-size:12px;color:#475569;">Download the report, resolve the duplicates in your source file, then import again.</p>'
+    + '</div>'
+    + '<div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">'
+    +   '<button class="secondary" onclick="invCancelCsvImport()" style="margin:0;">Close</button>'
+    +   '<button onclick="invCsvDownloadDupReport()" style="margin:0;background:#b45309;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;">'
+    +     'Download report'
+    +   '</button>'
+    + '</div></div>';
+  var modal = $("invCsvImportModal");
+  if (modal) { modal.innerHTML = html; modal.classList.remove("hidden"); }
+}
+
+function invCsvResolvePick(reelKey, occIdx) {
+  if (!_reelCsvImportMeta) return;
+  _reelCsvImportMeta.picks[reelKey] = occIdx;
+  _showCsvImportModal(_csvImportPending);   // re-render to refresh the import count
+}
+
+// Regenerate the user's original file minus the dropped duplicate rows.
+function invCsvDownloadCorrectedSource() {
+  var meta = _reelCsvImportMeta;
+  if (!meta) return;
+  var losers = new Set();
+  (meta.dupSets || []).forEach(function(s) {
+    var win = meta.picks[s.reelKey];
+    s.rows.forEach(function(r, i) { if (i !== win && r.rawCols) losers.add(r.rawCols); });
+  });
+  var lines = [];
+  if (meta.header && meta.header.length) lines.push(meta.header.map(csvEscape).join(","));
+  (meta.dataRows || []).forEach(function(row) {
+    if (losers.has(row)) return;
+    lines.push(row.map(csvEscape).join(","));
+  });
+  downloadText("reels_corrected_source.csv", lines.join("\r\n"), "text/csv");
+}
+
+// One row per occurrence, grouped by duplicate reel, to guide source cleanup.
+function invCsvDownloadDupReport() {
+  var meta = _reelCsvImportMeta;
+  if (!meta || !meta.dupSets) return;
+  var lines = [["Group","Reel No","Item (SKU)","Description","Inner Seq","Outer Seq","Quantity","Last Updated","Data Row #"].join(",")];
+  meta.dupSets.forEach(function(s, gi) {
+    s.rows.forEach(function(r) {
+      lines.push([
+        gi + 1, r.reelNum, r.itemNum, r.desc,
+        r.innerA == null ? "" : r.innerA,
+        r.outerA == null ? "" : r.outerA,
+        r.qty, r.dateRaw || "",
+        r.dataRowIndex == null ? "" : r.dataRowIndex
+      ].map(csvEscape).join(","));
+    });
+  });
+  downloadText("reels_duplicate_report.csv", lines.join("\r\n"), "text/csv");
+}
+
 function invCancelCsvImport() {
   _csvImportPending = null;
+  _reelCsvImportMeta = null;
   var modal = $("invCsvImportModal");
   if (modal) modal.classList.add("hidden");
 }
@@ -11264,7 +11504,9 @@ function invConfirmCsvImport() {
   var parsed = _csvImportPending;
   if (!parsed) return;
 
-  var toImport = parsed.filter(function(r) { return r.action === "add" || r.action === "update"; });
+  // Drop duplicate-set losers per the user's picks before importing.
+  var surviving = _reelCsvSurviving(parsed, _reelCsvImportMeta);
+  var toImport = surviving.filter(function(r) { return r.action === "add" || r.action === "update"; });
   if (!toImport.length) { invCancelCsvImport(); return; }
 
   var now       = invNow();

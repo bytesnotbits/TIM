@@ -562,12 +562,23 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `invImportReelsCsv(inputEl)` | Load reel CSV file |
+| `invImportReelsCsv(inputEl)` | Load reel CSV file; detects columns by header name (any order), else legacy positional; runs within-file dup detection |
 | `_parseReelCsv(text)` | Parse CSV text → row arrays |
-| `_analyzeReelCsvRows(rows)` | Determine action per row: add / update / skip / skip_active |
-| `_showCsvImportModal(parsed)` | Show preview modal with counts |
-| `invConfirmCsvImport()` | Execute import: create events + export master |
-| `invCancelCsvImport()` | Close modal |
+| `_REEL_CSV_LEGACY` / `_REEL_CSV_FIELDS` | Legacy positional column order / accepted header-name synonyms per field |
+| `_reelCsvDetectCols(headerRow)` | Build `{field → colIndex}` from a header row by name; null if unrecognizable |
+| `_reelCsvParseDate(raw)` | Parse reel CSV date (ISO `YYYY-MM-DD HH:MM` **and** US `M/D/YYYY H:MM`); null if unparseable |
+| `_analyzeReelCsvRows(rows, colMap)` | Determine action per row (add / update / skip / skip_active); reads via `colMap`; tags each row with `reelKey`/`rawCols`/`dataRowIndex` |
+| `_reelCsvImportMeta` / `_REEL_CSV_DUP_LIMIT` | Import session meta `{header,dataRows,colMap,dupSets,picks}` / max dup reels before report-only (10) |
+| `_reelCsvDuplicateSets(parsed)` | Group parsed rows by reel number; return sets with >1 row (within-file duplicates) |
+| `_reelCsvDefaultWinnerIdx(rows)` | Default winner of a dup set = most recent dated row, else last occurrence |
+| `_reelCsvSurviving(parsed, meta)` | Parsed rows minus dup-set losers per the user's picks |
+| `_showCsvImportModal(parsed)` | Preview modal; branches to dup-resolve (1–10) or dup-report (>10) when duplicates exist |
+| `_showCsvDupResolveModal(parsed, dupSets)` / `_showCsvDupReportModal(dupSets)` | Resolve modal (pick winner per reel) / report-only modal (bad data) |
+| `invCsvResolvePick(reelKey, occIdx)` | Pick which row wins a duplicate set; re-renders the resolve modal |
+| `invCsvDownloadCorrectedSource()` | Re-emit the original file minus dropped duplicate rows (faithful, source format) |
+| `invCsvDownloadDupReport()` | Download duplicate report (grouped by reel, one row per occurrence) |
+| `invConfirmCsvImport()` | Execute import: drop dup losers, create events + export master |
+| `invCancelCsvImport()` | Close modal; clear import meta |
 
 ---
 
