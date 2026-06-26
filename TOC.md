@@ -558,6 +558,18 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 ---
 
+### Reel Lookup (Products tab)
+
+> Read-only browse of last-known reel footage, in the Products tab — no inventory session required. Sources reel data straight from `cable_reel_count` events (master + active session), deduped to the latest non-voided event per item+reel. Searchable by item number or reel number; grouped by item; item links open `prodShowItemHistory`.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `_REEL_LOOKUP_CAP` | Max reel rows rendered before a "narrow your search" note (500) |
+| `reelLookupBuildList()` | Aggregate non-voided `cable_reel_count` events → latest per item+reel |
+| `reelLookupRender()` | Render the Reel Lookup card: filter by `#reelLookupSearch`, group by item, table per reel |
+
+---
+
 ### Inventory — CSV Import (Reels)
 
 | Function | Purpose |

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.20.01";
+const APP_VERSION = "v2.21.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -909,6 +909,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   else renderAll();
   prodRenderList();
+  reelLookupRender();
   checkReelItemConflicts();
   timSaveMasterCache();
 }
@@ -3689,7 +3690,7 @@ function switchTab(name) {
   }
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
-  if (name === "products") prodRenderList();
+  if (name === "products") { prodRenderList(); reelLookupRender(); }
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
 }
@@ -11061,6 +11062,118 @@ function prodCancelEdit() {
 // ═══════════════════════════════════════════════════════════════════════
 
 var _csvImportPending = null;
+
+// ═══════════════════════════════════════════════════════════════════════
+// REEL LOOKUP — read-only browse of last-known reel footage (Products tab)
+// No inventory session required. Sources reel data straight from the events.
+// ═══════════════════════════════════════════════════════════════════════
+
+var _REEL_LOOKUP_CAP = 500;  // max rows rendered before a "narrow your search" note
+
+// Aggregate every counted reel to its most-recent non-voided event. Includes
+// master events + the active session so an in-progress count shows immediately.
+// Returns an array of latest events, deduped by item number + reel number.
+function reelLookupBuildList() {
+  var all = (appData.inventory_events || []).concat(invEvents || []);
+  var byKey = {};
+  all.forEach(function(e) {
+    if (!e || e.eventType !== "cable_reel_count" || e.status === "voided") return;
+    var item = e.itemNumber || "", reel = e.reelNumber || "";
+    if (!item && !reel) return;
+    var k = normKey(item) + "|" + normKey(reel);
+    var cur = byKey[k];
+    if (!cur || (e.timestamp || "") > (cur.timestamp || "")) byKey[k] = e;
+  });
+  return Object.keys(byKey).map(function(k) { return byKey[k]; });
+}
+
+function reelLookupRender() {
+  var body = $("reelLookupBody");
+  if (!body) return;
+  var q = ($("reelLookupSearch") ? $("reelLookupSearch").value : "").trim().toLowerCase();
+
+  var all = reelLookupBuildList();
+  var totalReels = all.length;
+  var list = q
+    ? all.filter(function(e) {
+        return (e.itemNumber || "").toLowerCase().indexOf(q) !== -1
+            || (e.reelNumber || "").toLowerCase().indexOf(q) !== -1;
+      })
+    : all;
+
+  // Group surviving reels by item number
+  var groups = {};
+  list.forEach(function(e) {
+    var item = e.itemNumber || "(no item)";
+    (groups[item] = groups[item] || []).push(e);
+  });
+  var itemKeys = Object.keys(groups).sort();
+
+  var countEl = $("reelLookupCount");
+  if (countEl) {
+    countEl.textContent = totalReels
+      ? (q ? list.length + " of " + totalReels + " reels"
+           : totalReels + " reels across " + itemKeys.length + " item" + (itemKeys.length !== 1 ? "s" : ""))
+      : "no reels counted yet";
+  }
+
+  if (!totalReels) {
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels counted yet. Import a reel CSV (Inventory tab) or count reels in a session.</p>';
+    return;
+  }
+  if (!list.length) {
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels match “' + escapeHtml(q) + '”.</p>';
+    return;
+  }
+
+  var html = '<table><thead><tr>'
+    + '<th>Reel #</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
+    + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th>'
+    + '</tr></thead><tbody>';
+  var shown = 0, capped = false;
+
+  for (var gi = 0; gi < itemKeys.length && !capped; gi++) {
+    var item = itemKeys[gi];
+    var reels = groups[item].slice().sort(function(a, b) {
+      return (a.reelNumber || "").localeCompare(b.reelNumber || "");
+    });
+    var desc = "";
+    for (var d = 0; d < reels.length; d++) { if (reels[d].description) { desc = reels[d].description; break; } }
+    if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
+
+    html += '<tr style="background:#f8fafc;"><td colspan="9" style="padding:8px 10px;">'
+      + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
+      + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
+      + ' <span style="color:#94a3b8;">(' + reels.length + ' reel' + (reels.length !== 1 ? 's' : '') + ')</span>'
+      + '</td></tr>';
+
+    for (var j = 0; j < reels.length; j++) {
+      if (shown >= _REEL_LOOKUP_CAP) { capped = true; break; }
+      var e = reels[j];
+      var two = e.spanType === "two_way";
+      var ft = (e.totalAvailableFt != null ? e.totalAvailableFt : (e.qty != null ? e.qty : null));
+      var loc = e.location ? (invLocationBarcodeToCompleteName(e.location) || e.location) : "";
+      var num = function(v) { return v != null && v !== "" ? Number(v).toLocaleString() : "—"; };
+      html += '<tr>'
+        + '<td style="font-weight:600;">' + escapeHtml(e.reelNumber || "") + '</td>'
+        + '<td style="font-weight:700;">' + (ft != null ? Number(ft).toLocaleString() + ' ft' : '—') + '</td>'
+        + '<td>' + num(e.innerSeqA) + '</td>'
+        + '<td>' + num(e.outerSeqA) + '</td>'
+        + '<td>' + (two ? num(e.innerSeqB) : '—') + '</td>'
+        + '<td>' + (two ? num(e.outerSeqB) : '—') + '</td>'
+        + '<td>' + escapeHtml(loc) + '</td>'
+        + '<td style="white-space:nowrap;">' + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : '') + '</td>'
+        + '<td>' + escapeHtml(e.notes || "") + '</td>'
+        + '</tr>';
+      shown++;
+    }
+  }
+  html += '</tbody></table>';
+  if (capped) {
+    html += '<p class="small" style="color:#94a3b8;margin:8px 0 0;">Showing the first ' + _REEL_LOOKUP_CAP + ' reels — narrow your search to see the rest.</p>';
+  }
+  body.innerHTML = html;
+}
 
 function invImportReelsCsv(inputEl, onDone) {
   var file = (inputEl instanceof File) ? inputEl : inputEl.files[0];

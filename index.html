@@ -1026,6 +1026,20 @@
       </div>
     </div>
 
+    <!-- Reel Lookup -->
+    <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        Reel Lookup
+        <span id="reelLookupCount" class="small" style="font-weight:400;color:#64748b;"></span>
+      </h2>
+      <p class="small" style="color:#475569;margin:0 0 12px;">Last-known footage for every cable reel TIM has counted — no inventory session needed. Search by item number or reel number.</p>
+      <div class="prod-search-row">
+        <input type="search" id="reelLookupSearch" placeholder="Search by item number or reel number…" oninput="reelLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <button class="secondary" onclick="reelLookupRender()">Refresh</button>
+      </div>
+      <div id="reelLookupBody" class="scroll"><p class="small" style="color:#94a3b8;margin:0;">Open this tab to load reels, or import a reel CSV first.</p></div>
+    </div>
+
     <!-- Catalog Health -->
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
