@@ -412,6 +412,15 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxRemoveSerial(boxId, serial)` / `invBoxAddSerialManual(boxId, btn)` | Editor: remove one device (voids its session count event) / add a device (resolves serial-FSAN-MAC, moves from other box, creates a session count event) |
 | `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event |
 
+**Open-box gate (v2.17.00)** — a box left `capturing` (interrupted capture; `invActiveBox` is in-memory only while the box record persists) is surfaced in a blocking, no-dismiss modal that must be resolved before scanning resumes. Fires on load + on entering Inventory; scoped to the active session so stale registry boxes don't nag. Re-scanning an already-counted-this-session box now warns instead of silently resuming.
+
+| Function | Purpose |
+|----------|---------|
+| `invBoxCountedThisSession(boxId)` | True if the box has any non-voided `box_scan`/`serialized_device_scan` event in the current session |
+| `invFindOrphanedCapturingBoxes()` | Capturing boxes counted this session that aren't the active capture (the gate's work-list) |
+| `invShowOpenBoxGate()` / `invCloseOpenBoxGate()` / `invRenderOpenBoxGate()` | Open/close (disables/re-enables `invScanInput`) / render the gate list with captured serials shown expanded for verification |
+| `invGateResumeBox(boxId)` / `invGateCloseBox(boxId)` / `invGateDiscardBox(boxId)` | Per-box actions: resume capture (terminal, drops into box mode) / finalize as-is to `ready` / void session counts + delete record |
+
 ### Inventory — Scan Handlers
 
 | Function | Purpose |

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.16.00";
+const APP_VERSION = "v2.17.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3687,6 +3687,8 @@ function switchTab(name) {
     invSetScanMode(invScanMode || "auto");
     rcLoadStorage();
   }
+  // Entering Inventory: force resolution of any box left mid-capture.
+  if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") prodRenderList();
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   try { localStorage.setItem("tim_active_tab", name); } catch(e) {}
@@ -3900,9 +3902,9 @@ function invStartNewSession() {
 }
 
 function invAutoRestoreSession() {
-  if (invSession || !invStorageAvailable()) return;
+  if (invSession || !invStorageAvailable()) return Promise.resolve();
   _invAutoRestoreStarted = true;
-  TimDB.get(INV_STORAGE_KEY).then(function(saved) {
+  return TimDB.get(INV_STORAGE_KEY).then(function(saved) {
     if (!saved || !saved.session) {
       _invAutoRestoreStarted = false;
       invShowStorageHint();
@@ -5022,8 +5024,23 @@ function invBoxModeScan(rawValue, notes) {
         ". Tap Done to finish it, or Save & New to start another.", "warn");
       return false;
     }
+    if (invActiveBox && boxNormId(v) === boxNormId(invActiveBox)) {
+      invBoxStartCapture(v, false); // re-scan of the box already being captured — no-op resume
+      return true;
+    }
     if (existing.status === "ready" && !invActiveBox) return invHandleBoxScan(v, "", notes, invCurrentLocation);
-    invBoxStartCapture(v, false); // resume the same/capturing box
+    // A "capturing" box that's NOT active. If it already has counts this
+    // session, this is a re-scan of a box the user believes is done — announce
+    // it instead of silently resuming (the gap that let a box be re-counted).
+    if (invBoxCountedThisSession(v)) {
+      invSetScanFeedback('Box ' + existing.boxId + ' was already counted this session (' +
+        ((existing.expectedSerials || []).length) + ' device(s)). Tap "Open box" to re-count it, ' +
+        'or "Save & New" for a different box.', "warn", "", "box");
+      invSpeak("Already counted");
+      invLastScannedBox = boxNormId(v);
+      return false;
+    }
+    invBoxStartCapture(v, false); // resume a genuinely in-progress capture (no session counts yet)
     return true;
   }
 
@@ -5166,17 +5183,24 @@ function invBoxOpen() {
   invBoxRenderBar();
 }
 
-// Silently void (not via the confirm dialog) this session's sealed-count
-// events for a box, preserving them in the audit trail as voided.
-function invBoxVoidSessionCounts(boxId) {
+// Silently void (not via the confirm dialog) this session's counts for a box,
+// preserving them in the audit trail as voided. By default only sealed counts
+// (box_scan + fromSealedBox device scans) are voided — that's what "Open box"
+// needs so a re-scan rebuilds. Pass allTypes=true to also void capture-mode
+// device scans (no fromSealedBox flag), e.g. when discarding/deleting the box
+// entirely so its device counts don't linger with no container.
+function invBoxVoidSessionCounts(boxId, allTypes) {
   var key = normKey(boxId);
+  var reason = allTypes ? "box discarded" : "box reopened";
   (invEvents || []).forEach(function(e) {
     if (e.status === "voided") return;
     if (normKey(e.boxId || "") !== key) return;
-    if (e.eventType === "box_scan" || (e.eventType === "serialized_device_scan" && e.fromSealedBox)) {
+    var isCount = e.eventType === "box_scan" ||
+                  (e.eventType === "serialized_device_scan" && (allTypes || e.fromSealedBox));
+    if (isCount) {
       e.status = "voided";
       if (!e.voidLog) e.voidLog = [];
-      e.voidLog.push({ action: "voided", at: invNow(), reason: "box reopened" });
+      e.voidLog.push({ action: "voided", at: invNow(), reason: reason });
     }
   });
   invSession.updatedAt = invNow();
@@ -5236,6 +5260,132 @@ function invOpenBoxManager() {
 function invCloseBoxManager() {
   var modal = $("invBoxManagerModal");
   if (modal) modal.classList.add("hidden");
+}
+
+// ===================================================================
+// OPEN-BOX GATE — forced resolution of orphaned mid-capture boxes
+// -------------------------------------------------------------------
+// invActiveBox is in-memory only; the box record persists as "capturing".
+// So an interrupted capture (PWA reload, backgrounding) leaves a box
+// "capturing" with no active pointer and the box bar hidden — invisible.
+// On load and on entering Inventory, any box still "capturing" WITH counts
+// in the current session is surfaced in a BLOCKING modal (no dismiss) that
+// the user must resolve before scanning again. Scoped to the active session
+// so stale/abandoned registry boxes from prior sessions don't nag.
+// ===================================================================
+
+// Has this box been counted in the CURRENT session (non-voided events)?
+function invBoxCountedThisSession(boxId) {
+  var key = normKey(boxId);
+  if (!key || !invEvents) return false;
+  return invEvents.some(function(e) {
+    if (!e || e.status === "voided") return false;
+    if (normKey(e.boxId || "") !== key) return false;
+    return e.eventType === "box_scan" || e.eventType === "serialized_device_scan";
+  });
+}
+
+// Capturing boxes with counts this session that are NOT the active capture.
+function invFindOrphanedCapturingBoxes() {
+  if (!invSession) return [];
+  var activeKey = invActiveBox ? boxNormId(invActiveBox) : "";
+  return boxAll().filter(function(b) {
+    if (!b || b.status !== "capturing") return false;
+    if (boxNormId(b.boxId) === activeKey) return false;
+    return invBoxCountedThisSession(b.boxId);
+  });
+}
+
+// Show the gate if there's anything to resolve; otherwise no-op.
+function invShowOpenBoxGate() {
+  var modal = $("invOpenBoxGateModal");
+  if (!modal) return;
+  if (!invFindOrphanedCapturingBoxes().length) return;
+  invRenderOpenBoxGate();
+  modal.classList.remove("hidden");
+  var si = $("invScanInput");
+  if (si) si.disabled = true;   // no scanning past the gate
+}
+
+function invCloseOpenBoxGate() {
+  var modal = $("invOpenBoxGateModal");
+  if (modal) modal.classList.add("hidden");
+  var si = $("invScanInput");
+  if (si) { si.disabled = false; setTimeout(function() { si.focus(); }, 50); }
+}
+
+function invRenderOpenBoxGate() {
+  var list = $("invOpenBoxGateList");
+  if (!list) return;
+  var boxes = invFindOrphanedCapturingBoxes();
+  if (!boxes.length) { invCloseOpenBoxGate(); return; }
+  list.innerHTML = boxes.map(function(b) {
+    var bjs = chkJsStr(b.boxId);
+    var serials = (b.expectedSerials || []);
+    var n = serials.length;
+    // Serials are listed expanded (not behind a tap) so the user can verify
+    // completeness against the physical box before choosing "Close as-is".
+    var rows = n
+      ? serials.map(function(s) {
+          return '<span style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;' +
+            'padding:2px 8px;font-family:monospace;font-size:12px;">S/N ' + escapeHtml(s) + '</span>';
+        }).join(" ")
+      : '<span style="color:#94a3b8;">No devices captured.</span>';
+    return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:12px;">' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
+        '<span style="font-weight:700;font-family:monospace;font-size:15px;">' + escapeHtml(b.boxId) + '</span>' +
+        '<span class="pill block">capturing</span>' +
+        '<span class="small">' + n + ' device(s)</span>' +
+        '<span class="small" style="color:#94a3b8;">last scanned ' + escapeHtml(invFormatDateTime(b.updatedAt)) + '</span>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;padding:8px;background:#f8fafc;border-radius:6px;">' +
+        rows +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button onclick="invGateResumeBox(\'' + bjs + '\')">Resume counting</button>' +
+        '<button class="secondary" onclick="invGateCloseBox(\'' + bjs + '\')">Close as-is (' + n + ')</button>' +
+        '<button class="danger" onclick="invGateDiscardBox(\'' + bjs + '\')">Discard capture</button>' +
+      '</div>' +
+    '</div>';
+  }).join("");
+}
+
+// Resume — make this the active capture and drop the user into box mode.
+// Terminal: closes the gate. Any other orphaned boxes re-prompt the next time
+// the Inventory tab is entered (you can't have two active captures at once).
+function invGateResumeBox(boxId) {
+  var b = boxGet(boxId);
+  if (!b) { invRenderOpenBoxGate(); return; }
+  invCloseOpenBoxGate();
+  switchTab("inventory");
+  if (invScanMode !== "box") invSetScanMode("box");
+  invBoxStartCapture(b.boxId, false);
+}
+
+// Close as-is — finalize with whatever was captured (the user verified the
+// listed serials). Counts already exist; this just flips status to "ready".
+function invGateCloseBox(boxId) {
+  var b = boxGet(boxId);
+  if (!b) { invRenderOpenBoxGate(); return; }
+  boxFinalize(b.boxId);
+  var n = (b.expectedSerials || []).length;
+  invSetScanFeedback("Box " + b.boxId + " closed: " + n + " device(s) recorded.", "ok", "", "box");
+  if (invFindOrphanedCapturingBoxes().length) invRenderOpenBoxGate();
+  else invCloseOpenBoxGate();
+}
+
+// Discard — void this session's counts for the box and remove the record.
+function invGateDiscardBox(boxId) {
+  var b = boxGet(boxId);
+  if (!b) { invRenderOpenBoxGate(); return; }
+  if (!confirm('Discard the capture of box "' + b.boxId + '"?\n\n' +
+      "This voids its counts in the current session and removes the box. This can't be undone.")) return;
+  invBoxVoidSessionCounts(b.boxId, true);   // void capture-mode counts too — the box is going away
+  if (invActiveBox && boxNormId(invActiveBox) === boxNormId(b.boxId)) invBoxClearActive();
+  boxDelete(b.boxId);
+  invSetScanFeedback("Box " + b.boxId + " capture discarded.", "warn", "", "box");
+  if (invFindOrphanedCapturingBoxes().length) invRenderOpenBoxGate();
+  else invCloseOpenBoxGate();
 }
 var _invBoxMgrExpanded = {};   // boxKey -> true when its contents are shown
 function invBoxManagerToggleContents(boxKey) {
@@ -5315,7 +5465,7 @@ function invBoxManagerDelete(boxId) {
       (invSession ? " and voids its counts in the current session" : "") +
       ". Finalized history is not affected.\n\n" + n + " device(s) are listed in this box.")) return;
 
-  if (invSession) invBoxVoidSessionCounts(b.boxId);   // void this session's counts for it
+  if (invSession) invBoxVoidSessionCounts(b.boxId, true);   // void ALL its counts — deleting a box deletes its contents
   if (invActiveBox && boxNormId(invActiveBox) === boxNormId(b.boxId)) invBoxClearActive();
   boxDelete(b.boxId);
   delete _invBoxMgrExpanded[boxNormId(b.boxId)];
@@ -9799,11 +9949,15 @@ timLoadMasterCache().then(ghInit, ghInit);
 timInitUsername();
 timInitVoice();
 renderInvSessionUI();
-invAutoRestoreSession();
+var _invRestoreP = invAutoRestoreSession();
 invLoadOdooQuantMap();
 invLoadQuantsBaseline();
 invLoadLocationMap();
-boxLoadFromStorage();
+// After both the session and the box registry have loaded, surface any box
+// left mid-capture (e.g. interrupted by a reload) in the blocking open-box gate.
+Promise.all([_invRestoreP, boxLoadFromStorage()]).then(function() {
+  invShowOpenBoxGate();
+}).catch(function() {});
 chkLoadState();
 
 // Render tones up front, and keep audio unlocked across gestures and wake-ups.

@@ -1297,6 +1297,22 @@
     </div>
   </div>
 
+  <!-- Open-box gate: blocking, no dismiss. Forces resolution of any box left
+       mid-capture (e.g. interrupted by a reload) before scanning can resume. -->
+  <div id="invOpenBoxGateModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="invOpenBoxGateTitle">
+    <div class="modal" style="max-width:680px;">
+      <div class="modal-header">
+        <div>
+          <h2 id="invOpenBoxGateTitle" style="margin:0;">⚠ Box left open</h2>
+          <div class="small">A box capture was interrupted. Check the devices captured against the physical box, then choose what to do with each one before scanning again.</div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div id="invOpenBoxGateList"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="ghConflictsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="ghConflictsTitle">
     <div class="modal" style="max-width:780px;">
       <div class="modal-header">
