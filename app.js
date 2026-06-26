@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.17.00";
+const APP_VERSION = "v2.17.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5189,9 +5189,9 @@ function invBoxOpen() {
 // needs so a re-scan rebuilds. Pass allTypes=true to also void capture-mode
 // device scans (no fromSealedBox flag), e.g. when discarding/deleting the box
 // entirely so its device counts don't linger with no container.
-function invBoxVoidSessionCounts(boxId, allTypes) {
+function invBoxVoidSessionCounts(boxId, allTypes, reasonLabel) {
   var key = normKey(boxId);
-  var reason = allTypes ? "box discarded" : "box reopened";
+  var reason = reasonLabel || (allTypes ? "box discarded" : "box reopened");
   (invEvents || []).forEach(function(e) {
     if (e.status === "voided") return;
     if (normKey(e.boxId || "") !== key) return;
@@ -5465,7 +5465,7 @@ function invBoxManagerDelete(boxId) {
       (invSession ? " and voids its counts in the current session" : "") +
       ". Finalized history is not affected.\n\n" + n + " device(s) are listed in this box.")) return;
 
-  if (invSession) invBoxVoidSessionCounts(b.boxId, true);   // void ALL its counts — deleting a box deletes its contents
+  if (invSession) invBoxVoidSessionCounts(b.boxId, true, "box deleted");   // void ALL its counts — deleting a box deletes its contents
   if (invActiveBox && boxNormId(invActiveBox) === boxNormId(b.boxId)) invBoxClearActive();
   boxDelete(b.boxId);
   delete _invBoxMgrExpanded[boxNormId(b.boxId)];
