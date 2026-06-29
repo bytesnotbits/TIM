@@ -449,6 +449,9 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invReelUpdateSpanTypeFromContext()` | **Auto-set span type** from history → product map → default; also fills item from reel |
 | `invReelSpanTypeChange()` | Show/hide Span B section; recalc footage |
 | `invCalcReelFt()` | Calculate footage from inner/outer seq numbers |
+| `invReelSwapSpan(span)` | Swap a span's Inner/Outer values (fix a reversed entry); appends to `invReelSwaps` audit trail |
+| `invReelRenderSwapNote()` | Render the in-panel swap note from `invReelSwaps` |
+| `invReelResetSwaps()` | Clear the swap trail + its UI (note, button highlight) |
 | `invReelUpdateHistoryPanel(item, reel, ft)` | Show previous footage comparison |
 | `invReelDetectConflict(itemNum, reelNum)` | Detect a reel conflict: `cross_item` (reel on record under a different item) or `session_dup` (already counted this session); null for the normal same-item prefill case |
 | `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning from `invReelDetectConflict` as item/reel fields change |

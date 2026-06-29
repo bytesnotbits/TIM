@@ -571,7 +571,16 @@
             <div id="invReelInlinePanel" class="inv-reel-entry-panel hidden">
               <div class="inv-reel-entry-header">
                 <b style="font-size:13px;color:#166534;">Cable Reel Entry</b>
-                <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invDiscardReelEntry()">Discard / Clear</button>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <!-- Location chip: reel entry covers the main scan input, so this
+                       mirrors the toolbar LOC chip and opens the same popover (type
+                       or scan a location) without leaving reel mode. -->
+                  <button type="button" class="inv-loc-chip" onclick="invToggleLocPopover(event)" title="Change location for reel counts (type or scan)">
+                    <span class="inv-loc-chip-label">LOC</span>
+                    <span id="invReelLocValue" class="inv-loc-chip-value inv-loc-chip-none">&mdash;</span>
+                  </button>
+                  <button class="secondary" style="padding:4px 10px;font-size:12px;margin:0;" onclick="invDiscardReelEntry()">Discard / Clear</button>
+                </div>
               </div>
               <!-- Scan-time reel ID conflict note -->
               <div id="invReelConflictNote" style="display:none;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:12px;color:#92400e;"></div>
@@ -597,7 +606,11 @@
               </div>
               <!-- Span A -->
               <div class="inv-reel-span-section">
-                <b style="font-size:12px;color:#475569;">Span A</b>
+                <div class="inv-reel-span-head">
+                  <b style="font-size:12px;color:#475569;">Span A</b>
+                  <button type="button" class="inv-reel-swap-btn" id="invReelSwapA"
+                          onclick="invReelSwapSpan('A')" title="Swap this span's Inner and Outer sequence values (recorded in the reel's audit trail)">&#8645; Swap</button>
+                </div>
                 <div class="inv-reel-span-row">
                   <label>Inner Seq
                     <input id="invReelInnerA" type="number" min="0" placeholder="0"
@@ -614,7 +627,11 @@
               </div>
               <!-- Span B (two-way only) -->
               <div id="invReelSpanBSection" class="inv-reel-span-section span-b" style="display:none;">
-                <b style="font-size:12px;color:#475569;">Span B</b>
+                <div class="inv-reel-span-head">
+                  <b style="font-size:12px;color:#475569;">Span B</b>
+                  <button type="button" class="inv-reel-swap-btn" id="invReelSwapB"
+                          onclick="invReelSwapSpan('B')" title="Swap this span's Inner and Outer sequence values (recorded in the reel's audit trail)">&#8645; Swap</button>
+                </div>
                 <div class="inv-reel-span-row">
                   <label>Inner Seq
                     <input id="invReelInnerB" type="number" min="0" placeholder="0"
@@ -629,6 +646,8 @@
                   </label>
                 </div>
               </div>
+              <!-- Sequence-swap audit note (shown after a Swap) -->
+              <div id="invReelSwapNote" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:7px 10px;margin-bottom:10px;font-size:12px;color:#1e40af;"></div>
               <!-- Total -->
               <div class="inv-reel-inline-total">
                 <b style="font-size:13px;color:#1d4ed8;">Total Available Ft</b>

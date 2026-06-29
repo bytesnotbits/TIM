@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.25.01";
+const APP_VERSION = "v2.26.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3991,6 +3991,26 @@ function invAutoRestoreSession() {
       invShowStorageHint();
       return;
     }
+    // A finalized/closed session must NOT silently reopen as active on reload —
+    // that quietly re-opens already-merged data and hides the "start a new
+    // session" path (the user thinks they're fresh but are appending to an old
+    // run). Leave the in-memory session empty (clean no-session state, which
+    // prompts to start fresh) but keep the saved copy so the explicit Resume
+    // button can still pull it back if they really want it.
+    if (saved.session.status === "closed") {
+      _invAutoRestoreStarted = false;
+      renderInvSessionUI();
+      var cbar = $("invAutosaveBar");
+      if (cbar) {
+        cbar.classList.remove("hidden");
+        cbar.classList.remove("unsaved");
+        var ctxt = $("invAutosaveText");
+        if (ctxt) ctxt.textContent = "Last session “" +
+          (saved.session.sessionName || saved.session.sessionId) +
+          "” was finalized. Start a new session to continue (Resume reopens it if needed).";
+      }
+      return;
+    }
     invSession    = saved.session;
     invEvents     = saved.events     || [];
     invExceptions = saved.exceptions || [];
@@ -4025,6 +4045,16 @@ function invResumeSession() {
   TimDB.get(INV_STORAGE_KEY).then(function(saved) {
     if (!saved || !saved.session) {
       alert("No saved session found.\n\nUse 'Import Session Backup JSON' to restore from a file export.");
+      return;
+    }
+    // Reopening a finalized session is explicit here (unlike silent auto-restore),
+    // but still risky: it was already merged into the master, so re-finalizing
+    // would merge it a second time. Confirm before reopening a closed session.
+    if (saved.session.status === "closed" &&
+        !confirm("Session “" + (saved.session.sessionName || saved.session.sessionId) +
+                 "” was already finalized and merged into the master JSON.\n\n" +
+                 "Reopen it for more scanning? (Finalizing again will re-merge its events.)\n\n" +
+                 "Cancel and use “＋ Start New” for a fresh session instead.")) {
       return;
     }
     invSession    = saved.session;
@@ -4158,6 +4188,9 @@ function renderInvSessionUI() {
   renderInvSidebarSession();
   renderInvStatusBar();
   renderInvEventLog();
+  // Keep the scan-input placeholder in sync with session state — auto-restore
+  // reaches here without going through invSetScanMode, so refresh it directly.
+  invUpdateScanPlaceholder();
 }
 
 function renderInvSidebarSession() {
@@ -5716,6 +5749,12 @@ function invUpdateScanPlaceholder() {
   var input = $("invScanInput");
   if (!input) return;
   var txt;
+  // Session-first: with no session, every scan is refused, so the placeholder
+  // must say so rather than imply scanning is ready.
+  if (!invSession) {
+    input.placeholder = "Start a new inventory session first (＋ Start New in the sidebar)";
+    return;
+  }
   if (invScanMode === "box") {
     if (invActiveBox) {
       var b = boxGet(invActiveBox);
@@ -5866,6 +5905,12 @@ function invSetLocation(loc) {
     if (invCurrentLocation) chipBtn.classList.add("loc-set");
     else chipBtn.classList.remove("loc-set");
   }
+  // Mirror into the reel-panel LOC chip (reel entry covers the toolbar's view)
+  var reelChip = $("invReelLocValue");
+  if (reelChip) {
+    reelChip.textContent = invCurrentLocation || "—";
+    reelChip.className = "inv-loc-chip-value" + (invCurrentLocation ? "" : " inv-loc-chip-none");
+  }
   if (field) field.value = invCurrentLocation;
   renderInvStatusBar();
 }
@@ -5984,11 +6029,15 @@ function invSetScanMode(mode) {
   invBoxRenderBar();
   renderInvStatusBar();
 
-  // Spoken "get started" prompt on entering a mode. Location-first always: with
-  // no location loaded, every mode prompts for one before anything else. Once a
-  // location is set, box mode additionally prompts for the carton ID (unless one
-  // is already mid-capture).
-  if (!invCurrentLocation) {
+  // Spoken "get started" prompt on entering a mode. Session-first, THEN
+  // location-first: with no session, scanning anything is refused, so prompting
+  // for a location would mislead (the user scans one and it's rejected). Only
+  // once a session exists do we fall through to the location prompt. With a
+  // location set, box mode additionally prompts for the carton ID.
+  if (!invSession) {
+    invSetScanFeedback("Start a new inventory session to begin — use “＋ Start New” in the sidebar.", "warn");
+    invSpeak("Start a new inventory session");
+  } else if (!invCurrentLocation) {
     invSetScanFeedback("Scan a location to get started, then scan items.", "info");
     invSpeak("Scan a location to get started");
   } else if (mode === "box" && !invActiveBox) {
@@ -6490,6 +6539,74 @@ function renderInvExceptions() {
 
 var invReelModalScannedValue = "";
 
+// Per-entry sequence-swap audit trail. Each "Swap" press on a span appends
+// {span, user, at}; the trail is written onto the saved cable_reel_count event
+// (eventData.sequenceSwaps) and summarized into its notes for later reference.
+// Reset whenever a reel entry is cleared, opened, or saved.
+var invReelSwaps = [];
+
+// Swap a span's Inner and Outer sequence values. Used when a reel was recorded
+// with the inner/outer reading reversed. Footage (|outer - inner|) is unchanged
+// by the swap — the point is to store the correct inner vs outer value and leave
+// an audit trail of who corrected it.
+function invReelSwapSpan(span) {
+  var innerEl = $("invReelInner" + span);
+  var outerEl = $("invReelOuter" + span);
+  if (!innerEl || !outerEl) return;
+  var iv = (innerEl.value || "").trim();
+  var ov = (outerEl.value || "").trim();
+  if (!iv && !ov) {
+    invSetScanFeedback("Nothing to swap on Span " + span + " yet — enter the sequences first.", "warn");
+    return;
+  }
+  // Two-way spans almost always start at zero, so a backwards entry is usually
+  // (N, blank). Normalize a blank to an explicit "0" on swap so the corrected
+  // values read cleanly (e.g. inner 300 / outer blank → inner 0 / outer 300),
+  // consistent with the zero-start convention. (|outer - inner| is unaffected.)
+  innerEl.value = ov || "0";
+  outerEl.value = iv || "0";
+  // A swapped field is a user edit — drop any prefill marker so it isn't styled
+  // as auto-filled, matching the oninput handlers on these inputs.
+  innerEl.classList.remove("inv-reel-prefilled");
+  outerEl.classList.remove("inv-reel-prefilled");
+  invCalcReelFt();
+
+  var user = (typeof timGetUsername === "function" ? timGetUsername() : "") || "(unknown)";
+  invReelSwaps.push({ span: span, user: user, at: invNow() });
+
+  // Mark the button "swapped" when this span is currently in the swapped state
+  // (odd number of swaps). Even count = back to original.
+  var net = invReelSwaps.filter(function(s) { return s.span === span; }).length;
+  var btn = $("invReelSwap" + span);
+  if (btn) btn.classList.toggle("swapped", net % 2 === 1);
+
+  invReelRenderSwapNote();
+  invSetScanFeedback("Span " + span + " Inner/Outer swapped by " + user + " — recorded in this reel's audit trail.", "ok", "", "reel");
+  invSpeak("Swapped");
+}
+
+// Render the in-panel swap note from the running audit trail.
+function invReelRenderSwapNote() {
+  var note = $("invReelSwapNote");
+  if (!note) return;
+  if (!invReelSwaps.length) { note.style.display = "none"; note.textContent = ""; return; }
+  var byspan = {};
+  invReelSwaps.forEach(function(s) { byspan[s.span] = (byspan[s.span] || 0) + 1; });
+  var swapped = Object.keys(byspan).filter(function(k) { return byspan[k] % 2 === 1; }).sort();
+  var lastUser = invReelSwaps[invReelSwaps.length - 1].user;
+  note.textContent = swapped.length
+    ? "⇅ Span " + swapped.join(" & ") + " Inner/Outer swapped by " + lastUser + " — saved to this reel's audit trail."
+    : "Sequences swapped then reverted (no net change) — by " + lastUser + ". Audit recorded on save.";
+  note.style.display = "block";
+}
+
+// Reset the swap trail + its UI (note, button highlight). Called on clear/open/save.
+function invReelResetSwaps() {
+  invReelSwaps = [];
+  ["A", "B"].forEach(function(s) { var b = $("invReelSwap" + s); if (b) b.classList.remove("swapped"); });
+  invReelRenderSwapNote();
+}
+
 // ── Reel ID conflict detection ─────────────────────────────────────────────
 // Checks whether any reel-tracked item number in the product map also appears
 // as a reelNumber in scan event history. Called after product map or session
@@ -6615,6 +6732,7 @@ function invOpenReelModal(reelNumber, notes, location) {
   ["invReelInnerA","invReelOuterA","invReelFtA","invReelInnerB","invReelOuterB","invReelFtB"].forEach(function(id) {
     var el = $(id); if (el) { el.value = ""; el.classList.remove("inv-reel-prefilled"); }
   });
+  invReelResetSwaps();  // a freshly-opened reel starts with no pending swaps
   if (reelField) reelField.classList.remove("inv-reel-prefilled");
   if (itemField) itemField.classList.remove("inv-reel-prefilled");
 
@@ -6886,6 +7004,17 @@ function invSubmitReelEntry(silent) {
   var location = (rip ? rip.dataset.location : "") || invCurrentLocation || "";
   var notes    = $("invReelNotes") ? ($("invReelNotes").value || "").trim() : "";
 
+  // Fold the per-entry sequence-swap audit into the reel record: a structured
+  // trail (sequenceSwaps) plus a human-readable summary appended to notes.
+  var swapAudit = invReelSwaps.slice();
+  if (swapAudit.length) {
+    var swapSummary = swapAudit.map(function(s) {
+      return "Span " + s.span + " Inner/Outer swapped by " + (s.user || "(unknown)") +
+             " at " + invFormatDateTime(s.at);
+    }).join("; ");
+    notes = notes ? (notes + " | " + swapSummary) : swapSummary;
+  }
+
   var eventData = {
     scanType:         "reel_number",
     scannedValue:     invReelModalScannedValue || reelNumber,
@@ -6912,8 +7041,11 @@ function invSubmitReelEntry(silent) {
     eventData.totalAvailableFt = ftA + ftB;
   }
 
+  if (swapAudit.length) eventData.sequenceSwaps = swapAudit;
+
   eventData.qty = eventData.totalAvailableFt;
   invCreateEvent("cable_reel_count", eventData);
+  invReelResetSwaps();
 
   if (!silent) {
     invSetScanFeedback(
@@ -6938,6 +7070,7 @@ function invClearReelFields() {
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
   var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
   var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; }
+  invReelResetSwaps();
   invReelModalScannedValue = "";
   // NOTE: deliberately do NOT pre-fill the item # from the sticky invScanItem
   // context. That context is only ever set by the serial-tracked-item path, so in
