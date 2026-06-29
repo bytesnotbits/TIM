@@ -57,6 +57,7 @@
         <button class="sidebar-subnav-btn"        id="invSub_exceptions" onclick="invShowSubview('exceptions')">Exceptions</button>
         <button class="sidebar-subnav-btn"        id="invSub_summary"    onclick="invShowSubview('summary')">Summary</button>
         <button class="sidebar-subnav-btn"        id="invSub_gap"        onclick="invShowSubview('gap')">Gap Analysis</button>
+        <button class="sidebar-subnav-btn"        id="invSub_recount"    onclick="invShowSubview('recount')">Recount</button>
         <button class="sidebar-subnav-btn"        id="invSub_eventlog"   onclick="invShowSubview('eventlog')">Event Log</button>
       </div>
       <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
@@ -414,9 +415,11 @@
         <button class="secondary inv-modebar-btn" onclick="invToggleModeBarcodes()">Mode Barcodes &#9662;</button>
       </div>
       <!-- Session / count info -->
-      <span id="invStatusSession" class="inv-status-session">No session</span>
-      <span id="invStatusCounts" class="inv-status-counts">0 events</span>
-      <span id="invStatusSave" class="inv-status-save hidden">Saved</span>
+      <div class="inv-toolbar-info">
+        <span id="invStatusSession" class="inv-status-session">No session</span>
+        <span id="invStatusCounts" class="inv-status-counts">0 events</span>
+        <span id="invStatusSave" class="inv-status-save hidden">Saved</span>
+      </div>
     </div>
     <!-- Hidden session meta elements — written by renderInvSessionMeta() / renderInvSessionUI() -->
     <div style="display:none;">
@@ -856,7 +859,7 @@
     </div>
 
     <!-- Phase 3: Recount Sessions -->
-    <div class="card inv-subview" data-inv-subview="count" id="rcSessionsCard">
+    <div class="card inv-subview" data-inv-subview="recount" id="rcSessionsCard">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;">
         <h2 style="margin:0;">Recount Sessions</h2>
         <button onclick="rcShowCreate(false)" id="rcNewBtn" class="secondary">+ New Session</button>
@@ -947,7 +950,7 @@
     </div>
 
     <!-- Phase 7: Recount Card -->
-    <div class="card hidden inv-subview" data-inv-subview="count" id="invRecountCard">
+    <div class="card hidden inv-subview" data-inv-subview="recount" id="invRecountCard">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <h2 style="margin:0;">&#8635; Recount Session</h2>
         <button onclick="exportRecountXlsx()">Export Recount XLSX</button>

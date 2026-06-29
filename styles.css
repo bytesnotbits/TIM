@@ -161,16 +161,54 @@ h2 { margin-top: 28px; }
 
 /* ── Sticky inventory toolbar (v2.23): holds the LOC + scan-mode controls so
    they stay in reach while the scan body scrolls. ── */
-.inv-toolbar { position: sticky; top: 0; z-index: 20; gap: var(--sp-3); }
-.inv-toolbar-loc { position: relative; display: flex; align-items: center; flex-shrink: 0; }
+.inv-toolbar { position: sticky; top: 0; z-index: 20; gap: var(--sp-3); align-content: flex-start; }
+/* Two-zone layout: LOC + session/counts on the top row, mode buttons on their
+   own row(s) below (modes take a full-width flex line). */
+.inv-toolbar-loc   { order: 1; position: relative; display: flex; align-items: center; flex-shrink: 0; }
+.inv-toolbar-info  { order: 2; display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.inv-toolbar-modes { order: 3; flex: 1 1 100%; row-gap: 6px; }
 .inv-toolbar .inv-mode-toggle { margin-bottom: 0; }
-.inv-toolbar-modes { flex: 1 1 auto; row-gap: 6px; }
-.inv-toolbar .inv-status-session { flex: 0 1 auto; margin-left: auto; }
+.inv-toolbar .inv-status-session { flex: 0 1 auto; }
 .inv-modebar-btn { padding: 6px 10px; font-size: 12px; margin: 0; }
 /* Compact toolbar (table sub-screens): hide mode + LOC, keep session/count info */
 .inv-toolbar.toolbar-compact .inv-toolbar-loc,
 .inv-toolbar.toolbar-compact .inv-toolbar-modes { display: none; }
-.inv-toolbar.toolbar-compact .inv-status-session { margin-left: 0; }
+.inv-toolbar.toolbar-compact .inv-toolbar-info { margin-left: 0; }
+
+/* ── Static no-scroll Count frame (v2.24) ──
+   The capture screen fits the viewport like a fixed terminal: no page scroll,
+   keypad + inputs in fixed positions, and the Activity feed is the single
+   elastic region that absorbs slack (scrolls internally if it gets short).
+   Applies ONLY to the Count sub-view — table sub-screens scroll normally. */
+.main-content.inv-count-static { overflow: hidden; display: flex; flex-direction: column; }
+.main-content.inv-count-static .app-desc { display: none; }
+.main-content.inv-count-static #tabInventory.active {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+.main-content.inv-count-static #invStatusBar { margin-bottom: 8px; }
+.main-content.inv-count-static #invScanCard {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  overflow: hidden; margin-bottom: 0;
+}
+.main-content.inv-count-static #invScanCard > h2     { margin: 0 0 4px; font-size: 18px; }
+.main-content.inv-count-static #invScanCard > p.small { margin: 0 0 8px; }
+.main-content.inv-count-static .inv-scan-panel     { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.main-content.inv-count-static .inv-scan-two-col   { flex: 1; min-height: 0; }
+.main-content.inv-count-static .inv-scan-fields-col { flex: 1; min-height: 0; }
+.main-content.inv-count-static .inv-activity-feed-inline { flex: 1; min-height: 0; }
+/* Portrait (stacked): the keypad is tall enough to crowd the scan fields, so
+   compact it when stacked — smaller keys, no tip text — freeing room so the
+   fields + activity feed fit above it without overflowing. fields-col clips
+   defensively so content can never bleed under the keypad. */
+@media (max-width: 900px) {
+  .main-content.inv-count-static .inv-scan-fields-col { overflow: hidden; }
+  .main-content.inv-count-static .inv-activity-feed-inline { min-height: 56px; }
+  .main-content.inv-count-static .inv-qty-keypad { padding: 8px 10px; }
+  .main-content.inv-count-static .inv-qty-keypad-context { display: none; }
+  .main-content.inv-count-static .inv-qty-key { padding: 8px 0; font-size: 18px; }
+  .main-content.inv-count-static .inv-qty-keys { gap: 4px; margin-bottom: 4px; }
+  .main-content.inv-count-static .inv-qty-display-row { margin-bottom: 4px; }
+}
 .inv-status-save { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #166534; color: #bbf7d0; flex-shrink: 0; transition: background .2s; }
 .inv-status-save.unsaved { background: #713f12; color: #fde68a; }
 .inv-status-save.hidden { display: none; }
@@ -628,5 +666,20 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .csv-sample-more { font-size:11px; color:#94a3b8; align-self:center; padding:1px 2px; }
 
 /* === Inline Reel Entry Panel === */
-.inv-reel-entry-panel { background:#f0fdf4; border:2px solid #86efac; border-radius:10px; padding:12px 14px; margin-top:10px; }
+/* Reel entry renders as a centered modal over the static capture frame (v2.24).
+   Shown/hidden via the .hidden class by existing JS — no JS change needed. */
+.inv-reel-entry-panel {
+  position: fixed; z-index: 100;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(540px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px); overflow-y: auto;
+  background:#f0fdf4; border:2px solid #86efac; border-radius:12px;
+  padding:16px 18px; margin:0;
+  box-shadow: 0 24px 64px rgba(0,0,0,.4);
+}
+/* Dim backdrop behind the reel modal (pseudo-element, no extra DOM) */
+.inv-reel-entry-panel::before {
+  content:""; position: fixed; inset: 0; z-index: -1;
+  background: rgba(15,23,42,.55);
+}
 .inv-reel-entry-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.23.00";
+const APP_VERSION = "v2.24.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3695,6 +3695,11 @@ function switchTab(name) {
   // Inventory sub-screens: show the sub-nav and apply the active sub-view.
   var invSubnav = $("invSubnav");
   if (invSubnav) invSubnav.classList.toggle("hidden", name !== "inventory");
+  // Leaving Inventory entirely clears the static-frame mode.
+  if (name !== "inventory") {
+    var mcLeave = document.querySelector(".main-content");
+    if (mcLeave) mcLeave.classList.remove("inv-count-static");
+  }
   if (name === "inventory") {
     var savedSub = "count";
     try { savedSub = localStorage.getItem("tim_inv_subview") || "count"; } catch(e) {}
@@ -3710,7 +3715,7 @@ function switchTab(name) {
 // card(s) and hide the rest. The Count view keeps the scan panel + recount
 // cards together.
 var invActiveSubview = "count";
-var INV_SUBVIEWS = ["count", "exceptions", "summary", "gap", "eventlog"];
+var INV_SUBVIEWS = ["count", "exceptions", "summary", "gap", "recount", "eventlog"];
 function invShowSubview(name) {
   if (INV_SUBVIEWS.indexOf(name) === -1) name = "count";
   invActiveSubview = name;
@@ -3718,6 +3723,9 @@ function invShowSubview(name) {
   // just session/count info on the table sub-screens.
   var statusBar = $("invStatusBar");
   if (statusBar) statusBar.classList.toggle("toolbar-compact", name !== "count");
+  // Count is a fixed, no-scroll capture frame; every other sub-view scrolls.
+  var mc = document.querySelector(".main-content");
+  if (mc) mc.classList.toggle("inv-count-static", name === "count");
   var cards = document.querySelectorAll("[data-inv-subview]");
   for (var i = 0; i < cards.length; i++) {
     var c = cards[i];
@@ -7239,6 +7247,7 @@ function invStartRecount() {
   renderInvEventLog();
   renderRecountQueue();
   switchTab("inventory");
+  invShowSubview("recount");
   setTimeout(function() { var el = $("invRecountCard"); if (el) el.scrollIntoView({ behavior:"smooth" }); }, 200);
 }
 
@@ -8963,7 +8972,8 @@ function rcOpenCreateFromGaps() {
     })
   };
 
-  // Scroll to and open the Recount Sessions card
+  // Switch to the Recount sub-screen, then open the Recount Sessions card
+  invShowSubview("recount");
   var card = $("rcSessionsCard");
   if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
   rcShowCreate(true);

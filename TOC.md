@@ -766,7 +766,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | Function | Purpose |
 |----------|---------|
 | `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory sub-nav + applies sub-view |
-| `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/eventlog) by toggling `[data-inv-subview]` cards |
+| `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
 | `toggleSidebar()` | Collapse/expand left sidebar |
 | `updateSidebarStatus(step, rows)` | Update sidebar file-loaded indicators |
 | `toggleMoreDropdown(e)` | Toggle "More" menu |
