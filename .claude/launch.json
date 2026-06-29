@@ -4,8 +4,8 @@
     {
       "name": "TIM",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "-l", "5173", "."],
-      "port": 5173
+      "runtimeArgs": ["serve", "."],
+      "autoPort": true
     }
   ]
 }
