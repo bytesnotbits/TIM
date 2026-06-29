@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.25.00";
+const APP_VERSION = "v2.25.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6605,8 +6605,11 @@ function invOpenReelModal(reelNumber, notes, location) {
   var reelField = $("invReelNumber");
   var itemField = $("invReelItemNumber");
   if (reelField) reelField.value = reelNumber || "";
-  if (itemField) itemField.value = sanitizeScannerValue(
-    $("invScanItem") ? ($("invScanItem").value || "") : "", { uppercase: true });
+  // Keep any item explicitly scanned just before this reel (the item-then-reel
+  // path writes invReelItemNumber directly). Do NOT seed from the sticky
+  // invScanItem context here — it can be stale from a prior serial/item scan and
+  // would mask the reel's true item (via the reverse lookup below), producing a
+  // false cross-item conflict on a bare reel scan.
 
   // Clear all pre-fillable fields and remove any prefill marker
   ["invReelInnerA","invReelOuterA","invReelFtA","invReelInnerB","invReelOuterB","invReelFtB"].forEach(function(id) {
@@ -6936,12 +6939,11 @@ function invClearReelFields() {
   var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
   var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; }
   invReelModalScannedValue = "";
-  // Pre-fill item # from sticky context if set
-  var ctxItem = $("invScanItem");
-  var itemFld = $("invReelItemNumber");
-  if (ctxItem && ctxItem.value && itemFld) {
-    itemFld.value = ctxItem.value.trim().toUpperCase();
-  }
+  // NOTE: deliberately do NOT pre-fill the item # from the sticky invScanItem
+  // context. That context is only ever set by the serial-tracked-item path, so in
+  // reel mode it is always stale and would force a wrong item onto the next reel
+  // entry (false cross-item conflict). A bare reel scan resolves its item from the
+  // reel master in invOpenReelModal; the item-then-reel path keeps its own value.
 }
 
 function invCloseReelInline() {
