@@ -536,7 +536,7 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 
 /* === Two-column scan layout (fields left, keypad right) === */
 .inv-scan-two-col { display:flex; gap:16px; align-items:stretch; }
-.inv-scan-fields-col { flex:1; min-width:0; display:flex; flex-direction:column; }
+.inv-scan-fields-col { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
 .inv-scan-keypad-col { flex:0 0 278px; }
 .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
 .inv-activity-feed-inline { flex:1; margin-top:10px; min-height:120px; display:flex; flex-direction:column; }
@@ -666,20 +666,15 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .csv-sample-more { font-size:11px; color:#94a3b8; align-self:center; padding:1px 2px; }
 
 /* === Inline Reel Entry Panel === */
-/* Reel entry renders as a centered modal over the static capture frame (v2.24).
+/* Reel entry overlays ONLY the scan-fields column (v2.24.01) so the keypad
+   column stays visible and usable — its focus-jump buttons (Reel#/Inner/Outer)
+   target these fields. Anchored to .inv-scan-fields-col (position:relative).
    Shown/hidden via the .hidden class by existing JS — no JS change needed. */
 .inv-reel-entry-panel {
-  position: fixed; z-index: 100;
-  top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: min(540px, calc(100vw - 24px));
-  max-height: calc(100dvh - 24px); overflow-y: auto;
+  position: absolute; inset: 0; z-index: 30;
+  overflow-y: auto;
   background:#f0fdf4; border:2px solid #86efac; border-radius:12px;
-  padding:16px 18px; margin:0;
-  box-shadow: 0 24px 64px rgba(0,0,0,.4);
-}
-/* Dim backdrop behind the reel modal (pseudo-element, no extra DOM) */
-.inv-reel-entry-panel::before {
-  content:""; position: fixed; inset: 0; z-index: -1;
-  background: rgba(15,23,42,.55);
+  padding:14px 16px; margin:0;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
 }
 .inv-reel-entry-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
