@@ -405,13 +405,17 @@
           <button class="secondary" style="padding:4px 8px;font-size:11px;margin:6px 0 0;width:100%;text-align:center;" onclick="invClearLocation();invCloseLocPopover()">Clear Location</button>
         </div>
       </div>
-      <!-- Scan mode toggle -->
-      <div class="inv-mode-toggle inv-toolbar-modes">
-        <button class="inv-mode-btn active" id="invModeBtnAuto"   onclick="invSetScanMode('auto')">Auto-Detect</button>
-        <button class="inv-mode-btn"        id="invModeBtnSerial" onclick="invSetScanMode('serial')">Serial / FSAN</button>
-        <button class="inv-mode-btn"        id="invModeBtnReel"   onclick="invSetScanMode('reel')">Cable Reel</button>
-        <button class="inv-mode-btn"        id="invModeBtnItem"   onclick="invSetScanMode('item')">Item # (Bulk)</button>
-        <button class="inv-mode-btn"        id="invModeBtnBox"    onclick="invSetScanMode('box')">Box / Carton</button>
+      <!-- Scan mode (dropdown saves a row; mode-switch barcodes still flip instantly) -->
+      <div class="inv-toolbar-modes">
+        <label class="inv-mode-select-label">Mode
+          <select id="invModeSelect" class="inv-mode-select" data-mode="auto" onchange="invSetScanMode(this.value)">
+            <option value="auto">Auto-Detect</option>
+            <option value="serial">Serial / FSAN</option>
+            <option value="reel">Cable Reel</option>
+            <option value="item">Item # (Bulk)</option>
+            <option value="box">Box / Carton</option>
+          </select>
+        </label>
         <button class="secondary inv-modebar-btn" onclick="invToggleModeBarcodes()">Mode Barcodes &#9662;</button>
       </div>
       <!-- Session / count info -->
@@ -549,16 +553,7 @@
               <input id="invScanNotes" type="text" placeholder="Notes for this scan" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;" autocomplete="off" />
             </label>
 
-            <!-- Activity Feed (inline, fills blank area left of soft keypad) -->
-            <div id="invActivityFeed" class="inv-activity-feed inv-activity-feed-inline">
-              <div class="inv-activity-header">
-                <span class="inv-activity-title">Activity</span>
-                <button class="inv-activity-clear-btn" onclick="invClearActivityFeed()">Clear</button>
-              </div>
-              <div id="invActivityList" class="inv-activity-list">
-                <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
-              </div>
-            </div>
+            <!-- Activity Feed moved to a full-width strip below the two-column row -->
 
             <!-- Unknown-scan inline prompt (serialized / bulk / reel switcher) -->
             <div id="invSerialPromptPanel" class="inv-serial-prompt hidden">
@@ -583,12 +578,12 @@
               <!-- Live duplicate / cross-item reel warning -->
               <div id="invReelDupNote" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:12px;color:#991b1b;"></div>
               <div class="inv-reel-inline-grid">
-                <label>Item Number *
-                  <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
-                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
-                </label>
                 <label>Reel Number *
                   <input id="invReelNumber" type="text" placeholder="e.g. REEL123" autocomplete="off"
+                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
+                </label>
+                <label>Item Number *
+                  <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
                          oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
                 </label>
               </div>
@@ -714,6 +709,33 @@
               <!-- Hidden compat stub (old code references invQtyKeySignPlus) -->
               <span id="invQtyKeySignPlus" style="display:none;"></span>
             </div>
+          </div>
+        </div><!-- /inv-scan-two-col -->
+
+        <!-- Last-action bar: always visible; shows the most recent activity and
+             opens the full history overlay on tap. -->
+        <button id="invActivityLastBar" class="inv-activity-lastbar" onclick="invOpenActivityOverlay()">
+          <span class="inv-activity-last-icon" id="invActivityLastIcon">&#8226;</span>
+          <span class="inv-activity-last-text" id="invActivityLast">No activity yet — start a session and scan.</span>
+          <span class="inv-activity-last-time" id="invActivityLastTime"></span>
+          <span class="inv-activity-last-more">History &#9656;</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Activity history overlay (opened from the last-action bar) -->
+    <div id="invActivityOverlay" class="modal-backdrop hidden" onclick="if(event.target===this)invCloseActivityOverlay()">
+      <div class="modal inv-activity-modal">
+        <div class="modal-header">
+          <h2 style="margin:0;font-size:18px;">Recent Activity</h2>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="secondary" onclick="invClearActivityFeed()">Clear</button>
+            <button class="secondary" onclick="invCloseActivityOverlay()">&#10005; Close</button>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div id="invActivityList" class="inv-activity-list">
+            <div class="inv-activity-empty">No activity yet. Start a session and scan.</div>
           </div>
         </div>
       </div>

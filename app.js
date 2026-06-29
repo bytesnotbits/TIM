@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.24.01";
+const APP_VERSION = "v2.25.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3593,7 +3593,37 @@ function invClearActivityFeed() {
   renderInvActivityFeed();
 }
 
+function invOpenActivityOverlay() {
+  renderInvActivityFeed();
+  var ov = $("invActivityOverlay");
+  if (ov) ov.classList.remove("hidden");
+}
+function invCloseActivityOverlay() {
+  var ov = $("invActivityOverlay");
+  if (ov) ov.classList.add("hidden");
+}
+
 function renderInvActivityFeed() {
+  // Always-visible last-action bar (the full list lives in the overlay).
+  var lastText = $("invActivityLast");
+  var lastIcon = $("invActivityLastIcon");
+  var lastTime = $("invActivityLastTime");
+  var lastBar  = $("invActivityLastBar");
+  if (lastText) {
+    if (!invActivityLog.length) {
+      if (lastIcon) lastIcon.textContent = "•";
+      lastText.textContent = "No activity yet — start a session and scan.";
+      if (lastTime) lastTime.textContent = "";
+      if (lastBar) lastBar.className = "inv-activity-lastbar";
+    } else {
+      var e0 = invActivityLog[0];
+      if (lastIcon) lastIcon.textContent = _invActivityIcons[e0.type] || "•";
+      lastText.textContent = e0.message + (e0.detail ? " — " + e0.detail : "");
+      if (lastTime) lastTime.textContent = e0.time.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" });
+      if (lastBar) lastBar.className = "inv-activity-lastbar type-" + e0.type;
+    }
+  }
+
   var list = $("invActivityList");
   if (!list) return;
   if (!invActivityLog.length) {
@@ -5887,6 +5917,9 @@ function invSetScanMode(mode) {
     if (!btn) return;
     btn.className = "inv-mode-btn" + (m === mode ? " " + modeActiveClass[mode] : "");
   });
+  // Mode dropdown (replaces the button row): reflect value + color-code by mode.
+  var modeSel = $("invModeSelect");
+  if (modeSel) { modeSel.value = mode; modeSel.setAttribute("data-mode", mode); }
   // Wire hidden override select so existing invProcessScan logic picks it up
   var overrideMap = { auto: "", serial: "", reel: "", item: "item_number", box: "" };
   var override = $("invScanTypeOverride");

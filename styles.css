@@ -161,15 +161,20 @@ h2 { margin-top: 28px; }
 
 /* ── Sticky inventory toolbar (v2.23): holds the LOC + scan-mode controls so
    they stay in reach while the scan body scrolls. ── */
-.inv-toolbar { position: sticky; top: 0; z-index: 20; gap: var(--sp-3); align-content: flex-start; }
-/* Two-zone layout: LOC + session/counts on the top row, mode buttons on their
-   own row(s) below (modes take a full-width flex line). */
+.inv-toolbar { position: sticky; top: 0; z-index: 20; gap: var(--sp-3); align-items: center; }
+/* Single row: LOC | mode dropdown | session/counts (pushed right). Wraps if narrow. */
 .inv-toolbar-loc   { order: 1; position: relative; display: flex; align-items: center; flex-shrink: 0; }
-.inv-toolbar-info  { order: 2; display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
-.inv-toolbar-modes { order: 3; flex: 1 1 100%; row-gap: 6px; }
-.inv-toolbar .inv-mode-toggle { margin-bottom: 0; }
+.inv-toolbar-modes { order: 2; display: flex; align-items: center; gap: var(--sp-2); flex-shrink: 0; }
+.inv-toolbar-info  { order: 3; display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
 .inv-toolbar .inv-status-session { flex: 0 1 auto; }
 .inv-modebar-btn { padding: 6px 10px; font-size: 12px; margin: 0; }
+/* Mode dropdown — color-coded by active mode so it stays glanceable */
+.inv-mode-select-label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: #cbd5e1; text-transform: uppercase; letter-spacing: .04em; }
+.inv-mode-select { font-size: 14px; font-weight: 700; padding: 8px 10px; border-radius: 8px; border: 2px solid #1e40af; background: #1d4ed8; color: #fff; cursor: pointer; min-height: var(--touch-min-sm); }
+.inv-mode-select[data-mode="serial"] { background: #7c3aed; border-color: #6d28d9; }
+.inv-mode-select[data-mode="reel"]   { background: #0891b2; border-color: #0e7490; }
+.inv-mode-select[data-mode="item"]   { background: #16a34a; border-color: #15803d; }
+.inv-mode-select[data-mode="box"]    { background: #b45309; border-color: #92400e; }
 /* Compact toolbar (table sub-screens): hide mode + LOC, keep session/count info */
 .inv-toolbar.toolbar-compact .inv-toolbar-loc,
 .inv-toolbar.toolbar-compact .inv-toolbar-modes { display: none; }
@@ -194,20 +199,22 @@ h2 { margin-top: 28px; }
 .main-content.inv-count-static #invScanCard > p.small { margin: 0 0 8px; }
 .main-content.inv-count-static .inv-scan-panel     { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .main-content.inv-count-static .inv-scan-two-col   { flex: 1; min-height: 0; }
-.main-content.inv-count-static .inv-scan-fields-col { flex: 1; min-height: 0; }
-.main-content.inv-count-static .inv-activity-feed-inline { flex: 1; min-height: 0; }
-/* Portrait (stacked): the keypad is tall enough to crowd the scan fields, so
-   compact it when stacked — smaller keys, no tip text — freeing room so the
-   fields + activity feed fit above it without overflowing. fields-col clips
-   defensively so content can never bleed under the keypad. */
+.main-content.inv-count-static .inv-scan-fields-col { min-height: 0; }
+/* Compact the keypad in the static frame so it fits the viewport in every mode —
+   the reel keypad (with its focus-jump row) is otherwise too tall for landscape. */
+.main-content.inv-count-static .inv-qty-keypad { padding: 10px; }
+.main-content.inv-count-static .inv-qty-keypad-context { display: none; }
+.main-content.inv-count-static .inv-qty-key { padding: 9px 0; font-size: 19px; }
+.main-content.inv-count-static .inv-qty-keys { gap: 5px; margin-bottom: 4px; }
+.main-content.inv-count-static .inv-qty-display-row { margin-bottom: 6px; }
+.main-content.inv-count-static .inv-key-focus { padding: 6px 3px; font-size: 11px; }
+.main-content.inv-count-static .inv-key-focus-row { gap: 4px; margin-bottom: 5px; }
+/* Portrait (stacked): squeeze the keys a touch more, and let the scan column be
+   its natural height (don't shrink it below its content, which would make fields
+   overflow past the reel overlay). */
 @media (max-width: 900px) {
-  .main-content.inv-count-static .inv-scan-fields-col { overflow: hidden; }
-  .main-content.inv-count-static .inv-activity-feed-inline { min-height: 56px; }
-  .main-content.inv-count-static .inv-qty-keypad { padding: 8px 10px; }
-  .main-content.inv-count-static .inv-qty-keypad-context { display: none; }
-  .main-content.inv-count-static .inv-qty-key { padding: 8px 0; font-size: 18px; }
-  .main-content.inv-count-static .inv-qty-keys { gap: 4px; margin-bottom: 4px; }
-  .main-content.inv-count-static .inv-qty-display-row { margin-bottom: 4px; }
+  .main-content.inv-count-static .inv-qty-key { padding: 7px 0; font-size: 18px; }
+  .main-content.inv-count-static .inv-scan-two-col { flex: 0 0 auto; }
 }
 .inv-status-save { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #166534; color: #bbf7d0; flex-shrink: 0; transition: background .2s; }
 .inv-status-save.unsaved { background: #713f12; color: #fde68a; }
@@ -539,8 +546,28 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-fields-col { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
 .inv-scan-keypad-col { flex:0 0 278px; }
 .inv-scan-keypad-col .inv-qty-keypad { margin-top:0; }
-.inv-activity-feed-inline { flex:1; margin-top:10px; min-height:120px; display:flex; flex-direction:column; }
-.inv-activity-feed-inline .inv-activity-list { flex:1; max-height:none; overflow-y:auto; }
+/* Last-action bar: one-line always-visible readout of the most recent activity.
+   Tapping opens the full history overlay. Color-coded left edge by entry type. */
+.inv-activity-lastbar {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 10px 0 0; padding: 10px 14px; min-height: var(--touch-min-sm);
+  background: #f8fafc; border: 1px solid var(--c-border); border-left: 4px solid #94a3b8;
+  border-radius: 8px; cursor: pointer; text-align: left; font: inherit; color: var(--c-text);
+}
+.inv-activity-lastbar:hover { background: #f1f5f9; }
+.inv-activity-lastbar.type-ok       { border-left-color: #16a34a; }
+.inv-activity-lastbar.type-warn     { border-left-color: #d97706; }
+.inv-activity-lastbar.type-error    { border-left-color: #dc2626; }
+.inv-activity-lastbar.type-location { border-left-color: #0891b2; }
+.inv-activity-lastbar.type-mode     { border-left-color: #2563eb; }
+.inv-activity-last-icon { font-size: 15px; font-weight: 800; flex-shrink: 0; color: #475569; }
+.inv-activity-last-text { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inv-activity-last-time { font-size: 12px; color: var(--c-muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.inv-activity-last-more { font-size: 12px; font-weight: 700; color: var(--c-primary); flex-shrink: 0; }
+
+/* Activity history overlay */
+.inv-activity-modal { max-width: 560px; }
+.inv-activity-modal .inv-activity-list { max-height: 60vh; overflow-y: auto; }
 /* Stack scan fields above the keypad whenever the content area is narrow.
    Breakpoint is raised to 900px because the sidebar (~300px) eats viewport
    width — at iPad portrait (768px) the two-column layout was badly cramped,

@@ -354,9 +354,10 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `renderInvEventLog()` | Render event log table (filterable) |
 | `renderInvSummary()` | Render per-item summary (qty, footage) |
 | `renderInvExceptions()` | Render exceptions panel |
-| `renderInvActivityFeed()` | Render activity feed |
+| `renderInvActivityFeed()` | Fill the always-visible last-action bar + render the full list (in the history overlay) |
 | `invAddActivity(type, msg, detail, beepType)` | Append to activity feed + fire `timFeedback` (tone + flash) |
 | `invClearActivityFeed()` | Clear activity feed |
+| `invOpenActivityOverlay()` / `invCloseActivityOverlay()` | Show/hide the full activity history overlay (opened from the last-action bar) |
 | `invSetScanFeedback(msg, type, detail)` | Show scan result message + log to activity |
 
 ---
