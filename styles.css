@@ -215,6 +215,23 @@ h2 { margin-top: 28px; }
 @media (max-width: 900px) {
   .main-content.inv-count-static .inv-qty-key { padding: 7px 0; font-size: 18px; }
   .main-content.inv-count-static .inv-scan-two-col { flex: 0 0 auto; }
+
+  /* Narrow/stacked Count view: there isn't the vertical room for the fixed,
+     no-scroll capture frame here. The reel-entry overlay (position:absolute;
+     inset:0) collapses to the short fields-column height, cramming the whole
+     reel form into a tiny internal scroller while the no-scroll frame blocks
+     reaching the rest. So in this breakpoint only: abandon the static frame
+     (let the Count view scroll like every other sub-view) and let the reel
+     panel flow in-document at its natural height. Result: every reel field +
+     the keypad below it is fully rendered and reachable. The ≥900px two-column
+     layout (form left, keypad right) is unaffected and keeps the static frame. */
+  .main-content.inv-count-static { overflow-y: auto; }
+  .main-content.inv-count-static #tabInventory.active,
+  .main-content.inv-count-static #invScanCard,
+  .main-content.inv-count-static .inv-scan-panel { display: block; min-height: 0; overflow: visible; }
+  /* Scope under .inv-count-static so this out-specifies the base
+     .inv-reel-entry-panel rule (which is defined later in the file). */
+  .main-content.inv-count-static .inv-reel-entry-panel { position: static; inset: auto; box-shadow: none; }
 }
 .inv-status-save { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #166534; color: #bbf7d0; flex-shrink: 0; transition: background .2s; }
 .inv-status-save.unsaved { background: #713f12; color: #fde68a; }

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.03";
+const APP_VERSION = "v2.29.05";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6265,6 +6265,25 @@ function invQtyKeyClear() {
   invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
   invQtyRefreshDisplay();
 }
+
+// Keep the iPad's native keyboard from hiding when the on-screen reel keypad is
+// tapped. A <button> grabs focus on pointer-down, which blurs the focused reel
+// text field and makes iOS dismiss its software keyboard — so the operator can't
+// mix the virtual numeric pad with the iPad's alpha keys when typing an
+// alphanumeric reel number (the whole point of having both up at once). The old
+// code re-called .focus() after inserting, but that blur-then-refocus is exactly
+// what collapses the iOS keyboard. Preventing the default on mousedown stops the
+// focus steal entirely: the input never blurs (keyboard stays up) and the
+// button's click still fires to insert the digit / jump fields. This is the
+// standard rich-text-editor toolbar trick and is reliable on iOS Safari.
+// (Delegated once on the keypad container; app.js is deferred so it exists.)
+(function bindReelKeypadFocusGuard() {
+  var kp = document.getElementById("invQtyKeypad");
+  if (!kp) return;
+  kp.addEventListener("mousedown", function(e) {
+    if (e.target.closest(".inv-qty-key, .inv-key-focus")) e.preventDefault();
+  });
+})();
 
 function invEnterQtyMode() {
   var kp = $("invQtyKeypad");
