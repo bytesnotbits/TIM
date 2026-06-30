@@ -465,7 +465,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning as item/reel fields change — from `invReelDetectConflict`, plus an ambiguous-reel notice (reel on record under multiple items) when item is blank |
 | `invFindReelMaster(reelNum)` | **Reverse lookup**: latest event with this reel# across all sessions (used for scan classification) |
 | `invReelDistinctItems(reelNum)` | Distinct non-voided item numbers this reel has been recorded under (master + session) — basis for ambiguity detection |
-| `invReelReverseFillItem()` | Auto-fill the item field from the reel master **only when unambiguous** (single item); leaves blank when the reel maps to multiple items |
+| `invReelReverseFillItem()` | Resolve the item field from the reel master, ambiguity- & staleness-aware: keeps a user-typed item, but re-resolves an auto-filled (grey) item against the **current** reel (single item → fill; ambiguous/unknown → clear) so a previous reel's item can't leak forward |
 | `invGetReelHistory(itemNum, reelNum)` | Find most recent event for item+reel pair |
 | `invSubmitReelEntry(silent)` | Validate + save reel count event |
 | `invClearReelFields()` | Reset all reel form fields |
