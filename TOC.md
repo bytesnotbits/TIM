@@ -462,8 +462,10 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invReelResetSwaps()` | Clear the swap trail + its UI (note, button highlight) |
 | `invReelUpdateHistoryPanel(item, reel, ft)` | Show previous footage comparison |
 | `invReelDetectConflict(itemNum, reelNum)` | Detect a reel conflict: `cross_item` (reel on record under a different item) or `session_dup` (already counted this session); null for the normal same-item prefill case |
-| `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning from `invReelDetectConflict` as item/reel fields change |
-| `invFindReelMaster(reelNum)` | **Reverse lookup**: find any event with this reel# across all sessions |
+| `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning as item/reel fields change — from `invReelDetectConflict`, plus an ambiguous-reel notice (reel on record under multiple items) when item is blank |
+| `invFindReelMaster(reelNum)` | **Reverse lookup**: latest event with this reel# across all sessions (used for scan classification) |
+| `invReelDistinctItems(reelNum)` | Distinct non-voided item numbers this reel has been recorded under (master + session) — basis for ambiguity detection |
+| `invReelReverseFillItem()` | Auto-fill the item field from the reel master **only when unambiguous** (single item); leaves blank when the reel maps to multiple items |
 | `invGetReelHistory(itemNum, reelNum)` | Find most recent event for item+reel pair |
 | `invSubmitReelEntry(silent)` | Validate + save reel count event |
 | `invClearReelFields()` | Reset all reel form fields |

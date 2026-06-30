@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.05";
+const APP_VERSION = "v2.29.06";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6816,14 +6816,9 @@ function invOpenReelModal(reelNumber, notes, location) {
   var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
   var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
 
-  // Reverse lookup: if item is blank but reel is known, find item from master events
-  if (!itemNum && reelNum) {
-    var master = invFindReelMaster(reelNum);
-    if (master && master.itemNumber) {
-      itemNum = master.itemNumber.trim().toUpperCase();
-      if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
-    }
-  }
+  // Reverse lookup: if item is blank but reel is known, resolve item from the
+  // reel master — but only when the reel maps to a single item (see helper).
+  if (!itemNum && reelNum) itemNum = invReelReverseFillItem();
 
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
@@ -6886,14 +6881,9 @@ function invReelUpdateSpanTypeFromContext() {
   var spanSel = $("invReelSpanType");
   if (!spanSel) return;
 
-  // Reverse lookup: if item is blank but reel is known, find item from master events
-  if (!itemNum && reelNum) {
-    var master = invFindReelMaster(reelNum);
-    if (master && master.itemNumber) {
-      itemNum = master.itemNumber.trim().toUpperCase();
-      if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
-    }
-  }
+  // Reverse lookup: if item is blank but reel is known, resolve item from the
+  // reel master — but only when the reel maps to a single item (see helper).
+  if (!itemNum && reelNum) itemNum = invReelReverseFillItem();
 
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
@@ -6980,6 +6970,44 @@ function invFindReelMaster(reelNum) {
   return matches[matches.length - 1];
 }
 
+// Distinct, non-voided item numbers this reel has ever been recorded under,
+// across master + the current session. A reel should belong to exactly one item;
+// when it appears under more than one, the reverse lookup must NOT silently pick
+// the latest (that masks the operator's real item and forces the wrong number —
+// e.g. a stray newer entry hijacking a legit imported reel).
+function invReelDistinctItems(reelNum) {
+  var k2 = normKey(reelNum || "");
+  if (!k2) return [];
+  var all = (appData.inventory_events || []).concat(invEvents || []);
+  var seen = {}, out = [];
+  all.forEach(function(e) {
+    if (e.eventType === "cable_reel_count" && e.status !== "voided" &&
+        normKey(e.reelNumber || "") === k2) {
+      var ik = normKey(e.itemNumber || "");
+      if (ik && !seen[ik]) { seen[ik] = true; out.push((e.itemNumber || "").trim().toUpperCase()); }
+    }
+  });
+  return out;
+}
+
+// Reverse-fill the item field from the reel master — but ONLY when unambiguous.
+// Reads the live reel/item fields; returns the resolved item (upper) or "".
+// If the item is already set, or the reel maps to more than one item, the field
+// is left untouched (the ambiguity is surfaced by invReelCheckDuplicate).
+function invReelReverseFillItem() {
+  var itemField = $("invReelItemNumber");
+  var reelField = $("invReelNumber");
+  var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
+  var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
+  if (itemNum || !reelNum) return itemNum;
+  var items = invReelDistinctItems(reelNum);
+  if (items.length === 1) {
+    itemNum = items[0];
+    if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
+  }
+  return itemNum;
+}
+
 function invGetReelHistory(itemNum, reelNum) {
   var k1 = normKey(itemNum || "");
   var k2 = normKey(reelNum || "");
@@ -7031,6 +7059,19 @@ function invReelCheckDuplicate() {
   if (!note) return;
   var item = ($("invReelItemNumber") ? $("invReelItemNumber").value : "").trim().toUpperCase();
   var reel = ($("invReelNumber")     ? $("invReelNumber").value     : "").trim().toUpperCase();
+
+  // Ambiguous reel: item left blank because the reel is on record under more than
+  // one item. Don't guess — list the candidates so the operator picks the right one.
+  if (!item && reel) {
+    var ambItems = invReelDistinctItems(reel);
+    if (ambItems.length > 1) {
+      note.innerHTML = "⚠️ Reel " + escapeHtml(reel) + " is on record under multiple items: <strong>"
+        + ambItems.map(escapeHtml).join("</strong>, <strong>") + "</strong>. "
+        + "Enter the correct item number for this reel before saving.";
+      note.style.display = "block";
+      return;
+    }
+  }
 
   var c = invReelDetectConflict(item, reel);
   if (!c) { note.style.display = "none"; note.innerHTML = ""; return; }
