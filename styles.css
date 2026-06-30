@@ -474,6 +474,16 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .tim-boot-step.skipped  { color: #475569; }
 .tim-boot-step.skipped  .tim-boot-step-label { text-decoration: line-through; }
 .tim-boot-step-frac { color: #93c5fd; font-size: 11px; font-weight: 700; }
+/* Reassurance line ("still working…") shown on a slow phase. */
+.tim-boot-note:empty { display: none; }
+.tim-boot-note { color: #fbbf24; font-size: 12px; line-height: 1.4; margin-top: 2px; }
+/* Visible stall notice + manual reload — shown only after a long no-progress gap. */
+.tim-boot-stuck.hidden { display: none; }
+.tim-boot-stuck { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; padding: 12px;
+  background: #422006; border: 1px solid #b45309; border-radius: 8px; color: #fde68a; font-size: 12px; line-height: 1.45; }
+.tim-boot-reload { align-self: flex-start; padding: 7px 16px; border: 0; border-radius: 7px; cursor: pointer;
+  background: #f59e0b; color: #422006; font-size: 13px; font-weight: 800; }
+.tim-boot-reload:hover { background: #fbbf24; }
 @media (prefers-reduced-motion: reduce) {
   .tim-boot-spinner, .tim-boot-step.running .tim-boot-step-ico { animation-duration: 1.8s; }
   .tim-boot-bar-fill { transition: none; }

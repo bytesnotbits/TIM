@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.00";
+const APP_VERSION = "v2.29.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8582,7 +8582,7 @@ function timSetBootOverlay(msg) {
 }
 function timHideBootOverlay() {
   var o = $("timBootOverlay"); if (o) o.classList.add("hidden");
-  if (_bootProg && _bootProg.watchdog) { clearTimeout(_bootProg.watchdog); _bootProg.watchdog = null; }
+  _bootClearTimers();
 }
 
 // Resolve after the browser has had a chance to paint (two RAFs). Used to flush
@@ -8599,28 +8599,60 @@ function _nextPaint() {
 // are no-ops once boot finishes (_bootProg cleared), so the same instrumentation
 // inside ghSyncNow is silent on a manual, post-boot Sync.
 var _bootProg = null;
-// Watchdog: hide the overlay only after this long with NO progress at all. It is
-// re-armed on every step update, so a large-but-healthy DB that keeps making
-// progress never trips it — only a genuine stall does. This scales with data
-// size automatically; there is no fixed total-time cap on the work itself.
-var BOOT_IDLE_MS = 45000;
+// Stall detection — escalating, NOT auto-hiding. A real hang must stay VISIBLE
+// (silently hiding the overlay would read as "done" and invite blind refreshing).
+// Both timers re-arm on every progress tick, so a large-but-healthy DB that keeps
+// advancing never trips them — only genuine inactivity does. They scale with data
+// size since they measure no-progress time, not total duration.
+var BOOT_SLOW_MS  = 12000;  // reassure: "still working…"
+var BOOT_STUCK_MS = 45000;  // surface a visible stall + a manual Reload option
 
+function _bootClearTimers() {
+  if (!_bootProg) return;
+  if (_bootProg.slowT)  { clearTimeout(_bootProg.slowT);  _bootProg.slowT  = null; }
+  if (_bootProg.stuckT) { clearTimeout(_bootProg.stuckT); _bootProg.stuckT = null; }
+}
+
+// (Re)arm the stall timers. Called on every step update — so progress keeps the
+// app looking healthy and clears any prior "slow"/"stuck" notice.
 function _bootArmWatchdog() {
   if (!_bootProg) return;
-  if (_bootProg.watchdog) clearTimeout(_bootProg.watchdog);
-  _bootProg.watchdog = setTimeout(function() {
-    // No progress for BOOT_IDLE_MS — assume a hang and stop blocking the screen.
-    // (The underlying work, if any, still continues; this only frees the UI.)
-    timHideBootOverlay();
-  }, BOOT_IDLE_MS);
+  _bootClearTimers();
+  _bootSetNote("");        // progress resumed → drop any reassurance line
+  _bootHideStuck();
+  _bootProg.slowT = setTimeout(function() {
+    // Async work (almost always a slow/blocked network fetch) has made no
+    // progress for a while. Reassure — do NOT hide. NOTE: a *synchronous* hang
+    // (e.g. a giant merge) can't fire this at all, since the timer can't run
+    // while the main thread is blocked; the browser surfaces that itself.
+    _bootSetNote("Still working — this can take longer with a lot of data or a slow connection.");
+    _bootProg.stuckT = setTimeout(_bootShowStuck, Math.max(0, BOOT_STUCK_MS - BOOT_SLOW_MS));
+  }, BOOT_SLOW_MS);
+}
+
+// Make a genuine stall unmistakable and give the user a sanctioned action
+// (reload) instead of leaving them to mash the browser refresh blindly.
+function _bootShowStuck() {
+  var box = $("timBootStuck");
+  if (box) box.classList.remove("hidden");
+}
+function _bootHideStuck() {
+  var box = $("timBootStuck");
+  if (box) box.classList.add("hidden");
+}
+function _bootSetNote(msg) {
+  var n = $("timBootNote");
+  if (n) n.textContent = msg || "";
 }
 
 function timBootBegin(steps) {
-  _bootProg = { steps: [], idx: {}, watchdog: null };
+  _bootProg = { steps: [], idx: {}, slowT: null, stuckT: null };
   (steps || []).forEach(function(s, i) {
     _bootProg.idx[s.id] = i;
     _bootProg.steps.push({ id: s.id, label: s.label, status: "pending", frac: 0 });
   });
+  _bootSetNote("");
+  _bootHideStuck();
   _bootRenderSteps();
   _bootRenderBar(false);
   _bootArmWatchdog();
@@ -8650,7 +8682,9 @@ function timBootEnd() {
   _bootProg.steps.forEach(function(s) { if (s.status !== "skipped") { s.status = "done"; s.frac = 1; } });
   _bootRenderSteps();
   _bootRenderBar(true);
-  if (_bootProg.watchdog) clearTimeout(_bootProg.watchdog);
+  _bootClearTimers();
+  _bootSetNote("");
+  _bootHideStuck();
   _bootProg = null;
 }
 

@@ -31,6 +31,12 @@
       <div class="tim-boot-bar"><div id="timBootBar" class="tim-boot-bar-fill"></div></div>
       <div id="timBootPct" class="tim-boot-pct">0%</div>
       <ul id="timBootSteps" class="tim-boot-steps"></ul>
+      <div id="timBootNote" class="tim-boot-note"></div>
+      <!-- Surfaced only after a prolonged no-progress stall — never auto-hidden. -->
+      <div id="timBootStuck" class="tim-boot-stuck hidden">
+        <span>This step is taking unusually long. It may still finish on its own — or you can reload.</span>
+        <button type="button" class="tim-boot-reload" onclick="location.reload()">Reload</button>
+      </div>
     </div>
   </div>
   <!-- Failsafe: hide the overlay only if app.js never runs at all (total script
