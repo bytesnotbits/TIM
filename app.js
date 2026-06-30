@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.06";
+const APP_VERSION = "v2.29.07";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6816,9 +6816,10 @@ function invOpenReelModal(reelNumber, notes, location) {
   var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
   var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
 
-  // Reverse lookup: if item is blank but reel is known, resolve item from the
-  // reel master — but only when the reel maps to a single item (see helper).
-  if (!itemNum && reelNum) itemNum = invReelReverseFillItem();
+  // Resolve item from the reel master. The helper keeps a user-typed item, but
+  // re-resolves (or clears) a stale auto-filled item against the current reel —
+  // so a value from a previous reel can't leak onto this one.
+  itemNum = invReelReverseFillItem();
 
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
@@ -6881,9 +6882,10 @@ function invReelUpdateSpanTypeFromContext() {
   var spanSel = $("invReelSpanType");
   if (!spanSel) return;
 
-  // Reverse lookup: if item is blank but reel is known, resolve item from the
-  // reel master — but only when the reel maps to a single item (see helper).
-  if (!itemNum && reelNum) itemNum = invReelReverseFillItem();
+  // Resolve item from the reel master. The helper keeps a user-typed item, but
+  // re-resolves (or clears) a stale auto-filled item against the current reel —
+  // so a value from a previous reel can't leak onto this one.
+  itemNum = invReelReverseFillItem();
 
   var prev = invGetReelHistory(itemNum, reelNum);
   if (prev) {
@@ -6990,22 +6992,44 @@ function invReelDistinctItems(reelNum) {
   return out;
 }
 
-// Reverse-fill the item field from the reel master — but ONLY when unambiguous.
+// Resolve the item field from the reel master, ambiguity- AND staleness-aware.
 // Reads the live reel/item fields; returns the resolved item (upper) or "".
-// If the item is already set, or the reel maps to more than one item, the field
-// is left untouched (the ambiguity is surfaced by invReelCheckDuplicate).
+//
+// Key distinction: a user-TYPED item (no marker) is authoritative and never
+// touched. An AUTO-FILLED item (the grey `inv-reel-prefilled` marker) belongs to
+// whatever reel was loaded when it was set — when the reel then changes (e.g. the
+// operator clears the reel field and types the next reel in the same open panel),
+// that auto-filled item is stale and MUST be re-resolved against the current reel,
+// or it leaks onto the new reel and fires a false cross-item conflict. The old
+// guard only ran when the field was blank, so a stale auto-fill rode along.
+//
+// Resolution against the current reel: exactly one item → fill it; otherwise
+// (blank reel, unknown reel, or reel on record under multiple items) clear any
+// stale auto-fill and leave blank, letting invReelCheckDuplicate surface the case.
 function invReelReverseFillItem() {
   var itemField = $("invReelItemNumber");
   var reelField = $("invReelNumber");
-  var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
+  if (!itemField) return "";
+  var itemNum = itemField.value.trim().toUpperCase();
   var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
-  if (itemNum || !reelNum) return itemNum;
-  var items = invReelDistinctItems(reelNum);
-  if (items.length === 1) {
-    itemNum = items[0];
-    if (itemField) { itemField.value = itemNum; itemField.classList.add("inv-reel-prefilled"); }
+  var wasAutoFilled = itemField.classList.contains("inv-reel-prefilled");
+
+  // A user-typed item is authoritative — keep it (this is the item-then-reel path).
+  if (itemNum && !wasAutoFilled) return itemNum;
+
+  // Item is blank or was auto-filled — (re)resolve against the CURRENT reel.
+  if (reelNum) {
+    var items = invReelDistinctItems(reelNum);
+    if (items.length === 1) {
+      itemNum = items[0];
+      itemField.value = itemNum;
+      itemField.classList.add("inv-reel-prefilled");
+      return itemNum;
+    }
   }
-  return itemNum;
+  // Ambiguous / unknown / no reel — never carry a stale auto-fill forward.
+  if (wasAutoFilled) { itemField.value = ""; itemField.classList.remove("inv-reel-prefilled"); }
+  return "";
 }
 
 function invGetReelHistory(itemNum, reelNum) {
