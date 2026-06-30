@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.28.00";
+const APP_VERSION = "v2.28.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2353,7 +2353,7 @@ function ghSyncNow(silent) {
   var btn = $("ghSyncNowBtn");
   if (btn) btn.disabled = true;
   ghSetStatus("Syncing from " + ghConfig.owner + "/" + ghConfig.repo + "…", "info");
-  timSetBootOverlay("Syncing with GitHub…");
+  timSetBootOverlay("Syncing your data…");
 
   var shas = {};
   return ghListDataDir().then(function(listing) {
