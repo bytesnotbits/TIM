@@ -1,4 +1,4 @@
-const CACHE = 'tim-v5';
+const CACHE = 'tim-v6';
 const PRECACHE = [
   'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
   'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/barcodes/JsBarcode.code128.min.js',
@@ -43,9 +43,14 @@ self.addEventListener('fetch', e => {
       })
     );
   } else {
-    // Network-first for all local files (HTML, CSS, JS) — always fetch latest; fall back to cache when offline
+    // Network-first for all local files (HTML, CSS, JS) — always fetch latest;
+    // fall back to cache when offline. The network fetch uses cache:'no-store'
+    // so it bypasses the BROWSER HTTP cache: a stale HTTP-cached app.js was
+    // defeating in-app updates (the version check saw the new build, but the
+    // reload kept loading the old one from disk cache). The fresh response is
+    // still copied into the SW cache for offline use.
     e.respondWith(
-      fetch(e.request).then(res => {
+      fetch(e.request.url, { cache: 'no-store' }).then(res => {
         if (res.ok) {
           const clone = res.clone();
           caches.open(CACHE).then(c => c.put(e.request, clone));

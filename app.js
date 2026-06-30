@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.02";
+const APP_VERSION = "v2.29.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2055,6 +2055,13 @@ async function checkForUpdate() {
           // Clear SW cache so reload is guaranteed to hit the network
           const cacheNames = await caches.keys();
           await Promise.all(cacheNames.map(n => caches.delete(n)));
+          // Re-fetch core files with cache:'reload' — this bypasses AND refreshes
+          // the browser HTTP cache, so the reload below loads the new build rather
+          // than a stale disk-cached copy (the root cause of "update won't stick").
+          await Promise.all(
+            ["./app.js", "./index.html", "./styles.css", "./manifest.json"]
+              .map(u => fetch(u, { cache: "reload" }).catch(() => {}))
+          );
         } catch(_) {}
         location.reload();
       });
