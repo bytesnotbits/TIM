@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.27.00";
+const APP_VERSION = "v2.28.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -10,6 +10,10 @@ if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
 let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {} };
 let PRODUCT_MAP = appData.product_map;
+// True once the UI has been rendered (by loadSourceData or timRenderRestored).
+// Lets a failed boot sync fall back to rendering the cached data instead of
+// leaving a blank app, without double-rendering on a post-boot manual sync.
+var _timRendered = false;
 let BARCODE_MAP = appData.barcode_map;
 let history = appData.history;
 let currentBatch = [];
@@ -912,6 +916,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   reelLookupRender();
   checkReelItemConflicts();
   timSaveMasterCache();
+  _timRendered = true;
 }
 
 // Per-card file inputs removed — universal drop zone handles all routing.
@@ -2338,19 +2343,20 @@ function ghFetchJsonFile(filePath) {
 }
 
 function ghSyncNow(silent) {
-  if (ghSyncInFlight) return;
+  if (ghSyncInFlight) return Promise.resolve();
   if (!ghConfigured()) {
     if (!silent) { ghOpenConfig(); }
     ghSetStatus("Not configured — click Configure to connect.", "info");
-    return;
+    return Promise.resolve();
   }
   ghSyncInFlight = true;
   var btn = $("ghSyncNowBtn");
   if (btn) btn.disabled = true;
   ghSetStatus("Syncing from " + ghConfig.owner + "/" + ghConfig.repo + "…", "info");
+  timSetBootOverlay("Syncing with GitHub…");
 
   var shas = {};
-  ghListDataDir().then(function(listing) {
+  return ghListDataDir().then(function(listing) {
     var files = (listing || []).filter(function(f) {
       return f.type === "file" && /\.json$/i.test(f.name);
     });
@@ -2378,6 +2384,7 @@ function ghSyncNow(silent) {
       remote: { device: "repo", user: "" },
       now: new Date().toISOString()
     };
+    timSetBootOverlay("Merging changes…");
     var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
 
     loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
@@ -2406,32 +2413,45 @@ function ghSyncNow(silent) {
     ghSetStatus(msg, uc ? "err" : "ok");
   }).catch(function(err) {
     ghSetStatus("Sync failed: " + (err && err.message ? err.message : err), "err");
+    // A failed boot sync never rendered — fall back to the cached data so the
+    // app shows something instead of a blank screen. No-op post-boot.
+    if (!_timRendered) timRenderRestored();
   }).finally(function() {
     ghSyncInFlight = false;
     if (btn) btn.disabled = false;
   });
 }
 
+// Returns a promise that settles when the boot sync/push (if any) is done, so
+// the boot overlay can be hidden at the right time. On every branch that does
+// NOT run a full sync (which renders for us), it renders the restored cache so
+// the app is never left blank.
 function ghInit() {
   ghBindOnlineRetry();
   ghLoadConflictLog().then(function() { ghRenderConflictBadge(); });
-  ghLoadSettings().then(function(configured) {
-    if (!configured) return;
-    TimDB.get(GH_PENDING_KEY).then(function(pending) {
+  return ghLoadSettings().then(function(configured) {
+    if (!configured) { if (!_timRendered) timRenderRestored(); return; }
+    return TimDB.get(GH_PENDING_KEY).then(function(pending) {
       if (pending) {
         // Local master holds offline edits not yet on GitHub. PUSH them — do
         // NOT auto-pull, which would overwrite the edits before they're saved.
+        // The push doesn't render, so show the cached data now.
+        if (!_timRendered) timRenderRestored();
         if (navigator.onLine) {
           ghSetStatus("Unpushed local changes detected — pushing to GitHub…", "info");
-          ghPushToGitHub({ auto: true });
-        } else {
-          ghSetStatus("Offline — local changes will push to GitHub automatically when you reconnect.", "info");
+          return ghPushToGitHub({ auto: true });
         }
-      } else if (ghConfig.autoLoad !== false) {
-        ghSyncNow(true);
+        ghSetStatus("Offline — local changes will push to GitHub automatically when you reconnect.", "info");
+      } else if (ghConfig.autoLoad !== false && navigator.onLine) {
+        return ghSyncNow(true); // renders once via the merge result
+      } else {
+        // Auto-sync off, or offline — show the locally cached data.
+        if (!_timRendered) timRenderRestored();
+        if (ghConfig.autoLoad !== false) ghSetStatus("Offline — showing locally saved data. Sync when you reconnect.", "info");
       }
     }).catch(function() {
-      if (ghConfig.autoLoad !== false) ghSyncNow(true);
+      if (ghConfig.autoLoad !== false && navigator.onLine) return ghSyncNow(true);
+      if (!_timRendered) timRenderRestored();
     });
   });
 }
@@ -8459,28 +8479,76 @@ function timSaveMasterCache() {
   TimDB.set(TIM_MASTER_CACHE_KEY, buildExportPayload()).catch(function(){});
 }
 
+// Restore the FULL dataset from cache into memory WITHOUT rendering. On boot an
+// auto-sync usually follows immediately and renders once off the merged result,
+// so rendering here too would mean a full (throwaway) render then a second one
+// ~1-2s later — the visible "app is frozen" stall. The render is deferred to
+// timRenderRestored(), called only on the branches that DON'T sync (offline,
+// not configured, auto-sync off, or a failed sync). Every shared collection is
+// still restored so the 3-way merge compares against faithful local state.
 function timLoadMasterCache() {
   return TimDB.get(TIM_MASTER_CACHE_KEY).then(function(parsed) {
     if (!parsed) return false;
-    var hadData = (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) ||
-                  (parsed.history && Array.isArray(parsed.history.records) && parsed.history.records.length) ||
-                  (Array.isArray(parsed.inventory_events) && parsed.inventory_events.length);
-    // Route the cached payload through the same loader the GitHub sync and file
-    // import use, so EVERY shared collection (inventory_events/sessions,
-    // recounts, quants, boxes, barcodes) is restored — keeping the in-memory
-    // state the merge compares against faithful to what was last saved.
-    try {
-      loadSourceData(parsed, "local cache");
-    } catch (e) {
-      return false;
+    var hadData = false;
+    if (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) {
+      PRODUCT_MAP = parsed.product_map;
+      appData.product_map = PRODUCT_MAP;
+      hadData = true;
     }
-    var pCount = Object.keys(PRODUCT_MAP).length;
-    var hCount = (history.records || []).length;
-    setDropState("historyDropZone", "historyDropStatus", true, "Restored from local cache");
-    $("historyStatus").textContent = pCount + " products, " + hCount + " history records (restored from local cache — Sync to refresh from GitHub).";
-    updateSidebarStatus(1, hCount);
-    return !!hadData;
+    if (parsed.history && Array.isArray(parsed.history.records)) {
+      history = parsed.history;
+      appData.history = history;
+      hadData = true;
+    }
+    if (Array.isArray(parsed.inventory_sessions)) appData.inventory_sessions = parsed.inventory_sessions;
+    if (Array.isArray(parsed.inventory_events))   { appData.inventory_events = parsed.inventory_events; if (parsed.inventory_events.length) hadData = true; }
+    if (Array.isArray(parsed.recount_sessions))   appData.recount_sessions  = parsed.recount_sessions;
+    if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
+    if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
+    if (parsed.boxes && typeof parsed.boxes === "object") appData.boxes = parsed.boxes;
+    if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
+    if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
+      Object.assign(BARCODE_MAP, parsed.barcode_map);
+      appData.barcode_map = BARCODE_MAP;
+    }
+    return hadData;
   }).catch(function() { return false; });
+}
+
+// Render the UI from already-restored (in-memory) data. Used on boot when no
+// GitHub sync will run to render it for us.
+function timRenderRestored() {
+  if ($("mapPreview")) $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
+  var pCount = Object.keys(PRODUCT_MAP).length;
+  var hCount = (history.records || []).length;
+  setDropState("historyDropZone", "historyDropStatus", true, "Restored from local cache");
+  if ($("historyStatus")) $("historyStatus").textContent =
+    pCount + " products, " + hCount + " history records (restored from local cache — Sync to refresh from GitHub).";
+  updateSidebarStatus(1, hCount);
+  if (lastLoadedRows.length) processRows(lastLoadedRows); else renderAll();
+  prodRenderList();
+  reelLookupRender();
+  checkReelItemConflicts();
+  _timRendered = true;
+}
+
+// ── Boot loading overlay ───────────────────────────────────────────
+// Full-screen feedback so a refresh's data-load + GitHub sync (which can block
+// the main thread for several seconds) doesn't read as a frozen/broken app.
+function timShowBootOverlay(msg) {
+  var o = $("timBootOverlay"); if (!o) return;
+  if (msg && $("timBootOverlayText")) $("timBootOverlayText").textContent = msg;
+  o.classList.remove("hidden");
+}
+function timSetBootOverlay(msg) {
+  // Only update text while the overlay is actually showing (boot). A no-op for
+  // a manual Sync, so the full-screen overlay never flashes mid-session.
+  var o = $("timBootOverlay");
+  if (!o || o.classList.contains("hidden")) return;
+  if ($("timBootOverlayText")) $("timBootOverlayText").textContent = msg;
+}
+function timHideBootOverlay() {
+  var o = $("timBootOverlay"); if (o) o.classList.add("hidden");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -10266,9 +10334,16 @@ try {
   }
 } catch(e) {}
 
-// ghInit runs after the local master cache loads, so a pending offline push
-// reads the just-restored data (and a normal startup still auto-syncs).
-timLoadMasterCache().then(ghInit, ghInit);
+// Boot: show the loading overlay, restore the cached dataset into memory (no
+// render), then let ghInit either auto-sync (which renders once off the merge)
+// or render the cache directly. Hide the overlay when the chain settles. A
+// safety timer guarantees the overlay never traps the user if something hangs.
+timShowBootOverlay("Loading saved data…");
+var _timBootSafety = setTimeout(timHideBootOverlay, 25000);
+timLoadMasterCache()
+  .then(ghInit, ghInit)
+  .catch(function(){})
+  .then(function() { clearTimeout(_timBootSafety); timHideBootOverlay(); });
 timInitUsername();
 timInitVoice();
 renderInvSessionUI();

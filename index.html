@@ -19,6 +19,17 @@
   <!-- Full-screen scan-feedback flash overlay (green=ok, amber=warn, red=error) -->
   <div id="timFlash" aria-hidden="true"></div>
 
+  <!-- Boot loading overlay — visible immediately on load, hidden by app.js once
+       the cached data + GitHub sync finish (so a refresh never looks frozen). -->
+  <div id="timBootOverlay" role="status" aria-live="polite">
+    <div class="tim-boot-card">
+      <div class="tim-boot-spinner" aria-hidden="true"></div>
+      <div id="timBootOverlayText" class="tim-boot-text">Loading…</div>
+    </div>
+  </div>
+  <!-- Failsafe: hide the overlay even if app.js never runs/throws on boot. -->
+  <script>setTimeout(function(){var o=document.getElementById('timBootOverlay');if(o)o.classList.add('hidden');},25000);</script>
+
   <!-- Hidden utility element (referenced by JS, not displayed) -->
   <textarea id="mapPreview" style="display:none;" readonly></textarea>
 

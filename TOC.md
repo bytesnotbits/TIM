@@ -129,8 +129,10 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `clearBatchDraft()` | Delete receiving batch from IDB |
 | `loadBatchDraft()` | Restore receiving batch from IDB |
 | `restoreBatchDraft()` | Load batch + refresh UI |
-| `timLoadMasterCache()` | Load product_map + history from IDB on startup |
-| `timSaveMasterCache()` | Persist product_map + history to IDB |
+| `timLoadMasterCache()` | Restore the FULL dataset (all appData collections) from IDB on startup — data only, NO render (boot renders once via sync or `timRenderRestored`) |
+| `timSaveMasterCache()` | Persist the FULL dataset (`buildExportPayload()` shape) to IDB — not just product_map/history, so a refresh's merge doesn't read missing collections as deletions |
+| `timRenderRestored()` | Render the UI from already-restored in-memory data; called on boot branches that don't run a full sync (offline/unconfigured/auto-sync off/failed sync). Sets `_timRendered` |
+| `timShowBootOverlay(msg)` / `timSetBootOverlay(msg)` / `timHideBootOverlay()` | Full-screen boot loading overlay. `timSetBootOverlay` only updates text while showing (no-op post-boot, so a manual Sync never flashes it) |
 | `invLoadStorageRaw()` | Raw IDB read for current session |
 | `invStorageAvailable()` | Check IndexedDB availability |
 | `scheduleInvAutosave()` | Debounced (500ms) autosave trigger |
@@ -207,7 +209,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghSyncNow(silent)` | **Main pull = 3-way merge** (v2.06.00): list → fetch all → assemble remote → `ghMergeMasters(base, local, remote)` → `loadSourceData(merged)` → log conflicts + pull repo `conflicts.json` → save base(=remote) & SHAs → mark pending if merged has local-only changes. Atomic; no longer clobbers local. |
 | `_ghAssembleRemote(fetched)` | Assemble fetched repo files → `{ payload, conflicts, hadHistoryShards }` (shared by pull + push-rebase) |
 | `_ghPayloadDiffers(a,b)` | Cheap per-collection deep-compare; true if merged has changes not yet in the repo |
-| `ghInit()` | Startup hook: load settings; if a push is pending, PUSH (not pull, which would clobber the offline edit), else auto-sync if `autoLoad`. Runs after `timLoadMasterCache()` resolves |
+| `ghInit()` | Startup hook (returns a promise so the boot overlay hides at the right time): load settings; if a push is pending, PUSH (not pull, which would clobber the offline edit), else auto-sync if `autoLoad` + online. Renders the restored cache on every branch that doesn't run a full sync. Runs after `timLoadMasterCache()` resolves |
 | `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
 | `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data, incl. `conflicts.json` (shared by seed + push) |
 | `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
