@@ -133,6 +133,10 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `timSaveMasterCache()` | Persist the FULL dataset (`buildExportPayload()` shape) to IDB — not just product_map/history, so a refresh's merge doesn't read missing collections as deletions |
 | `timRenderRestored()` | Render the UI from already-restored in-memory data; called on boot branches that don't run a full sync (offline/unconfigured/auto-sync off/failed sync). Sets `_timRendered` |
 | `timShowBootOverlay(msg)` / `timSetBootOverlay(msg)` / `timHideBootOverlay()` | Full-screen boot loading overlay. `timSetBootOverlay` only updates text while showing (no-op post-boot, so a manual Sync never flashes it) |
+| `timBootBegin(steps)` / `timBootStep(id,status,frac)` / `timBootEnd()` | Boot progress controller: step checklist + overall bar/percentage in the overlay. `status` = running/done/skipped; `frac` gives a running step its own % (e.g. X-of-N file downloads). All no-ops once boot ends (`_bootProg` cleared) — so the same instrumentation in `ghSyncNow` is silent on a manual Sync |
+| `_bootRenderCacheStep()` | No-sync boot branches: mark network steps skipped, render cached data under the "render" step |
+| `_bootArmWatchdog()` / `BOOT_IDLE_MS` | Progress watchdog — hides the overlay only after `BOOT_IDLE_MS` (45s) of NO progress; re-armed on every step. Scales with data size (fires on stall, not total duration). Replaces the old fixed timer |
+| `_nextPaint()` | Resolve after two RAFs — flush a progress update to screen before a synchronous, repaint-blocking step (merge/render) |
 | `invLoadStorageRaw()` | Raw IDB read for current session |
 | `invStorageAvailable()` | Check IndexedDB availability |
 | `scheduleInvAutosave()` | Debounced (500ms) autosave trigger |

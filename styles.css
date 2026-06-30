@@ -444,17 +444,40 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 @keyframes timFlashSteady      { 0% { opacity:0; } 25% { opacity:.30; } 100% { opacity:0; } }
 @keyframes timFlashSteadyError { 0% { opacity:0; } 10% { opacity:.75; } 75% { opacity:.6; } 100% { opacity:0; } }
 
-/* Boot loading overlay — covers the data-load + GitHub sync on refresh. */
+/* Boot loading overlay — covers the data-load + sync on refresh. */
 #timBootOverlay { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center;
   background: rgba(15, 23, 42, .82); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
 #timBootOverlay.hidden { display: none; }
-.tim-boot-card { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 28px 36px;
+.tim-boot-card { display: flex; flex-direction: column; gap: 14px; padding: 26px 30px; width: 320px; max-width: calc(100vw - 48px);
   background: #1e293b; border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
-.tim-boot-spinner { width: 38px; height: 38px; border-radius: 50%; border: 4px solid #334155; border-top-color: #3b82f6;
+.tim-boot-head { display: flex; align-items: center; gap: 12px; }
+.tim-boot-spinner { width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; border: 3px solid #334155; border-top-color: #3b82f6;
   animation: timBootSpin .8s linear infinite; }
-.tim-boot-text { color: #e2e8f0; font-size: 14px; font-weight: 600; letter-spacing: .01em; }
+.tim-boot-text { color: #e2e8f0; font-size: 15px; font-weight: 700; letter-spacing: .01em; }
 @keyframes timBootSpin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .tim-boot-spinner { animation-duration: 1.6s; } }
+/* Progress bar */
+.tim-boot-bar { height: 8px; border-radius: 5px; background: #0f172a; overflow: hidden; }
+.tim-boot-bar-fill { height: 100%; width: 0%; border-radius: 5px; background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  transition: width .25s ease; }
+.tim-boot-pct { color: #93c5fd; font-size: 12px; font-weight: 700; text-align: right; margin-top: -6px; }
+/* Step checklist */
+.tim-boot-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.tim-boot-step { display: flex; align-items: center; gap: 9px; font-size: 13px; color: #64748b; }
+.tim-boot-step-ico { width: 18px; text-align: center; font-weight: 800; flex-shrink: 0; }
+.tim-boot-step-label { flex: 1; }
+.tim-boot-step.pending  { color: #64748b; }
+.tim-boot-step.pending  .tim-boot-step-ico { color: #475569; }
+.tim-boot-step.running  { color: #e2e8f0; font-weight: 600; }
+.tim-boot-step.running  .tim-boot-step-ico { color: #60a5fa; display: inline-block; animation: timBootSpin 1s linear infinite; }
+.tim-boot-step.done     { color: #cbd5e1; }
+.tim-boot-step.done     .tim-boot-step-ico { color: #22c55e; }
+.tim-boot-step.skipped  { color: #475569; }
+.tim-boot-step.skipped  .tim-boot-step-label { text-decoration: line-through; }
+.tim-boot-step-frac { color: #93c5fd; font-size: 11px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .tim-boot-spinner, .tim-boot-step.running .tim-boot-step-ico { animation-duration: 1.8s; }
+  .tim-boot-bar-fill { transition: none; }
+}
 .tim-audio-status { font-size:12px; font-weight:600; align-self:center; }
 .tim-audio-status.ok      { color:#166534; }
 .tim-audio-status.blocked { color:#991b1b; }

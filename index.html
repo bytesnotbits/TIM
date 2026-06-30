@@ -20,15 +20,23 @@
   <div id="timFlash" aria-hidden="true"></div>
 
   <!-- Boot loading overlay — visible immediately on load, hidden by app.js once
-       the cached data + GitHub sync finish (so a refresh never looks frozen). -->
+       the cached data + sync finish (so a refresh never looks frozen). Shows a
+       step checklist + overall progress bar/percentage. -->
   <div id="timBootOverlay" role="status" aria-live="polite">
     <div class="tim-boot-card">
-      <div class="tim-boot-spinner" aria-hidden="true"></div>
-      <div id="timBootOverlayText" class="tim-boot-text">Loading…</div>
+      <div class="tim-boot-head">
+        <div class="tim-boot-spinner" aria-hidden="true"></div>
+        <div id="timBootOverlayText" class="tim-boot-text">Loading…</div>
+      </div>
+      <div class="tim-boot-bar"><div id="timBootBar" class="tim-boot-bar-fill"></div></div>
+      <div id="timBootPct" class="tim-boot-pct">0%</div>
+      <ul id="timBootSteps" class="tim-boot-steps"></ul>
     </div>
   </div>
-  <!-- Failsafe: hide the overlay even if app.js never runs/throws on boot. -->
-  <script>setTimeout(function(){var o=document.getElementById('timBootOverlay');if(o)o.classList.add('hidden');},25000);</script>
+  <!-- Failsafe: hide the overlay only if app.js never runs at all (total script
+       failure). app.js cancels this on boot and uses a progress watchdog
+       instead, so a slow-but-healthy load is never cut off. -->
+  <script>window.__timBootFailsafe=setTimeout(function(){var o=document.getElementById('timBootOverlay');if(o)o.classList.add('hidden');},60000);</script>
 
   <!-- Hidden utility element (referenced by JS, not displayed) -->
   <textarea id="mapPreview" style="display:none;" readonly></textarea>

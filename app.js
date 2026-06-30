@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.28.01";
+const APP_VERSION = "v2.29.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2353,7 +2353,8 @@ function ghSyncNow(silent) {
   var btn = $("ghSyncNowBtn");
   if (btn) btn.disabled = true;
   ghSetStatus("Syncing from " + ghConfig.owner + "/" + ghConfig.repo + "…", "info");
-  timSetBootOverlay("Syncing your data…");
+  timSetBootOverlay("Connecting to the data store…");
+  timBootStep("connect", "running");
 
   var shas = {};
   return ghListDataDir().then(function(listing) {
@@ -2363,10 +2364,18 @@ function ghSyncNow(silent) {
     if (!files.length) throw new Error("The '" + GH_DATA_DIR + "/' folder has no .json files.");
     files.forEach(function(f) { shas[f.path] = f.sha; });
 
+    timBootStep("connect", "done");
+    timSetBootOverlay("Downloading data files…");
+    timBootStep("download", "running", 0);
+    var got = 0, totalF = files.length;
+
     return Promise.all([
       TimDB.get(GH_BASE_KEY),
       Promise.all(files.map(function(f) {
-        return ghFetchJsonFile(f.path).then(function(json) { return { name: f.name.toLowerCase(), json: json }; });
+        return ghFetchJsonFile(f.path).then(function(json) {
+          got++; timBootStep("download", "running", got / totalF);   // real X-of-N progress
+          return { name: f.name.toLowerCase(), json: json };
+        });
       }))
     ]);
   }).then(function(arr) {
@@ -2377,40 +2386,52 @@ function ghSyncNow(silent) {
     // history so the merge preserves it instead of dropping every record.
     if (!asm.hadHistoryShards) remote.history = history;
 
-    // 3-way merge: base (last synced) ← local (in-memory) + remote (repo).
-    var localPayload = buildExportPayload();
-    var ctx = {
-      local:  { device: (ghConfig.deviceLabel || "this device"), user: timGetUsername() || "" },
-      remote: { device: "repo", user: "" },
-      now: new Date().toISOString()
-    };
+    timBootStep("download", "done");
     timSetBootOverlay("Merging changes…");
-    var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
+    timBootStep("merge", "running");
+    // Yield one paint so the bar/labels update before the merge+render block,
+    // which runs synchronously and blocks repaints until it finishes.
+    return _nextPaint().then(function() {
+      // 3-way merge: base (last synced) ← local (in-memory) + remote (repo).
+      var localPayload = buildExportPayload();
+      var ctx = {
+        local:  { device: (ghConfig.deviceLabel || "this device"), user: timGetUsername() || "" },
+        remote: { device: "repo", user: "" },
+        now: new Date().toISOString()
+      };
+      var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
+      timBootStep("merge", "done");
 
-    loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
-    timSaveMasterCache();
+      timSetBootOverlay("Building the screen…");
+      timBootStep("render", "running");
+      loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+      timBootStep("render", "done");
+      timSaveMasterCache();
 
-    // Fold conflicts from this merge AND the repo's shared log into ours.
-    ghMergeConflictEntries(asm.conflicts);
-    ghMergeConflictEntries(res.conflicts);
-    ghSaveConflictLog();
-    ghRenderConflictBadge();
+      // Fold conflicts from this merge AND the repo's shared log into ours.
+      ghMergeConflictEntries(asm.conflicts);
+      ghMergeConflictEntries(res.conflicts);
+      ghSaveConflictLog();
+      ghRenderConflictBadge();
 
-    // Base = the repo state we merged against. SHAs = what the repo has now.
-    TimDB.set(GH_BASE_KEY, remote).catch(function(){});
-    TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
+      // Base = the repo state we merged against. SHAs = what the repo has now.
+      TimDB.set(GH_BASE_KEY, remote).catch(function(){});
+      TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
 
-    // If the merge produced local-only changes, they still need publishing.
-    var needsPush = _ghPayloadDiffers(res.merged, remote);
-    if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
+      // If the merge produced local-only changes, they still need publishing.
+      var needsPush = _ghPayloadDiffers(res.merged, remote);
+      if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
 
-    var pCount = Object.keys(PRODUCT_MAP).length;
-    var hCount = (history.records || []).length;
-    var uc = ghUnresolvedConflictCount();
-    var msg = "Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.";
-    if (needsPush) msg += " Merged local changes — push to publish.";
-    if (uc) msg += " ⚠ " + uc + " conflict(s) need review.";
-    ghSetStatus(msg, uc ? "err" : "ok");
+      timBootStep("finalize", "done");
+
+      var pCount = Object.keys(PRODUCT_MAP).length;
+      var hCount = (history.records || []).length;
+      var uc = ghUnresolvedConflictCount();
+      var msg = "Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.";
+      if (needsPush) msg += " Merged local changes — push to publish.";
+      if (uc) msg += " ⚠ " + uc + " conflict(s) need review.";
+      ghSetStatus(msg, uc ? "err" : "ok");
+    });
   }).catch(function(err) {
     ghSetStatus("Sync failed: " + (err && err.message ? err.message : err), "err");
     // A failed boot sync never rendered — fall back to the cached data so the
@@ -2430,13 +2451,13 @@ function ghInit() {
   ghBindOnlineRetry();
   ghLoadConflictLog().then(function() { ghRenderConflictBadge(); });
   return ghLoadSettings().then(function(configured) {
-    if (!configured) { if (!_timRendered) timRenderRestored(); return; }
+    if (!configured) { _bootRenderCacheStep(); return; }
     return TimDB.get(GH_PENDING_KEY).then(function(pending) {
       if (pending) {
         // Local master holds offline edits not yet on GitHub. PUSH them — do
         // NOT auto-pull, which would overwrite the edits before they're saved.
         // The push doesn't render, so show the cached data now.
-        if (!_timRendered) timRenderRestored();
+        _bootRenderCacheStep();
         if (navigator.onLine) {
           ghSetStatus("Unpushed local changes detected — pushing to GitHub…", "info");
           return ghPushToGitHub({ auto: true });
@@ -2446,12 +2467,12 @@ function ghInit() {
         return ghSyncNow(true); // renders once via the merge result
       } else {
         // Auto-sync off, or offline — show the locally cached data.
-        if (!_timRendered) timRenderRestored();
+        _bootRenderCacheStep();
         if (ghConfig.autoLoad !== false) ghSetStatus("Offline — showing locally saved data. Sync when you reconnect.", "info");
       }
     }).catch(function() {
       if (ghConfig.autoLoad !== false && navigator.onLine) return ghSyncNow(true);
-      if (!_timRendered) timRenderRestored();
+      _bootRenderCacheStep();
     });
   });
 }
@@ -8532,6 +8553,18 @@ function timRenderRestored() {
   _timRendered = true;
 }
 
+// Boot branches that skip the network sync: flag the network steps skipped and
+// render the cached data under the "render" step. finalize is left for
+// timBootEnd() so the bar doesn't read 100% before a trailing push completes.
+function _bootRenderCacheStep() {
+  timBootStep("connect", "skipped");
+  timBootStep("download", "skipped");
+  timBootStep("merge", "skipped");
+  timBootStep("render", "running");
+  if (!_timRendered) timRenderRestored();
+  timBootStep("render", "done");
+}
+
 // ── Boot loading overlay ───────────────────────────────────────────
 // Full-screen feedback so a refresh's data-load + GitHub sync (which can block
 // the main thread for several seconds) doesn't read as a frozen/broken app.
@@ -8549,6 +8582,104 @@ function timSetBootOverlay(msg) {
 }
 function timHideBootOverlay() {
   var o = $("timBootOverlay"); if (o) o.classList.add("hidden");
+  if (_bootProg && _bootProg.watchdog) { clearTimeout(_bootProg.watchdog); _bootProg.watchdog = null; }
+}
+
+// Resolve after the browser has had a chance to paint (two RAFs). Used to flush
+// a progress update to screen before a synchronous, repaint-blocking step.
+function _nextPaint() {
+  return new Promise(function(resolve) {
+    if (typeof requestAnimationFrame !== "function") { setTimeout(resolve, 0); return; }
+    requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+  });
+}
+
+// ── Boot progress controller ───────────────────────────────────────
+// Drives the step checklist + percentage + bar in the boot overlay. All calls
+// are no-ops once boot finishes (_bootProg cleared), so the same instrumentation
+// inside ghSyncNow is silent on a manual, post-boot Sync.
+var _bootProg = null;
+// Watchdog: hide the overlay only after this long with NO progress at all. It is
+// re-armed on every step update, so a large-but-healthy DB that keeps making
+// progress never trips it — only a genuine stall does. This scales with data
+// size automatically; there is no fixed total-time cap on the work itself.
+var BOOT_IDLE_MS = 45000;
+
+function _bootArmWatchdog() {
+  if (!_bootProg) return;
+  if (_bootProg.watchdog) clearTimeout(_bootProg.watchdog);
+  _bootProg.watchdog = setTimeout(function() {
+    // No progress for BOOT_IDLE_MS — assume a hang and stop blocking the screen.
+    // (The underlying work, if any, still continues; this only frees the UI.)
+    timHideBootOverlay();
+  }, BOOT_IDLE_MS);
+}
+
+function timBootBegin(steps) {
+  _bootProg = { steps: [], idx: {}, watchdog: null };
+  (steps || []).forEach(function(s, i) {
+    _bootProg.idx[s.id] = i;
+    _bootProg.steps.push({ id: s.id, label: s.label, status: "pending", frac: 0 });
+  });
+  _bootRenderSteps();
+  _bootRenderBar(false);
+  _bootArmWatchdog();
+}
+
+function timBootStep(id, status, frac) {
+  if (!_bootProg) return;
+  var i = _bootProg.idx[id];
+  if (i == null) return;
+  var st = _bootProg.steps[i];
+  if (status) st.status = status;                 // "running" | "done" | "skipped"
+  if (frac != null) st.frac = Math.max(0, Math.min(1, frac));
+  if (status === "done") st.frac = 1;
+  // When a step starts, close out any earlier step still marked running.
+  if (status === "running") {
+    for (var j = 0; j < i; j++) {
+      if (_bootProg.steps[j].status === "running") { _bootProg.steps[j].status = "done"; _bootProg.steps[j].frac = 1; }
+    }
+  }
+  _bootRenderSteps();
+  _bootRenderBar(false);
+  _bootArmWatchdog();
+}
+
+function timBootEnd() {
+  if (!_bootProg) return;
+  _bootProg.steps.forEach(function(s) { if (s.status !== "skipped") { s.status = "done"; s.frac = 1; } });
+  _bootRenderSteps();
+  _bootRenderBar(true);
+  if (_bootProg.watchdog) clearTimeout(_bootProg.watchdog);
+  _bootProg = null;
+}
+
+function _bootPercent() {
+  if (!_bootProg) return 0;
+  var counted = _bootProg.steps.filter(function(s) { return s.status !== "skipped"; });
+  if (!counted.length) return 100;
+  var sum = counted.reduce(function(a, s) { return a + (s.status === "done" ? 1 : s.frac); }, 0);
+  return Math.round((sum / counted.length) * 100);
+}
+
+function _bootRenderBar(full) {
+  var pct = full ? 100 : _bootPercent();
+  var bar = $("timBootBar"); if (bar) bar.style.width = pct + "%";
+  var lbl = $("timBootPct"); if (lbl) lbl.textContent = pct + "%";
+}
+
+function _bootRenderSteps() {
+  var ul = $("timBootSteps");
+  if (!ul || !_bootProg) return;
+  ul.innerHTML = _bootProg.steps.map(function(s) {
+    var ico = s.status === "done" ? "✓" : s.status === "running" ? "↻" : s.status === "skipped" ? "–" : "○";
+    var frac = (s.status === "running" && s.frac > 0 && s.frac < 1)
+      ? ' <span class="tim-boot-step-frac">' + Math.round(s.frac * 100) + '%</span>' : "";
+    return '<li class="tim-boot-step ' + s.status + '">' +
+             '<span class="tim-boot-step-ico">' + ico + '</span>' +
+             '<span class="tim-boot-step-label">' + escapeHtml(s.label) + '</span>' + frac +
+           '</li>';
+  }).join("");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -10334,16 +10465,28 @@ try {
   }
 } catch(e) {}
 
-// Boot: show the loading overlay, restore the cached dataset into memory (no
-// render), then let ghInit either auto-sync (which renders once off the merge)
-// or render the cache directly. Hide the overlay when the chain settles. A
-// safety timer guarantees the overlay never traps the user if something hangs.
+// Boot: show the loading overlay with a step checklist, restore the cached
+// dataset into memory (no render), then let ghInit either auto-sync (which
+// renders once off the merge, advancing the connect/download/merge/render steps)
+// or render the cache directly. Hide the overlay when the chain settles. The
+// progress watchdog (not a fixed timer) guards against a true hang and scales
+// with data size since it only fires on prolonged no-progress.
+if (window.__timBootFailsafe) { clearTimeout(window.__timBootFailsafe); window.__timBootFailsafe = null; }
 timShowBootOverlay("Loading saved data…");
-var _timBootSafety = setTimeout(timHideBootOverlay, 25000);
+timBootBegin([
+  { id: "restore",  label: "Load saved data" },
+  { id: "connect",  label: "Connect to the data store" },
+  { id: "download", label: "Download data files" },
+  { id: "merge",    label: "Merge changes" },
+  { id: "render",   label: "Build the screen" },
+  { id: "finalize", label: "Save & finish" }
+]);
+timBootStep("restore", "running");
 timLoadMasterCache()
-  .then(ghInit, ghInit)
+  .then(function(r) { timBootStep("restore", "done"); return ghInit(); },
+        function(e) { timBootStep("restore", "done"); return ghInit(); })
   .catch(function(){})
-  .then(function() { clearTimeout(_timBootSafety); timHideBootOverlay(); });
+  .then(function() { timBootEnd(); timHideBootOverlay(); });
 timInitUsername();
 timInitVoice();
 renderInvSessionUI();
