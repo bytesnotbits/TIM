@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.26.01";
+const APP_VERSION = "v2.27.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8451,34 +8451,35 @@ function invProcessQuantsBaselineCsv(text, fileName) {
 const TIM_MASTER_CACHE_KEY = "tim_master_cache_v1";
 
 function timSaveMasterCache() {
-  TimDB.set(TIM_MASTER_CACHE_KEY, { product_map: PRODUCT_MAP, history: history }).catch(function(){});
+  // Persist the FULL dataset (same shape pushed to GitHub), not just
+  // product_map + history. If any shared collection is missing from the local
+  // cache, the next GitHub pull's 3-way merge reads the gap as a local deletion
+  // and drops that data on merge — this silently wiped imported reel counts
+  // (and every other inventory_events/sessions/recount row) on every refresh.
+  TimDB.set(TIM_MASTER_CACHE_KEY, buildExportPayload()).catch(function(){});
 }
 
 function timLoadMasterCache() {
   return TimDB.get(TIM_MASTER_CACHE_KEY).then(function(parsed) {
     if (!parsed) return false;
-    var hadData = false;
-    if (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) {
-      PRODUCT_MAP = parsed.product_map;
-      appData.product_map = PRODUCT_MAP;
-      $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
-      hadData = true;
+    var hadData = (parsed.product_map && typeof parsed.product_map === "object" && Object.keys(parsed.product_map).length) ||
+                  (parsed.history && Array.isArray(parsed.history.records) && parsed.history.records.length) ||
+                  (Array.isArray(parsed.inventory_events) && parsed.inventory_events.length);
+    // Route the cached payload through the same loader the GitHub sync and file
+    // import use, so EVERY shared collection (inventory_events/sessions,
+    // recounts, quants, boxes, barcodes) is restored — keeping the in-memory
+    // state the merge compares against faithful to what was last saved.
+    try {
+      loadSourceData(parsed, "local cache");
+    } catch (e) {
+      return false;
     }
-    if (parsed.history && Array.isArray(parsed.history.records)) {
-      history = parsed.history;
-      appData.history = history;
-      hadData = true;
-    }
-    if (hadData) {
-      var pCount = Object.keys(PRODUCT_MAP).length;
-      var hCount = (history.records || []).length;
-      setDropState("historyDropZone", "historyDropStatus", true, "Restored from local cache");
-      $("historyStatus").textContent = pCount + " products, " + hCount + " history records (restored from local cache — load master JSON to refresh).";
-      updateSidebarStatus(1, hCount);
-      prodRenderList();
-      checkReelItemConflicts();
-    }
-    return hadData;
+    var pCount = Object.keys(PRODUCT_MAP).length;
+    var hCount = (history.records || []).length;
+    setDropState("historyDropZone", "historyDropStatus", true, "Restored from local cache");
+    $("historyStatus").textContent = pCount + " products, " + hCount + " history records (restored from local cache — Sync to refresh from GitHub).";
+    updateSidebarStatus(1, hCount);
+    return !!hadData;
   }).catch(function() { return false; });
 }
 
