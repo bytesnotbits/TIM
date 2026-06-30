@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.01";
+const APP_VERSION = "v2.29.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2390,7 +2390,9 @@ function ghSyncNow(silent) {
     timSetBootOverlay("Merging changes…");
     timBootStep("merge", "running");
     // Yield one paint so the bar/labels update before the merge+render block,
-    // which runs synchronously and blocks repaints until it finishes.
+    // which runs synchronously and blocks repaints until it finishes. After each
+    // of these fast final steps, _bootMarkAndSettle holds briefly (boot only) so
+    // the user actually SEES it tick to done before the next one starts.
     return _nextPaint().then(function() {
       // 3-way merge: base (last synced) ← local (in-memory) + remote (repo).
       var localPayload = buildExportPayload();
@@ -2400,37 +2402,44 @@ function ghSyncNow(silent) {
         now: new Date().toISOString()
       };
       var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
-      timBootStep("merge", "done");
 
-      timSetBootOverlay("Building the screen…");
-      timBootStep("render", "running");
-      loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
-      timBootStep("render", "done");
-      timSaveMasterCache();
+      return _bootMarkAndSettle("merge", "done").then(function() {
+        timSetBootOverlay("Building the screen…");
+        timBootStep("render", "running");
+        return _nextPaint().then(function() {
+          loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+          timSaveMasterCache();
+          return _bootMarkAndSettle("render", "done");
+        });
+      }).then(function() {
+        timSetBootOverlay("Saving…");
+        timBootStep("finalize", "running");
+        return _nextPaint().then(function() {
+          // Fold conflicts from this merge AND the repo's shared log into ours.
+          ghMergeConflictEntries(asm.conflicts);
+          ghMergeConflictEntries(res.conflicts);
+          ghSaveConflictLog();
+          ghRenderConflictBadge();
 
-      // Fold conflicts from this merge AND the repo's shared log into ours.
-      ghMergeConflictEntries(asm.conflicts);
-      ghMergeConflictEntries(res.conflicts);
-      ghSaveConflictLog();
-      ghRenderConflictBadge();
+          // Base = the repo state we merged against. SHAs = what the repo has now.
+          TimDB.set(GH_BASE_KEY, remote).catch(function(){});
+          TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
 
-      // Base = the repo state we merged against. SHAs = what the repo has now.
-      TimDB.set(GH_BASE_KEY, remote).catch(function(){});
-      TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
+          // If the merge produced local-only changes, they still need publishing.
+          var needsPush = _ghPayloadDiffers(res.merged, remote);
+          if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
 
-      // If the merge produced local-only changes, they still need publishing.
-      var needsPush = _ghPayloadDiffers(res.merged, remote);
-      if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
+          var pCount = Object.keys(PRODUCT_MAP).length;
+          var hCount = (history.records || []).length;
+          var uc = ghUnresolvedConflictCount();
+          var msg = "Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.";
+          if (needsPush) msg += " Merged local changes — push to publish.";
+          if (uc) msg += " ⚠ " + uc + " conflict(s) need review.";
+          ghSetStatus(msg, uc ? "err" : "ok");
 
-      timBootStep("finalize", "done");
-
-      var pCount = Object.keys(PRODUCT_MAP).length;
-      var hCount = (history.records || []).length;
-      var uc = ghUnresolvedConflictCount();
-      var msg = "Synced " + new Date().toLocaleTimeString() + " — " + pCount + " products · " + hCount + " history records.";
-      if (needsPush) msg += " Merged local changes — push to publish.";
-      if (uc) msg += " ⚠ " + uc + " conflict(s) need review.";
-      ghSetStatus(msg, uc ? "err" : "ok");
+          return _bootMarkAndSettle("finalize", "done");
+        });
+      });
     });
   }).catch(function(err) {
     ghSetStatus("Sync failed: " + (err && err.message ? err.message : err), "err");
@@ -8594,6 +8603,24 @@ function _nextPaint() {
   });
 }
 
+// Brief, deliberate pauses so a human eye can register the fast final steps
+// completing before the overlay leaves. Kept small — total added ~1.2s.
+var BOOT_STEP_SETTLE_MS = 260;  // hold after each fast step ticks to done
+var BOOT_FINAL_HOLD_MS  = 500;  // hold at 100% before the overlay disappears
+
+function _bootSettle(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms == null ? BOOT_STEP_SETTLE_MS : ms); });
+}
+
+// Mark a step done (or any status) and, ONLY during boot, paint it and hold
+// briefly so it's visibly seen. A no-op delay post-boot (manual Sync has no
+// overlay), so a manual Sync is never slowed by these pauses.
+function _bootMarkAndSettle(id, status, frac) {
+  timBootStep(id, status, frac);
+  if (!_bootProg) return Promise.resolve();
+  return _nextPaint().then(function() { return _bootSettle(); });
+}
+
 // ── Boot progress controller ───────────────────────────────────────
 // Drives the step checklist + percentage + bar in the boot overlay. All calls
 // are no-ops once boot finishes (_bootProg cleared), so the same instrumentation
@@ -10520,7 +10547,11 @@ timLoadMasterCache()
   .then(function(r) { timBootStep("restore", "done"); return ghInit(); },
         function(e) { timBootStep("restore", "done"); return ghInit(); })
   .catch(function(){})
-  .then(function() { timBootEnd(); timHideBootOverlay(); });
+  .then(function() {
+    timBootEnd();                          // fills the bar to 100%, all steps done
+    return _bootSettle(BOOT_FINAL_HOLD_MS); // hold so 100% is seen before it leaves
+  })
+  .then(function() { timHideBootOverlay(); });
 timInitUsername();
 timInitVoice();
 renderInvSessionUI();

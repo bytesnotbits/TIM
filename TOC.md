@@ -138,6 +138,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `_bootArmWatchdog()` / `_bootClearTimers()` / `BOOT_SLOW_MS` / `BOOT_STUCK_MS` | Stall detection (escalating, never auto-hides): after `BOOT_SLOW_MS` (12s) of no progress shows a "still working…" note; after `BOOT_STUCK_MS` (45s) surfaces a visible stall notice + Reload. Both re-arm on every step, so they fire on genuine inactivity only — scales with data size. A *synchronous* hang can't fire them (timer can't run while the thread is blocked); the browser surfaces that itself |
 | `_bootShowStuck()` / `_bootHideStuck()` / `_bootSetNote(msg)` | Toggle the visible stall banner / reassurance line in the overlay |
 | `_nextPaint()` | Resolve after two RAFs — flush a progress update to screen before a synchronous, repaint-blocking step (merge/render) |
+| `_bootSettle(ms)` / `_bootMarkAndSettle(id,status,frac)` / `BOOT_STEP_SETTLE_MS` / `BOOT_FINAL_HOLD_MS` | Brief deliberate pauses (boot only) so the fast final steps (merge/render/finalize) are visibly seen ticking to done, plus a hold at 100% before the overlay leaves. `_bootMarkAndSettle` is a no-op delay post-boot (`_bootProg` null) so a manual Sync is never slowed |
 | `invLoadStorageRaw()` | Raw IDB read for current session |
 | `invStorageAvailable()` | Check IndexedDB availability |
 | `scheduleInvAutosave()` | Debounced (500ms) autosave trigger |
