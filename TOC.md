@@ -374,7 +374,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 | Function | Purpose |
 |----------|---------|
-| `invProcessScan()` | **Main scan entry point** — reads input, routes to handler |
+| `invProcessScan()` | **Main scan entry point** — reads input, routes to handler. In Serial/FSAN mode, forces `unknown` and coincidental `box_id` classifications (a value colliding with a key in the per-device, unsynced box registry) back to `serial` — an explicit mode choice always wins over an auto-detected box hit |
 | `invClassifyScan(raw)` | Detect scan type: `fsan \| box_id \| location \| reel_number \| serial \| item_number \| barcode \| mac \| unknown` |
 | `invUpdateDetectedBadge(raw)` | Update scan-type badge in UI |
 | `invGetScanMeta(type, value)` | Resolve item/description metadata for scan value |

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.09";
+const APP_VERSION = "v2.29.10";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6433,8 +6433,13 @@ function invProcessScan() {
     return;
   }
 
-  // In serial mode with no override, default unknown scans to serial
-  if (invScanMode === "serial" && !override && scanType === "unknown") {
+  // In serial mode with no override, default unknown scans to serial. Also
+  // catch a "box_id" classification — that only means the value coincidentally
+  // matches a key in the box registry (per-device, never GitHub-synced, so a
+  // stale/empty test box left over on one device can collide with a real
+  // serial on that device only) — it must never intercept an explicit
+  // Serial/FSAN-mode scan.
+  if (invScanMode === "serial" && !override && (scanType === "unknown" || scanType === "box_id")) {
     scanType = "serial";
   }
   // In item mode with no override, treat any non-location scan as a bulk item number
