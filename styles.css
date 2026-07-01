@@ -447,16 +447,16 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 #timFlash { position: fixed; inset: 0; z-index: 99999; pointer-events: none; opacity: 0; }
 #timFlash.flash-ok    { background:#22c55e; animation: timFlashOk 0.38s ease-out; }
 #timFlash.flash-warn  { background:#f59e0b; animation: timFlashWarn 0.75s ease-out; }
-#timFlash.flash-error { background:#dc2626; box-shadow: inset 0 0 0 12px #991b1b; animation: timFlashError 1.35s linear; }
+#timFlash.flash-error { background:#dc2626; box-shadow: inset 0 0 0 12px #991b1b; animation: timFlashError 0.65s linear; }
 @keyframes timFlashOk    { 0% { opacity:0; } 28% { opacity:.22; } 100% { opacity:0; } }
 @keyframes timFlashWarn  { 0%,100% { opacity:0; } 18% { opacity:.45; } 45% { opacity:.10; } 70% { opacity:.45; } }
-@keyframes timFlashError { 0% { opacity:0; } 6% { opacity:.80; } 16% { opacity:.05; } 26% { opacity:.80; } 36% { opacity:.05; } 46% { opacity:.80; } 56% { opacity:.05; } 66% { opacity:.80; } 80% { opacity:.10; } 100% { opacity:0; } }
+@keyframes timFlashError { 0% { opacity:0; } 12% { opacity:.80; } 31% { opacity:.05; } 50% { opacity:.80; } 70% { opacity:.10; } 100% { opacity:0; } }
 /* Reduced motion: a single steady flash instead of strobing (error still
    holds long and bold so it stays unmistakable). */
 @media (prefers-reduced-motion: reduce) {
   #timFlash.flash-ok    { animation: timFlashSteady 0.4s ease-out; }
   #timFlash.flash-warn  { animation: timFlashSteady 0.8s ease-out; }
-  #timFlash.flash-error { animation: timFlashSteadyError 1.35s ease-out; }
+  #timFlash.flash-error { animation: timFlashSteadyError 0.65s ease-out; }
 }
 @keyframes timFlashSteady      { 0% { opacity:0; } 25% { opacity:.30; } 100% { opacity:0; } }
 @keyframes timFlashSteadyError { 0% { opacity:0; } 10% { opacity:.75; } 75% { opacity:.6; } 100% { opacity:0; } }

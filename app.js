@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.07";
+const APP_VERSION = "v2.29.09";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3360,11 +3360,12 @@ var _timTonePatterns = {
   bulk:       [{ f: 720,  t: 0,    d: 0.11, v: 0.26, shape: "triangle" }],
   location:   [{ f: 1100, t: 0,    d: 0.06, v: 0.26 }, { f: 770, t: 0.065, d: 0.09, v: 0.24 }],
   box:        [{ f: 600,  t: 0,    d: 0.07, v: 0.28 }, { f: 900, t: 0.07,  d: 0.07, v: 0.28 }, { f: 1200, t: 0.14, d: 0.11, v: 0.28 }],
+  manual:     [{ f: 523,  t: 0,    d: 0.08, v: 0.26, shape: "triangle" }, { f: 659, t: 0.09, d: 0.08, v: 0.26, shape: "triangle" },
+               { f: 784,  t: 0.18, d: 0.14, v: 0.28, shape: "triangle" }],
   mode:       [{ f: 520,  t: 0,    d: 0.05, v: 0.16 }],
   info:       [{ f: 520,  t: 0,    d: 0.05, v: 0.14 }],
   warn:       [{ f: 440,  t: 0,    d: 0.16, v: 0.34, shape: "square" }, { f: 440, t: 0.21, d: 0.16, v: 0.34, shape: "square" }],
-  error:      [{ f: 240,  t: 0,    d: 0.18, v: 0.50, shape: "square" }, { f: 175, t: 0.22, d: 0.20, v: 0.50, shape: "square" },
-               { f: 240,  t: 0.48, d: 0.18, v: 0.50, shape: "square" }, { f: 175, t: 0.70, d: 0.28, v: 0.50, shape: "square" }]
+  error:      [{ f: 240,  t: 0,    d: 0.18, v: 0.50, shape: "square" }, { f: 175, t: 0.22, d: 0.20, v: 0.50, shape: "square" }]
 };
 
 // Synthesize a tone pattern into a 16-bit mono WAV data-URI.
@@ -3496,7 +3497,7 @@ function timFlash(severity) {
   void el.offsetWidth;  // restart the animation even on back-to-back results
   el.classList.add(cls);
   clearTimeout(_timFlashTimer);
-  var dur = severity === "error" ? 1350 : severity === "warn" ? 750 : 380;
+  var dur = severity === "error" ? 650 : severity === "warn" ? 750 : 380;
   _timFlashTimer = setTimeout(function(){ el.classList.remove(cls); }, dur);
 }
 
@@ -3990,6 +3991,8 @@ function invResetSessionState() {
   invActivityLog     = [];
   invLastScannedBox  = "";
   invLastBulkEventId = null;
+  invSerialPromptStickyItem = "";
+  invSerialPromptStickyOn   = false;
   invBoxClearActive();      // resets invActiveBox/override/prior + re-renders box bar
   invSetScanMode("auto");   // resets scan mode + its toggle UI
   invSetLocation("");       // clears current location + its UI
@@ -7269,6 +7272,12 @@ var invSerialPromptScan = "";
 var invSerialPromptType = "";
 var invSerialPromptLoc  = "";
 var invSerialPromptMode = "serialized"; // "serialized" | "bulk" | "reel"
+// "Sticky" item # for a run of unknown-device commits (e.g. a batch of new
+// Tarana serials not yet in the product catalog) — set once, applied to
+// every subsequent unknown-device commit until unticked. Reset with the
+// session (invResetSessionState) so it never leaks into the next one.
+var invSerialPromptStickyItem = "";
+var invSerialPromptStickyOn   = false;
 
 function invShowSerialPrompt(scannedValue, scanType, location) {
   invSerialPromptScan = scannedValue || "";
@@ -7323,11 +7332,17 @@ function invRenderSerialPromptBody() {
         '<label>FSAN' +
           '<input id="invSerialPromptFsan" type="text" placeholder="e.g. CXNK00A1B2C3" autocomplete="off" style="text-transform:uppercase;" value="' +
           (invSerialPromptType === "fsan" ? escapeHtml(invSerialPromptScan) : "") + '" /></label>' +
+        '<label>Item # <span style="font-weight:400;">(optional)</span>' +
+          '<input id="invSerialPromptItem" type="text" placeholder="e.g. 1190OFF" autocomplete="off" style="text-transform:uppercase;" value="' +
+          escapeHtml(invSerialPromptStickyOn ? invSerialPromptStickyItem : "") + '" /></label>' +
         '<label>MAC Address <span style="font-weight:400;">(optional)</span>' +
           '<input id="invSerialPromptMac" type="text" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off" style="text-transform:uppercase;" /></label>' +
         '<label>Notes <span style="font-weight:400;">(optional)</span>' +
           '<input id="invSerialPromptNotes" type="text" placeholder="e.g. found loose, no box" ' +
           'onkeydown="if(event.key===\'Enter\'){event.preventDefault();invCommitSerialPrompt();}" /></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;font-weight:400;grid-column:1/-1;">' +
+          '<input id="invSerialPromptItemSticky" type="checkbox"' + (invSerialPromptStickyOn ? ' checked' : '') + ' style="width:auto;" />' +
+          'Keep this Item # for the next unknown devices too</label>' +
       '</div>' +
       '<div style="display:flex;gap:8px;">' +
         '<button onclick="invCommitSerialPrompt()" style="flex:1;padding:9px;">Commit Device</button>' +
@@ -7382,8 +7397,9 @@ function invCommitSerialPrompt() {
   var serial = (($("invSerialPromptSerial") ? $("invSerialPromptSerial").value : "") || "").trim().toUpperCase();
   var fsan   = (($("invSerialPromptFsan")   ? $("invSerialPromptFsan").value   : "") || "").trim().toUpperCase();
   var mac    = (($("invSerialPromptMac")    ? $("invSerialPromptMac").value    : "") || "").trim().toUpperCase();
+  var itemNumber = (($("invSerialPromptItem") ? $("invSerialPromptItem").value : "") || "").trim().toUpperCase();
   var notes  = (($("invSerialPromptNotes")  ? $("invSerialPromptNotes").value  : "") || "").trim();
-  var ctx    = sanitizeScannerValue($("invScanItem") ? $("invScanItem").value || "" : "", { uppercase: true });
+  var sticky = $("invSerialPromptItemSticky") ? $("invSerialPromptItemSticky").checked : false;
 
   if (!serial && !fsan) {
     alert("Enter at least a Serial Number or FSAN.");
@@ -7402,12 +7418,17 @@ function invCommitSerialPrompt() {
     return;
   }
 
-  var itemNumber = ctx || "";
   var description = "";
   if (itemNumber) {
     var mm = findProductMapMatch(itemNumber);
     if (mm) description = getMapDescription(mm.entry);
   }
+
+  // Carry the item # forward to the next unknown-device commit if the user
+  // ticked "keep this" — lets a run of new serials (e.g. a batch of Tarana
+  // devices not yet in the catalog) get the same item # without retyping.
+  invSerialPromptStickyOn   = sticky;
+  invSerialPromptStickyItem = sticky ? itemNumber : "";
 
   var eventData = {
     scanType:     invSerialPromptType,
@@ -7426,7 +7447,9 @@ function invCommitSerialPrompt() {
   var ids = [];
   if (serial) ids.push("S/N: " + serial);
   if (fsan)   ids.push("FSAN: " + fsan);
-  invSetScanFeedback("Committed (manual): " + ids.join("  "), "ok");
+  invSetScanFeedback("Record created (manual): " + ids.join("  ") +
+    (itemNumber ? "  Item: " + itemNumber : ""), "ok", "", "manual");
+  invSpeak("Record created");
   $("invScanInput").value = "";
   invHideSerialPrompt();
 }

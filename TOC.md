@@ -513,7 +513,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 |----------|---------|
 | `invShowSerialPrompt(value, type, loc)` | Show "unknown device" entry dialog |
 | `invHideSerialPrompt()` | Close dialog |
-| `invCommitSerialPrompt()` | Validate + record manually-entered device |
+| `invCommitSerialPrompt()` | Validate + record manually-entered device; includes an optional Item # field with a "sticky" checkbox that carries the item # forward to the next unknown-device commit (for a run of new serials, e.g. an uncatalogued product line); speaks "Record created" + distinct `manual` tone since this creates a new record rather than confirming an existing one |
 | `invCancelSerialPrompt()` | Abandon + log exception |
 
 ---
