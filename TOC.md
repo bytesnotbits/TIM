@@ -341,8 +341,9 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `invAutoRestoreSession()` | **Silent auto-restore on page load** from IDB; guards with `_invAutoRestoreStarted` |
 | `invStartNewSession()` | Create fresh session + autosave |
 | `invResumeSession()` | Manual "Resume Session" button (shows alert) |
-| `invClearSession()` | Clear session from memory + IDB |
+| `invClearSession()` | Clear session from memory + IDB; confirm wording branches on closed (already durably merged — safe) vs. active (real data-loss risk); if closed and Gap Analysis hasn't been run for this session — or was run but is now stale because events were added since (`invActiveEventCount()` mismatch) — an extra warning fires first, since clearing empties `invEvents`, which Gap Analysis/`rcOpenCreateFromGaps` read |
 | `invFinalizeSession()` | Close session + merge events into master data; persists via `timSaveMasterCache()`/`scheduleInvAutosave()` immediately and auto-pushes to GitHub when configured (same durability pattern as the reel-importer/history-commit actions), falling back to the manual "replace your master file" download only when GitHub sync isn't set up |
+| `invGoToRecountManager()` | Sidebar "Recount Manager" button target (enabled once session is closed) — navigates to the Recount subview instead of launching the legacy walkthrough |
 | `invResetSessionState()` | Zero out events/exceptions/recounts/sequence |
 | `invExportBackup()` | Export session JSON to file |
 | `invImportBackup(input)` | Import session from JSON file |
@@ -357,6 +358,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 |----------|---------|
 | `renderInvSessionUI()` | Top-level: show/hide all session sections |
 | `renderInvSessionMeta()` | Update session name/date/counts header |
+| `invRenderClosedSessionBanner()` | Show/hide the "Finalized — reviewing a closed count" banner (above the subview cards, visible regardless of which one is active) whenever the loaded session is `closed`; offers Start New / We're Done — Clear, and reminds to run Gap Analysis (and create a recount session if needed) before clearing |
 | `renderInvSidebarSession()` | Update sidebar session indicator + stats |
 | `renderInvStatusBar()` | Keep sticky toolbar visible; update session name + event count (mode/loc shown by their own controls) |
 | `renderInvEventLog()` | Render event log table (filterable) |
@@ -553,19 +555,20 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `invRunGapAnalysis()` | Entry point — validates prerequisites + calls build |
+| `invActiveEventCount()` | Count of non-voided, non-`void_event` events — same filter `invBuildGapReport()` reads; used to detect a stale Gap Analysis run |
+| `invRunGapAnalysis()` | Entry point — validates prerequisites + calls build; records `invGapAnalysisLastRunSessionId`/`invGapAnalysisLastRunEventCount` so `invClearSession()` can warn if the loaded session hasn't been analyzed yet, or was analyzed before events were later added |
 | `invBuildGapReport()` | **Core**: compare active session events vs `invQuantsBaseline`; returns `{ serialized, bulk, reels }` |
 | `invRenderGapReport(report)` | Render gap report card with collapsible sections + summary chips |
 
 ---
 
-### Inventory — Legacy Recount (Session-Level)
+### Inventory — Legacy Recount (Session-Level) — UNREACHABLE, superseded
 
-> These functions manage recount workflows *within* an active inventory session. For the post-submission Recount Manager, see the **Recount Manager** section below.
+> These functions manage recount workflows *within* an active inventory session — superseded by the **Recount Manager** section below (movement records, resolution status, NISC qty, chain-history XLSX). As of v2.29.15 the sidebar button that launched this (`invStartRecount`) was repointed to `invGoToRecountManager()` instead, so nothing in the UI reaches this code anymore. Kept for now rather than deleted outright — see FEATURES.md for the removal decision.
 
 | Function | Purpose |
 |----------|---------|
-| `invStartRecount()` | Start recount workflow from closed session |
+| `invStartRecount()` | *(unreachable)* Start recount workflow from closed session |
 | `invBuildRecountFromParent()` | Populate recount list from parent session |
 | `invAddToRecountList()` | Manually add item to recount |
 | `renderRecountQueue()` | Render recount queue + progress |

@@ -135,7 +135,7 @@
           <button class="sidebar-inv-btn sidebar-inv-btn-start"   id="invStartBtn"   onclick="invStartNewSession()">+ Start New</button>
           <button class="sidebar-inv-btn sidebar-inv-btn-resume"  id="invResumeBtn"  onclick="invResumeSession()">&#8617; Resume</button>
           <button class="sidebar-inv-btn sidebar-inv-btn-finalize" id="invFinalizeBtn" onclick="invFinalizeSession()" disabled>&#10003; Finalize &amp; Merge</button>
-          <button class="sidebar-inv-btn sidebar-inv-btn-recount" id="invRecountBtn" onclick="invStartRecount()" disabled style="grid-column:1/-1;">&#8635; Start Recount</button>
+          <button class="sidebar-inv-btn sidebar-inv-btn-recount" id="invRecountBtn" onclick="invGoToRecountManager()" disabled style="grid-column:1/-1;">&#8635; Recount Manager</button>
           <button class="sidebar-inv-btn sidebar-inv-btn-secondary" onclick="invExportBackup()">&#8595; Export</button>
           <label class="sidebar-inv-label-btn">&#8593; Import<input id="invImportFile" type="file" accept=".json" style="display:none;" onchange="invImportBackup(this)" /></label>
           <label class="sidebar-inv-label-btn" style="grid-column:1/-1;">&#8593; Import Reels CSV<input id="invReelsCsvFile" type="file" accept=".csv" style="display:none;" onchange="invImportReelsCsv(this)" /></label>
@@ -458,6 +458,20 @@
       <span id="invMetaStatus"></span><span id="invMetaCreated"></span>
       <span id="invMetaUpdated"></span>
       <span id="invMetaEventCount">0</span><span id="invMetaSeq">0</span>
+    </div>
+
+    <!-- Closed-session banner — shown whenever the loaded session has been
+         finalized, so a review of past data can't be mistaken for a live count. -->
+    <div id="invClosedSessionBanner" class="inv-closed-banner hidden">
+      <div class="inv-closed-banner-icon">&#9989;</div>
+      <div class="inv-closed-banner-body">
+        <div class="inv-closed-banner-title">Finalized — you're reviewing a closed count</div>
+        <div id="invClosedSessionMsg" class="small"></div>
+      </div>
+      <div class="inv-closed-banner-actions">
+        <button onclick="invStartNewSession()">+ Start New Count</button>
+        <button class="secondary" onclick="invClearSession()">We're Done — Clear</button>
+      </div>
     </div>
 
     <!-- Scan / Entry Panel -->

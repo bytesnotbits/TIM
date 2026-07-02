@@ -182,15 +182,41 @@ Background push on data changes (debounced), pull on app focus, offline queue, s
 sync indicator, record-level merge (needs stable history record IDs; `updated_at` on
 product entries already in place since v2.03.00).
 
-### Durable backup on inventory finalize
-**Motivation:** `invFinalizeSession` merges the closed session into `appData` in memory
-and downloads a master JSON, but — unlike the Receiving commit actions — it does NOT
-persist `inventory_sessions`/`inventory_events` to local cache and does NOT auto-push to
-GitHub. The downloaded file is the *only* durable copy. If that download is silently
-blocked (iOS download/popup blocking), the user still sees a "Session finalized" success
-message but the finalized merge is lost on reload (the active session is recoverable via
-auto-restore; the merged result is not). v2.12.03 added a guard against finalizing with
-no master loaded (catastrophic-overwrite case), but the no-durable-backup gap remains.
-**Proposed:** mirror Receiving — persist `appData` (or at least the inventory arrays) and
-auto-push on finalize, so a blocked download can't silently lose a count. Spec the sync
-implications before building.
+### ~~Durable backup on inventory finalize~~ — DONE (v2.29.13)
+`invFinalizeSession` now calls `timSaveMasterCache()` + `scheduleInvAutosave()` before the
+download, and auto-pushes to GitHub via `ghPushToGitHub({auto:true})` when configured —
+same pattern as the Receiving commit actions and the reel importer. The downloaded JSON is
+now a backup, not the only durable copy; confirm/alert text branches on `ghConfigured()`.
+
+### Audit other data-mutating actions for the same durability gap
+**Motivation:** the Finalize & Merge bug above (found 2026-07-02, via Joe questioning the
+confusing "replace your master file" wording) was a symptom of an older code path never
+getting updated when GitHub sync's persist-and-push pattern (`timSaveMasterCache()` +
+`ghPushToGitHub({auto:true})`) became the standard for data-mutating actions. TIM has
+grown incrementally to ~8,400 lines; it's likely not the only action still on the old
+"download and manually replace your file" model.
+**Proposed:** grep for `downloadText(timSourceDataFilename()` and any other
+`appData`-mutating action, and check each one against the pattern already used by
+`invConfirmCsvImport` (reel import) and the Receiving history-commit actions
+(`timSaveMasterCache()` + `ghPushToGitHub({auto:true})`, download reframed as backup-only
+when configured). Not urgent — a cleanup pass, not a live bug report.
+
+### Remove the legacy session-level recount system
+**Motivation:** found 2026-07-02 while explaining the recount workflow before its first
+live test — TIM has **two** separate, coexisting recount implementations. The one Joe
+actually built out (NISC qty entry, movement records, resolution status, chain-history
+XLSX — see [[project_recount_scope]], phases 1–6 complete) is the Recount Manager (`rc*`
+prefix, TOC.md "Recount Manager" section). The other is an older, much simpler session-level
+walkthrough (`invStartRecount` and friends, TOC.md "Legacy Recount" section) that was still
+wired to the prominent sidebar "Start Recount" button — the natural next click right after
+Finalize. Testing the real system could easily have started in the wrong one by accident.
+**Done so far (v2.29.15):** the sidebar button now calls `invGoToRecountManager()`, which
+navigates to the real Recount Manager instead. The legacy functions/HTML/CSS
+(`invRecountItems`, `invStartRecount`, `invBuildRecountFromParent`, `renderRecountQueue`,
+`invRecountBeginWalkthrough`/`EndWalkthrough`/`ShowCurrent`/`SaveItem`/`SkipItem`,
+`exportRecountXlsx`, `#invRecountCard` and its CSS) are confirmed (grep) unreferenced by
+anything else, but were left in place rather than deleted in the same pass as the pre-test
+button fix.
+**Proposed:** once the Recount Manager has been live-tested and confirmed as the only
+system anyone uses, delete the legacy code outright (functions, HTML card, CSS, TOC.md
+section) rather than leaving it as dead weight.

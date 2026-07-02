@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.13";
+const APP_VERSION = "v2.29.16";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4148,8 +4148,41 @@ function invClearSession() {
     alert("No active session to clear.");
     return;
   }
-  if (!confirm("Clear the active inventory session?\n\nThis removes all events from memory. " +
-               "Export a backup JSON first if you need to keep the data.")) return;
+  // A closed (finalized) session already has its events durably merged into
+  // the master data (invFinalizeSession) — clearing it here only tidies the
+  // screen. An active session hasn't been merged yet, so clearing it really
+  // does lose that data unless it's been backed up first.
+  var isClosed = invSession.status === "closed";
+
+  // Gap Analysis and "Create Recount Session from Gaps" both read the live
+  // invEvents array, which this function is about to empty. Warn before that
+  // door closes rather than after — the merged data itself is safe either
+  // way, but it can no longer be compared against the Quants baseline here.
+  // Checking the event count (not just the sessionId) catches a report that
+  // ran once but is now stale because more events (e.g. a bulk count entered
+  // after finalize) were added since.
+  var gapNeverRun = invGapAnalysisLastRunSessionId !== invSession.sessionId;
+  var gapStale     = !gapNeverRun && invGapAnalysisLastRunEventCount !== invActiveEventCount();
+  if (isClosed && (gapNeverRun || gapStale)) {
+    var gapWarnMsg = gapStale
+      ? "⚠ Gap Analysis is out of date for this session.\n\n" +
+        "Events were added after the last run (e.g. a bulk count entered post-finalize) — that " +
+        "report no longer reflects everything in this session.\n\n" +
+        "Recommended: Cancel, then re-run Gap Analysis before clearing.\n\nClear anyway?"
+      : "⚠ Gap Analysis hasn't been run for this session yet.\n\n" +
+        "Gap Analysis and \"Create Recount Session from Gaps\" both compare against this session's " +
+        "events. Once you clear, that comparison can no longer be run — the merged data stays safe " +
+        "in your master data, but you'd need to skip straight to a manual recount session instead.\n\n" +
+        "Recommended: Cancel, then run Gap Analysis first.\n\nClear anyway?";
+    if (!confirm(gapWarnMsg)) return;
+  }
+
+  var confirmMsg = isClosed
+    ? "Clear this finalized session from view?\n\nIts events are already merged into your master data — " +
+      "this only removes it from the screen so you can start fresh. Nothing is lost."
+    : "Clear the active inventory session?\n\nThis removes all events from memory. " +
+      "Export a backup JSON first if you need to keep the data.";
+  if (!confirm(confirmMsg)) return;
   var clearedId = invSession.sessionId;
   invSession    = null;
   invResetSessionState();
@@ -4236,6 +4269,30 @@ function renderInvSessionMeta() {
   if ((n=$("invMetaSeq")))        n.textContent = invSession.sequenceCounter;
   renderInvStatusBar();
   renderInvSidebarSession();
+  invRenderClosedSessionBanner();
+}
+
+// A finalized session stays loaded (and its Event Log/Summary keep rendering
+// its data) so it can be reviewed/exported/recounted — but nothing else on
+// screen distinguishes that from a live, in-progress count. This banner makes
+// the distinction explicit and offers the two ways forward: keep counting
+// (Start New) or, once the whole physical inventory is actually done, clear
+// it out (the merge is already durable, so clearing here just tidies the view).
+function invRenderClosedSessionBanner() {
+  var banner = $("invClosedSessionBanner");
+  if (!banner) return;
+  var isClosed = !!invSession && invSession.status === "closed";
+  banner.classList.toggle("hidden", !isClosed);
+  if (!isClosed) return;
+  var msgEl = $("invClosedSessionMsg");
+  if (msgEl) {
+    var excCount = invEvents.filter(function(e) { return e.eventType === "exception"; }).length;
+    msgEl.textContent = '"' + invSession.sessionName + '" was finalized and merged into your master data (' +
+      invEvents.length + " event(s)" + (excCount ? ", " + excCount + " exception(s)" : "") + "). " +
+      "This is that closed count, not a live session — if the inventory isn't fully counted yet, " +
+      "start a new count below. Run Gap Analysis (and create a recount session if needed) before " +
+      "clearing — clearing empties this session's events, which Gap Analysis compares against.";
+  }
 }
 
 function renderInvSessionUI() {
@@ -4248,6 +4305,7 @@ function renderInvSessionUI() {
   renderInvSidebarSession();
   renderInvStatusBar();
   renderInvEventLog();
+  invRenderClosedSessionBanner();
   // Keep the scan-input placeholder in sync with session state — auto-restore
   // reaches here without going through invSetScanMode, so refresh it directly.
   invUpdateScanPlaceholder();
@@ -7670,8 +7728,24 @@ function invToggleFlag(eventId) {
   renderInvEventLog();
 }
 
+// Sidebar "Recount Manager" button (shown once the session is closed) — takes
+// the user to the real Recount Manager (rc* below) instead of the legacy
+// session-level walkthrough this used to launch. See FEATURES.md for the
+// note on retiring that legacy system now that nothing reaches it.
+function invGoToRecountManager() {
+  if (!invSession || invSession.status !== "closed") {
+    alert("Finalize the current inventory session before starting a recount.");
+    return;
+  }
+  switchTab("inventory");
+  invShowSubview("recount");
+  var card = $("rcSessionsCard");
+  if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 // ===================================================================
-// PHASE 7 — RECOUNT WORKFLOW
+// PHASE 7 — RECOUNT WORKFLOW (legacy, superseded by the Recount Manager
+// below — kept for now, no longer reachable from the UI; see FEATURES.md)
 // ===================================================================
 
 var invRecountItems      = [];  // [{ itemNumber, description, prevQty, prevLocations, done, recountQty, receivedSince, fulfilledSince, notes }]
@@ -9328,9 +9402,29 @@ function prodCloseHistoryModal() {
 // GAP ANALYSIS — Phase 2: pre-submission comparison vs Quants baseline
 // ═══════════════════════════════════════════════════════════════════════
 
+// sessionId + active-event count Gap Analysis was last run against —
+// invClearSession warns if either doesn't match the current session, since
+// Gap Analysis and "Create Recount Session from Gaps" both read the live
+// invEvents array, which Clear empties out. Tracking the count (not just the
+// sessionId) catches the case where more events (e.g. a NISC bulk count
+// entered after finalize) were added *after* the last run — that report is
+// stale even though it technically ran "for this session" once already.
+var invGapAnalysisLastRunSessionId    = null;
+var invGapAnalysisLastRunEventCount   = null;
+
+// Count of events Gap Analysis actually reads — same filter as invBuildGapReport.
+function invActiveEventCount() {
+  return invEvents.filter(function(e) {
+    return e.status !== "voided" && e.eventType !== "void_event";
+  }).length;
+}
+
 function invRunGapAnalysis() {
   if (!invSession) { alert("Start an inventory session first."); return; }
   if (!invQuantsBaseline.length) { alert("Load a Quants baseline first (Setup → Quants Baseline)."); return; }
+
+  invGapAnalysisLastRunSessionId  = invSession.sessionId;
+  invGapAnalysisLastRunEventCount = invActiveEventCount();
 
   var report = invBuildGapReport();
   invRenderGapReport(report);
