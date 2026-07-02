@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.10";
+const APP_VERSION = "v2.29.11";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4364,6 +4364,10 @@ function renderInvEventLog() {
       actionBtns += '<button class="secondary" style="padding:4px 8px;font-size:12px;" ' +
                     'onclick="invEditEventQty(\'' + eid + '\')">Edit Qty</button>';
     }
+    if (!voided && evt.eventType === "serialized_device_scan") {
+      actionBtns += '<button class="secondary" style="padding:4px 8px;font-size:12px;" ' +
+                    'onclick="invEditEventItem(\'' + eid + '\')">Edit Item #</button>';
+    }
 
     // Qty display
     var qtyDisplay = evt.qty != null ? String(evt.qty) : "";
@@ -4699,6 +4703,33 @@ function invEditEventQty(eventId) {
   var newQty = parseInt(input, 10);
   if (isNaN(newQty) || newQty < 1) { alert("Invalid quantity. Enter a whole number ≥ 1."); return; }
   evt.qty = newQty;
+  invSession.updatedAt = invNow();
+  scheduleInvAutosave();
+  renderInvEventLog();
+}
+
+// Backfills item_number (+ description) on a serialized_device_scan event —
+// for devices scanned before the unknown-device prompt captured an item #
+// (or where it was mistyped). Re-resolves description from the product map
+// so a corrected item # doesn't leave a stale description behind.
+function invEditEventItem(eventId) {
+  var evt = invEvents.find(function(e) { return e.eventId === eventId; });
+  if (!evt || evt.eventType !== "serialized_device_scan") return;
+  var current = evt.itemNumber || "";
+  var idParts = [];
+  if (evt.serial) idParts.push("S/N: " + evt.serial);
+  if (evt.fsan)   idParts.push("FSAN: " + evt.fsan);
+  var input = prompt(
+    "Update item # for event #" + evt.sequence + "\n" +
+    (idParts.length ? idParts.join("  ") + "\n\n" : "\n") +
+    "Current item #: " + (current || "(blank)"),
+    current
+  );
+  if (input === null) return;
+  var newItem = input.trim().toUpperCase();
+  evt.itemNumber = newItem;
+  var mm = newItem ? findProductMapMatch(newItem) : null;
+  evt.description = mm ? getMapDescription(mm.entry) : "";
   invSession.updatedAt = invNow();
   scheduleInvAutosave();
   renderInvEventLog();

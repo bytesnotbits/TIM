@@ -503,6 +503,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invSaveNotesModal()` | Save notes to event |
 | `invCloseNotesModal()` | Close notes modal |
 | `invEditEventQty(eventId)` | Edit bulk event quantity inline |
+| `invEditEventItem(eventId)` | Backfill/correct item # (+ re-resolve description) on a `serialized_device_scan` event — for devices scanned before an item # was captured |
 | `invToggleFlag(eventId)` | Toggle recount flag on event |
 
 ---
