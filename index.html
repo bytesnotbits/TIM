@@ -1378,6 +1378,26 @@
     </div>
   </div>
 
+  <!-- Edit Row modal -->
+  <div id="invEditRowModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal inv-notes-modal">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;">Edit Event</h2>
+          <div class="small" id="invEditRowModalDesc"></div>
+        </div>
+        <button class="secondary" onclick="invCloseEditRowModal()">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="invEditRowModalBody"></div>
+        <div style="margin-top:12px;display:flex;gap:8px;">
+          <button onclick="invSaveEditRowModal()">Save Changes</button>
+          <button class="secondary" onclick="invCloseEditRowModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="invBoxManagerModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal" style="max-width:780px;">
       <div class="modal-header">

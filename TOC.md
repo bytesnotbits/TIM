@@ -502,8 +502,10 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invOpenNotesModal(eventId)` | Open notes editor |
 | `invSaveNotesModal()` | Save notes to event |
 | `invCloseNotesModal()` | Close notes modal |
-| `invEditEventQty(eventId)` | Edit bulk event quantity inline |
-| `invEditEventItem(eventId)` | Backfill/correct item # (+ re-resolve description) on a `serialized_device_scan` event — for devices scanned before an item # was captured |
+| `invEditRowFieldConfig(eventType)` | Per-`eventType` list of editable fields for the Edit Row modal (`serialized_device_scan`, `bulk_quantity_count`, `exception`); `null` for other types hides the Edit button — reel footage math and box registry integrity are edited via their own dedicated flows instead |
+| `invOpenEditRowModal(eventId)` / `invCloseEditRowModal()` | Show/hide the Edit Row modal, rendering inputs from `invEditRowFieldConfig` |
+| `invEditRowModalItemChanged()` | Live-refills the Description field from the product map as Item # is typed |
+| `invSaveEditRowModal()` | Validate (serial/FSAN required + no clash with another active event; qty ≥ 1) + write all edited fields back onto the event |
 | `invToggleFlag(eventId)` | Toggle recount flag on event |
 
 ---

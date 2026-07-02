@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.11";
+const APP_VERSION = "v2.29.12";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4360,13 +4360,9 @@ function renderInvEventLog() {
       actionBtns += '<button class="secondary" style="padding:4px 8px;font-size:12px;" ' +
                     'onclick="invUndoVoid(\'' + eid + '\')">Undo Void</button> ';
     }
-    if (!voided && evt.eventType === "bulk_quantity_count") {
+    if (!voided && !isVoidMeta && invEditRowFieldConfig(evt.eventType)) {
       actionBtns += '<button class="secondary" style="padding:4px 8px;font-size:12px;" ' +
-                    'onclick="invEditEventQty(\'' + eid + '\')">Edit Qty</button>';
-    }
-    if (!voided && evt.eventType === "serialized_device_scan") {
-      actionBtns += '<button class="secondary" style="padding:4px 8px;font-size:12px;" ' +
-                    'onclick="invEditEventItem(\'' + eid + '\')">Edit Item #</button>';
+                    'onclick="invOpenEditRowModal(\'' + eid + '\')">Edit</button>';
     }
 
     // Qty display
@@ -4689,50 +4685,158 @@ function invCloseNotesModal() {
   setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
 }
 
-function invEditEventQty(eventId) {
-  var evt = invEvents.find(function(e) { return e.eventId === eventId; });
-  if (!evt || evt.eventType !== "bulk_quantity_count") return;
-  var current = evt.qty != null ? String(evt.qty) : "1";
-  var input = prompt(
-    "Update quantity for event #" + evt.sequence + "\n" +
-    "Item: " + (evt.itemNumber || "—") + (evt.description ? "  (" + evt.description + ")" : "") + "\n\n" +
-    "Current qty: " + current,
-    current
-  );
-  if (input === null) return;
-  var newQty = parseInt(input, 10);
-  if (isNaN(newQty) || newQty < 1) { alert("Invalid quantity. Enter a whole number ≥ 1."); return; }
-  evt.qty = newQty;
-  invSession.updatedAt = invNow();
-  scheduleInvAutosave();
-  renderInvEventLog();
+// -- Edit Row modal (full-field event correction) -------------------
+// Lets a whole event row be corrected after the fact (e.g. serials scanned
+// before the unknown-device prompt captured an item #, or a location typo).
+// Notes have their own icon/modal already, so they're excluded here.
+// Reel (footage math lives in the Reel Entry panel) and box/void-meta events
+// (registry- or audit-managed) are intentionally not covered — no config
+// means no Edit button for those types.
+var invEditRowModalEventId = null;
+
+function invEditRowFieldConfig(eventType) {
+  switch (eventType) {
+    case "serialized_device_scan":
+      return [
+        { key: "scannedValue", label: "Scanned Value", type: "text", upper: true },
+        { key: "scanType",     label: "Scan Type",      type: "select", options: [["serial", "Serial"], ["fsan", "FSAN"]] },
+        { key: "serial",       label: "Serial Number",  type: "text", upper: true },
+        { key: "fsan",         label: "FSAN",            type: "text", upper: true },
+        { key: "mac",          label: "MAC Address (optional)", type: "text", upper: true },
+        { key: "itemNumber",   label: "Item #",          type: "text", upper: true, onItem: true },
+        { key: "description",  label: "Description",     type: "text" },
+        { key: "location",     label: "Location",        type: "text", upper: true }
+      ];
+    case "bulk_quantity_count":
+      return [
+        { key: "itemNumber",  label: "Item #",     type: "text", upper: true, onItem: true },
+        { key: "description", label: "Description", type: "text" },
+        { key: "qty",         label: "Quantity",    type: "number", int: true },
+        { key: "location",    label: "Location",    type: "text", upper: true }
+      ];
+    case "exception":
+      return [
+        { key: "scannedValue",     label: "Scanned Value",     type: "text", upper: true },
+        { key: "problem",          label: "Problem",           type: "text" },
+        { key: "suggestedAction",  label: "Suggested Action",  type: "text" }
+      ];
+    default:
+      return null;
+  }
 }
 
-// Backfills item_number (+ description) on a serialized_device_scan event —
-// for devices scanned before the unknown-device prompt captured an item #
-// (or where it was mistyped). Re-resolves description from the product map
-// so a corrected item # doesn't leave a stale description behind.
-function invEditEventItem(eventId) {
+function invOpenEditRowModal(eventId) {
   var evt = invEvents.find(function(e) { return e.eventId === eventId; });
-  if (!evt || evt.eventType !== "serialized_device_scan") return;
-  var current = evt.itemNumber || "";
-  var idParts = [];
-  if (evt.serial) idParts.push("S/N: " + evt.serial);
-  if (evt.fsan)   idParts.push("FSAN: " + evt.fsan);
-  var input = prompt(
-    "Update item # for event #" + evt.sequence + "\n" +
-    (idParts.length ? idParts.join("  ") + "\n\n" : "\n") +
-    "Current item #: " + (current || "(blank)"),
-    current
-  );
-  if (input === null) return;
-  var newItem = input.trim().toUpperCase();
-  evt.itemNumber = newItem;
-  var mm = newItem ? findProductMapMatch(newItem) : null;
-  evt.description = mm ? getMapDescription(mm.entry) : "";
+  if (!evt) return;
+  var config = invEditRowFieldConfig(evt.eventType);
+  if (!config) return;
+  invEditRowModalEventId = eventId;
+
+  var descEl = $("invEditRowModalDesc");
+  if (descEl) descEl.textContent = "Event #" + evt.sequence + " — " + (evt.eventType || "");
+
+  var body = $("invEditRowModalBody");
+  if (body) {
+    body.innerHTML = config.map(function(f) {
+      var val = evt[f.key] != null ? evt[f.key] : "";
+      var fid = "invEditRowField_" + f.key;
+      var inputHtml;
+      if (f.type === "select") {
+        inputHtml = '<select id="' + fid + '" style="width:100%;box-sizing:border-box;">' +
+          f.options.map(function(o) {
+            return '<option value="' + escapeHtml(o[0]) + '"' + (o[0] === val ? " selected" : "") + '>' + escapeHtml(o[1]) + '</option>';
+          }).join("") + '</select>';
+      } else if (f.type === "number") {
+        inputHtml = '<input id="' + fid + '" type="number" value="' + escapeHtml(String(val)) +
+          '" style="width:100%;box-sizing:border-box;" />';
+      } else {
+        inputHtml = '<input id="' + fid + '" type="text" value="' + escapeHtml(String(val)) +
+          '" style="width:100%;box-sizing:border-box;' + (f.upper ? "text-transform:uppercase;" : "") + '"' +
+          (f.onItem ? ' oninput="invEditRowModalItemChanged()"' : '') + ' />';
+      }
+      return '<label style="font-weight:700;color:#475569;font-size:13px;display:block;margin-bottom:10px;">' +
+        escapeHtml(f.label) +
+        '<div style="font-weight:400;margin-top:4px;">' + inputHtml + '</div>' +
+        '</label>';
+    }).join("");
+  }
+
+  var modal = $("invEditRowModal");
+  if (modal) modal.classList.remove("hidden");
+}
+
+// Live-refills Description from the product map as the Item # field is
+// edited — same convention as the blind-entry and reel forms.
+function invEditRowModalItemChanged() {
+  var itemField = $("invEditRowField_itemNumber");
+  var descField = $("invEditRowField_description");
+  if (!itemField || !descField) return;
+  var itemNumber = itemField.value.trim().toUpperCase();
+  var mm = itemNumber ? findProductMapMatch(itemNumber) : null;
+  descField.value = mm ? getMapDescription(mm.entry) : "";
+}
+
+function invCloseEditRowModal() {
+  invEditRowModalEventId = null;
+  var modal = $("invEditRowModal");
+  if (modal) modal.classList.add("hidden");
+  setTimeout(function() { var i = $("invScanInput"); if (i) i.focus(); }, 50);
+}
+
+function invSaveEditRowModal() {
+  if (!invEditRowModalEventId) return;
+  var evt = invEvents.find(function(e) { return e.eventId === invEditRowModalEventId; });
+  if (!evt) return;
+  var config = invEditRowFieldConfig(evt.eventType);
+  if (!config) return;
+
+  var updated = {};
+  for (var i = 0; i < config.length; i++) {
+    var f = config[i];
+    var el = $("invEditRowField_" + f.key);
+    if (!el) continue;
+    var raw = el.value;
+    if (f.type === "number") {
+      var n = f.int ? parseInt(raw, 10) : parseFloat(raw);
+      updated[f.key] = isNaN(n) ? null : n;
+    } else if (f.upper) {
+      updated[f.key] = raw.trim().toUpperCase();
+    } else {
+      updated[f.key] = raw.trim();
+    }
+  }
+
+  if (evt.eventType === "serialized_device_scan") {
+    if (!updated.serial && !updated.fsan) {
+      alert("Enter at least a Serial Number or FSAN.");
+      return;
+    }
+    var sk = normKey(updated.serial || "");
+    var fk = normKey(updated.fsan   || "");
+    var clash = invEvents.find(function(e) {
+      if (e.eventId === evt.eventId)          return false;
+      if (e.eventType !== "serialized_device_scan") return false;
+      if (e.status === "voided")              return false;
+      if (sk && normKey(e.serial || "") === sk) return true;
+      if (fk && normKey(e.fsan   || "") === fk) return true;
+      return false;
+    });
+    if (clash) {
+      alert("Event #" + clash.sequence + " already has that serial/FSAN. Void it first or use a different value.");
+      return;
+    }
+  }
+
+  if (evt.eventType === "bulk_quantity_count" && (updated.qty == null || updated.qty < 1)) {
+    alert("Quantity must be a whole number of at least 1.");
+    return;
+  }
+
+  Object.keys(updated).forEach(function(k) { evt[k] = updated[k]; });
   invSession.updatedAt = invNow();
   scheduleInvAutosave();
   renderInvEventLog();
+  invCloseEditRowModal();
 }
 
 // ===================================================================
