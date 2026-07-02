@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.12";
+const APP_VERSION = "v2.29.13";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -10709,30 +10709,33 @@ function invFinalizeSession() {
     return;
   }
 
-  // Guard against the catastrophic overwrite: finalize emits a master JSON the
-  // user is told to replace their real master with. If no master is loaded
-  // (0 products AND 0 history), that file would wipe existing data on replace.
+  // Guard against the catastrophic overwrite: if no master is loaded (0 products
+  // AND 0 history), finalizing now merges this session into an empty master —
+  // confirm that's really intended before proceeding.
   var _histCount = (history && history.records) ? history.records.length : 0;
   var _prodCount = PRODUCT_MAP ? Object.keys(PRODUCT_MAP).length : 0;
   if (_histCount === 0 && _prodCount === 0) {
     if (!confirm(
       "⚠ NO MASTER DATA IS LOADED (0 products, 0 history records).\n\n" +
-      "The master JSON this download produces will NOT contain any existing " +
-      "history or product catalog. If you replace your real master file with " +
-      "it, that data will be permanently lost.\n\n" +
-      "Recommended: Cancel, load your master JSON first (Receiving tab, Step 1), " +
-      "then finalize.\n\nDownload anyway?"
+      "Finalizing now will merge this session into an empty master. If you meant " +
+      "to add to your existing catalog/history, cancel and load your master JSON " +
+      "first (Receiving tab, Step 1).\n\nContinue anyway?"
     )) return;
   }
 
+  // Same persistence pattern as the reel-importer / history-commit actions:
+  // save locally + push to GitHub immediately when configured, so the merge
+  // is durable right away instead of depending on a manual file swap.
+  var configured = ghConfigured();
   if (!confirm(
     "Finalize session \"" + invSession.sessionName + "\"?\n\n" +
     "This will:\n" +
     "  1. Mark the session as closed\n" +
-    "  2. Merge " + activeCount + " active event(s) into the master JSON\n" +
-    "  3. Download an updated master JSON automatically\n\n" +
-    "Replace your existing master JSON file with the downloaded one.\n\n" +
-    "Note: Load the master JSON first (Receiving tab Step 1) so existing history is preserved.\n\nContinue?"
+    "  2. Merge " + activeCount + " active event(s) into the master data\n" +
+    "  3. " + (configured
+        ? "Push the merged master to GitHub and download a backup JSON"
+        : "Download an updated master JSON (replace your Step 1 file with it)") +
+    "\n\nContinue?"
   )) return;
 
   var now = invNow();
@@ -10760,12 +10763,24 @@ function invFinalizeSession() {
 
   appData.product_map = PRODUCT_MAP;
   appData.history = history;
+
+  // Persist immediately (IndexedDB) so the merge survives a reload even before
+  // a GitHub push (if any) lands, and mark the now-closed session durable so a
+  // later reload can't silently restore it as still-active.
+  timSaveMasterCache();
+  scheduleInvAutosave();
+
   downloadText(timSourceDataFilename(), JSON.stringify(buildExportPayload(), null, 2), "application/json");
 
   var finalizeBtn = $("invFinalizeBtn");
   if (finalizeBtn) finalizeBtn.disabled = true;
   renderInvSessionMeta();
-  alert("Session finalized and merged into master JSON.\nReplace your existing master file with the downloaded copy.");
+
+  alert(configured
+    ? "Session finalized and merged. Pushing the master file to GitHub now — watch the GitHub panel for status. A backup JSON was also downloaded."
+    : "Session finalized and merged into master JSON.\nReplace your existing master file with the downloaded copy.");
+
+  if (configured) ghPushToGitHub({ auto: true });
 }
 
 // Restore sidebar + tab state (runs after all variables are declared)

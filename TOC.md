@@ -342,7 +342,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `invStartNewSession()` | Create fresh session + autosave |
 | `invResumeSession()` | Manual "Resume Session" button (shows alert) |
 | `invClearSession()` | Clear session from memory + IDB |
-| `invFinalizeSession()` | Close session + merge events into master data |
+| `invFinalizeSession()` | Close session + merge events into master data; persists via `timSaveMasterCache()`/`scheduleInvAutosave()` immediately and auto-pushes to GitHub when configured (same durability pattern as the reel-importer/history-commit actions), falling back to the manual "replace your master file" download only when GitHub sync isn't set up |
 | `invResetSessionState()` | Zero out events/exceptions/recounts/sequence |
 | `invExportBackup()` | Export session JSON to file |
 | `invImportBackup(input)` | Import session from JSON file |
