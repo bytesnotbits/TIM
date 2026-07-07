@@ -4,3 +4,7 @@ Calix_Odoo_Converter_source_data.json
 *_FSAN_*.csv
 Inventory Locations (stock.location).csv
 Inventory.txt
+
+# Cycle-count working data (real serials, quantities, customer/employee names) — never commit.
+# The reconciliation tooling lives in reconcile/ ; only its data stays here.
+docs/
