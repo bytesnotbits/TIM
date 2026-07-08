@@ -47,6 +47,9 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_location_map_v1` | Location path→barcode map |
 | `tim_location_barcode_map_v1` | Location barcode→complete name map |
 | `tim_recount_v1` | Recount sessions + movement records |
+| `tim_recount_count_v1` | Recount worklist: imported physical count `{ rows, importedAt, fileName }` |
+| `tim_recount_moves_v1` | Recount worklist: imported Odoo product movements `{ rows, importedAt, fileName }` |
+| `tim_recount_nisc_v1` | Recount worklist: imported NISC capture (bulk/reels/serials, upserted by item) `{ rows, importedAt, fileName }` |
 | `tim_gh_config_v1` | GitHub sync config `{ owner, repo, branch, autoLoad }` |
 | `tim_gh_token_v1` | GitHub fine-grained PAT (Contents: read on the data repo) |
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
@@ -61,7 +64,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | Variable | Purpose |
 |----------|---------|
 | `APP_VERSION` | Version string shown in UI |
-| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, boxes }` |
+| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, external_count, product_movements, nisc_capture, boxes }` |
 | `PRODUCT_MAP` | Alias for `appData.product_map` — item definitions keyed by item number |
 | `BARCODE_MAP` | Alias for `appData.barcode_map` — barcode→item lookup |
 | `currentBatch` | Rows being processed in current receiving batch |
@@ -88,6 +91,11 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `rcCreateGapItems` | Pre-populated items from a gap report |
 | `rcWfState` | Active workflow modal state `{ recountId, rcItemId, type, scannedSerials[] }` |
 | `rcMvState` | Active movement panel state `{ recountId, rcItemId, type }` |
+| `rcView` (worklist) | `rcView` also takes `"worklist"` — location-ordered worktable view |
+| `RC_COUNT_KEY` / `RC_MOVE_KEY` / `RC_NISC_KEY` | IDB keys for the 3 worklist source files |
+| `rcCountMeta` / `rcMoveMeta` / `rcNiscMeta` | `{ importedAt, fileName }` per source file |
+| `rcWlSort` | Worklist sort `"location" \| "item"` |
+| `rcWlIsolate` | Worklist single-item isolate filter (UPPER item; `""` = all) |
 
 ---
 
@@ -711,6 +719,29 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `rcMovementsSummary(item)` | Format movements as multi-line summary string |
 | `rcResolutionLabel(val)` | Convert snake_case resolution key → readable label |
 | `rcAutoColWidths(headers, rows)` | Auto-size XLSX columns (max 60 chars) |
+
+#### Recount Worklist (v2.30)
+
+> Location-ordered, movement-adjusted worktable. Ingests 3 external files, joins them per item (port of `docs/recount_reference.js`), and drives shelf-order recounts inside a **worklist-flavored recount session** (`session.worklist = true`). Reuses rcItems / recountedQty / movements / resolution / persistence / merge. Import via CSV Column Mapper types `recount_count` / `recount_movement` / `recount_nisc` **or** universal-drop auto-detect. Source files are global + newest-wins in `ghMergeMasters` (like `odoo_quants`).
+
+| Function | Purpose |
+|----------|---------|
+| `rcProcessCountCsv(text, name)` | Parse physical count (Item, QuantitySum, Ticket, COUNT DATE, LINE); fail-loud on missing headers; blank-LINE = recount |
+| `rcProcessMovementCsv(text, name)` | Parse Odoo moves; direction via `rcMovementDir` (Reference prefix); item from `[item]` in Product |
+| `rcProcessNiscCsv(text, name)` | Parse NISC capture (Captured Qty = expected, Current Count Qty = NISC's count); **upsert by item**; `Serial/Reel`→classification |
+| `rcImportCountCsv/MovementCsv/NiscCsv(file, cb)` | File-reader wrappers for the universal drop router |
+| `rcLoadWorklistData()` | Restore the 3 source files from IDB on startup |
+| `rcClearCountData/MoveData/NiscData()` | Clear a source file (confirm + IDB remove) |
+| `rcBuildWorklist(focusSet)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged |
+| `rcSessionFocusSet(session)` / `rcFindItemByNumber(session, up)` | Session helpers: item-number set / lookup |
+| `rcShowWorklistHome()` / `rcOpenWorklist(id)` | Enter worklist home (build form + data status) / open a saved worklist |
+| `rcConfirmWorklistCreate()` | Build session from pasted list (or all counted items); classify items via NISC; seed niscExpectedQty from Captured |
+| `rcWlSetSort(v)` / `rcWlSetIsolate(v)` | Location/item sort toggle / single-item isolate filter |
+| `rcWlSetRecount(id, itemUp, val)` | Save recount qty onto the item's `recountedQty` + status |
+| `rcRenderWorklist()` / `rcRenderWorklistHome()` / `rcRenderWorklistTable(session)` | View dispatch / build-home / worktable + absent + niscDrops |
+| `rcDataStatusRow()` / `rcClsBadge()` | Render helpers |
+| `rcExportWorklistCsv(id)` | Download location-ordered CSV (mirrors `recount_worksheet_FOCUSED_by_location.csv`) |
+| `rcNum / rcCountDay / rcMoveDay / rcDayToDisplay / rcMovementDir / rcColIdx` | Parse helpers (comma-number strip, date→int, direction, header lookup) |
 
 ---
 

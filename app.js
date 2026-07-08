@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.29.16";
+const APP_VERSION = "v2.30.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8,7 +8,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {} };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, external_count: [], product_movements: [], nisc_capture: [] };
 let PRODUCT_MAP = appData.product_map;
 // True once the UI has been rendered (by loadSourceData or timRenderRestored).
 // Lets a failed boot sync fall back to rendering the cached data instead of
@@ -894,6 +894,10 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.recount_sessions))  appData.recount_sessions  = parsed.recount_sessions;
   if (Array.isArray(parsed.recount_movements)) appData.recount_movements = parsed.recount_movements;
   if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
+  if (Array.isArray(parsed.external_count))    { appData.external_count    = parsed.external_count;    rcCountMeta = { importedAt: null, fileName: "(from master JSON)" }; }
+  if (Array.isArray(parsed.product_movements)) { appData.product_movements = parsed.product_movements; rcMoveMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
+  if (Array.isArray(parsed.nisc_capture))      { appData.nisc_capture      = parsed.nisc_capture;      rcNiscMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
+  if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
   if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxSaveToStorage(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
@@ -1060,6 +1064,46 @@ var _CSV_IMPORT_TYPES = [
       { key: "tracking",      label: "Tracking (lot / serial / none)",required: false }
     ],
     run: function(text, name) { prodBulkUpload(new File([text], name, { type: "text/csv" })); }
+  },
+  {
+    id: "recount_count",
+    label: "Recount — Physical Count",
+    desc: "External bulk count — item, qty, shelf (Ticket), count date",
+    fields: [
+      { key: "Item",         label: "Item #",        required: true  },
+      { key: "QuantitySum",  label: "Counted Qty",   required: true  },
+      { key: "Ticket",       label: "Shelf (Ticket)",required: true  },
+      { key: "COUNT DATE",   label: "Count Date",    required: true  },
+      { key: "LINE",         label: "Line #",        required: true  },
+      { key: "Description",  label: "Description",   required: false }
+    ],
+    run: function(text, name) { rcProcessCountCsv(text, name); }
+  },
+  {
+    id: "recount_movement",
+    label: "Recount — Product Movement",
+    desc: "Odoo moves since count — direction from Reference prefix",
+    fields: [
+      { key: "Product",   label: "Product ([item] desc)", required: true },
+      { key: "Reference", label: "Reference",             required: true },
+      { key: "Quantity",  label: "Quantity",              required: true },
+      { key: "Date",      label: "Date",                  required: true }
+    ],
+    run: function(text, name) { rcProcessMovementCsv(text, name); }
+  },
+  {
+    id: "recount_nisc",
+    label: "Recount — NISC Capture",
+    desc: "NISC expected (Captured) + NISC counted per item (bulk/reels/serials)",
+    fields: [
+      { key: "Item",              label: "Item #",           required: true  },
+      { key: "Captured Qty",      label: "Captured Qty",     required: true  },
+      { key: "Current Count Qty", label: "NISC Counted Qty", required: true  },
+      { key: "Description",       label: "Description",      required: false },
+      { key: "Aisle/Bin",         label: "Aisle/Bin",        required: false },
+      { key: "Serial/Reel",       label: "Serial/Reel flag", required: false }
+    ],
+    run: function(text, name) { rcProcessNiscCsv(text, name); }
   }
 ];
 
@@ -1376,6 +1420,21 @@ async function detectAndRouteFile(file) {
       if (has("sku") && has("reels no")) {
         _universalDetectToast("Detected: Cable Reel CSV — loading…");
         invImportReelsCsv(file, done("Cable Reel CSV", true));
+        return;
+      }
+      if (has("ticket") && has("quantitysum")) {
+        _universalDetectToast("Detected: Recount Physical Count — loading…");
+        rcImportCountCsv(file, done("Recount Physical Count", false));
+        return;
+      }
+      if (has("captured qty") && has("current count qty") && has("item")) {
+        _universalDetectToast("Detected: Recount NISC Capture — loading…");
+        rcImportNiscCsv(file, done("Recount NISC Capture", false));
+        return;
+      }
+      if (has("reference") && has("product") && has("quantity") && !has("id") && !has("product_id/default_code")) {
+        _universalDetectToast("Detected: Recount Product Movement — loading…");
+        rcImportMovementCsv(file, done("Recount Product Movement", false));
         return;
       }
       if (fnType === "quants_baseline" || has("product_id/id")) {
@@ -2785,6 +2844,11 @@ function ghMergeMasters(base, local, remote, ctx) {
   // odoo_quants: full Odoo snapshot, not row-merged — newest push (local) wins.
   merged.odoo_quants = (local.odoo_quants && local.odoo_quants.length) ? local.odoo_quants : (remote.odoo_quants || []);
 
+  // Recount worklist source files: per-cycle snapshots, not row-merged — newest push (local) wins.
+  merged.external_count    = (local.external_count    && local.external_count.length)    ? local.external_count    : (remote.external_count    || []);
+  merged.product_movements = (local.product_movements && local.product_movements.length) ? local.product_movements : (remote.product_movements || []);
+  merged.nisc_capture      = (local.nisc_capture      && local.nisc_capture.length)      ? local.nisc_capture      : (remote.nisc_capture      || []);
+
   return { merged: merged, conflicts: conflicts };
 }
 
@@ -3775,6 +3839,7 @@ function switchTab(name) {
     invShowStorageHint();
     invSetScanMode(invScanMode || "auto");
     rcLoadStorage();
+    rcLoadWorklistData();
   }
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
@@ -9091,6 +9156,9 @@ function buildExportPayload() {
     odoo_quants: appData.odoo_quants || [],
     recount_sessions:  appData.recount_sessions  || [],
     recount_movements: appData.recount_movements || [],
+    external_count:    appData.external_count    || [],
+    product_movements: appData.product_movements || [],
+    nisc_capture:      appData.nisc_capture      || [],
     boxes: appData.boxes || {}
   };
 }
@@ -9691,6 +9759,642 @@ let rcView            = "list"; // "list" | "create" | "detail"
 let rcActiveId        = null;  // recountId of session shown in detail view
 let rcCreateGapItems  = null;  // pre-populated items from a gap report
 
+// ═══════════════════════════════════════════════════════════════════════
+// RECOUNT WORKLIST (v2.30) — location-ordered, movement-adjusted worktable.
+// Ingests 3 external files (physical count, Odoo movements, NISC capture),
+// joins them per item (port of docs/recount_reference.js), and drives
+// shelf-order recounts inside a recount session. See project_recount_worklist.
+// ═══════════════════════════════════════════════════════════════════════
+
+const RC_COUNT_KEY = "tim_recount_count_v1";
+const RC_MOVE_KEY  = "tim_recount_moves_v1";
+const RC_NISC_KEY  = "tim_recount_nisc_v1";
+
+let rcCountMeta = { importedAt: null, fileName: null };
+let rcMoveMeta  = { importedAt: null, fileName: null };
+let rcNiscMeta  = { importedAt: null, fileName: null };
+
+let rcWlSort    = "location"; // worklist sort: "location" | "item"
+let rcWlIsolate = "";          // isolate a single item (UPPER), "" = show all
+
+// ── number / date helpers ──────────────────────────────────────────
+function rcNum(v) { var n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; }
+function rcCountDay(s) { var m = String(s || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? (+m[3]) * 10000 + (+m[1]) * 100 + (+m[2]) : null; }
+function rcMoveDay(s)  { var m = String(s || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? (+m[1]) * 10000 + (+m[2]) * 100 + (+m[3]) : null; }
+function rcDayToDisplay(day) { return day ? String(day).replace(/^(\d{4})(\d{2})(\d{2})$/, "$2/$3/$1") : ""; }
+
+function rcMovementDir(ref) {
+  var r = (ref || "").trim().toUpperCase();
+  if (r === "")                     return { io: "IN",  label: "IN (vendor receipt, blank ref)" };
+  if (r.indexOf("WHCHG") === 0)     return { io: "OUT", label: "OUT (charge/fulfillment)" };
+  if (r.indexOf("WH/RETURN") === 0) return { io: "IN",  label: "IN (return)" };
+  if (r.indexOf("WHRMA-IN") === 0)  return { io: "IN",  label: "IN (RMA)" };
+  if (r.indexOf("WHRX") === 0)      return { io: "IN",  label: "IN (receipt)" };
+  return { io: "UNK", label: "UNKNOWN (" + r + ")" };
+}
+
+// header lookup: index of first matching column name (case-insensitive)
+function rcColIdx(header, names) {
+  for (var i = 0; i < names.length; i++) {
+    var n = names[i].toLowerCase().trim();
+    var idx = header.findIndex(function(h) { return String(h).trim().toLowerCase() === n; });
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+// ── Importers (fail loud on missing required headers — user fixes source) ──
+function rcProcessCountCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+  var iItem = rcColIdx(header, ["Item"]);
+  var iQty  = rcColIdx(header, ["QuantitySum", "Quantity Sum"]);
+  var iTkt  = rcColIdx(header, ["Ticket"]);
+  var iDate = rcColIdx(header, ["COUNT DATE", "Count Date"]);
+  var iLine = rcColIdx(header, ["LINE", "Line"]);
+  var iDesc = rcColIdx(header, ["Description"]);
+  var missing = [];
+  if (iItem === -1) missing.push("Item");
+  if (iQty  === -1) missing.push("QuantitySum");
+  if (iTkt  === -1) missing.push("Ticket");
+  if (iDate === -1) missing.push("COUNT DATE");
+  if (iLine === -1) missing.push("LINE");
+  if (missing.length) throw new Error("Physical count file is missing required column(s): " + missing.join(", ") + ". Fix the source export and re-import.\nFound: " + header.join(", "));
+
+  var rows = [];
+  for (var i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    var c = bcParseCsvRow(lines[i]);
+    var item = (c[iItem] || "").trim();
+    if (!item) continue; // skip blank-item rows (trailing blanks in the export)
+    var lineNo = (c[iLine] || "").trim();
+    rows.push({
+      item: item,
+      description: iDesc >= 0 ? (c[iDesc] || "").trim() : "",
+      location: (c[iTkt] || "").trim(),
+      qty: rcNum(c[iQty]),
+      day: rcCountDay(c[iDate]),
+      dateRaw: (c[iDate] || "").trim(),
+      line: lineNo,
+      isRecount: lineNo === ""   // blank LINE# = recount appended after the original count
+    });
+  }
+  if (!rows.length) throw new Error("No data rows found in the physical count file.");
+  appData.external_count = rows;
+  rcCountMeta = { importedAt: new Date().toISOString(), fileName: fileName || "" };
+  TimDB.set(RC_COUNT_KEY, { rows: rows, importedAt: rcCountMeta.importedAt, fileName: rcCountMeta.fileName }).catch(function(){});
+  rcRenderCard();
+}
+
+function rcProcessMovementCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+  var iProd = rcColIdx(header, ["Product"]);
+  var iRef  = rcColIdx(header, ["Reference"]);
+  var iQty  = rcColIdx(header, ["Quantity"]);
+  var iDate = rcColIdx(header, ["Date"]);
+  var missing = [];
+  if (iProd === -1) missing.push("Product");
+  if (iRef  === -1) missing.push("Reference");
+  if (iQty  === -1) missing.push("Quantity");
+  if (iDate === -1) missing.push("Date");
+  if (missing.length) throw new Error("Product Movement file is missing required column(s): " + missing.join(", ") + ". Fix the source export and re-import.\nFound: " + header.join(", "));
+
+  var rows = [], unknownRefs = 0;
+  for (var i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    var c = bcParseCsvRow(lines[i]);
+    var prod = (c[iProd] || "").trim();
+    var mm = prod.match(/^\[([^\]]+)\]/);
+    if (!mm) continue; // no [item] bracket — skip summary/blank rows
+    var dir = rcMovementDir(c[iRef]);
+    if (dir.io === "UNK") unknownRefs++;
+    rows.push({
+      item: mm[1].trim(),
+      date: (c[iDate] || "").trim(),
+      day: rcMoveDay(c[iDate]),
+      reference: (c[iRef] || "").trim(),
+      qty: rcNum(c[iQty]),
+      io: dir.io,
+      label: dir.label
+    });
+  }
+  if (!rows.length) throw new Error("No movement rows with an [item] product code found.");
+  appData.product_movements = rows;
+  rcMoveMeta = { importedAt: new Date().toISOString(), fileName: fileName || "" };
+  TimDB.set(RC_MOVE_KEY, { rows: rows, importedAt: rcMoveMeta.importedAt, fileName: rcMoveMeta.fileName }).catch(function(){});
+  if (unknownRefs) _universalDetectToast(unknownRefs + " movement row(s) had an unrecognized Reference prefix — treated as neither in nor out.", "err");
+  rcRenderCard();
+}
+
+function rcProcessNiscCsv(text, fileName) {
+  var lines = text.split(/\r?\n/);
+  if (!lines.length) throw new Error("Empty file.");
+  var header = bcParseCsvRow(lines[0] || "");
+  var iItem = rcColIdx(header, ["Item"]);
+  var iCap  = rcColIdx(header, ["Captured Qty"]);
+  var iCur  = rcColIdx(header, ["Current Count Qty"]);
+  var iDesc = rcColIdx(header, ["Description"]);
+  var iBin  = rcColIdx(header, ["Aisle/Bin"]);
+  var iSR   = rcColIdx(header, ["Serial/Reel"]);
+  var missing = [];
+  if (iItem === -1) missing.push("Item");
+  if (iCap  === -1) missing.push("Captured Qty");
+  if (iCur  === -1) missing.push("Current Count Qty");
+  if (missing.length) throw new Error("NISC capture file is missing required column(s): " + missing.join(", ") + ". Fix the source export and re-import.\nFound: " + header.join(", "));
+
+  // Merge by item so bulk + reels + serials exports accumulate (upsert).
+  var byItem = {};
+  (appData.nisc_capture || []).forEach(function(r) { byItem[r.item.toUpperCase()] = r; });
+  var added = 0;
+  for (var i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    var c = bcParseCsvRow(lines[i]);
+    var item = (c[iItem] || "").trim();
+    if (!item) continue;
+    var srRaw = iSR >= 0 ? (c[iSR] || "").trim().toUpperCase() : "";
+    var cls = srRaw === "S" ? "serialized" : srRaw === "R" ? "reels" : "bulk";
+    byItem[item.toUpperCase()] = {
+      item: item,
+      captured: rcNum(c[iCap]),
+      niscCount: rcNum(c[iCur]),
+      description: iDesc >= 0 ? (c[iDesc] || "").trim() : "",
+      aisleBin: iBin >= 0 ? (c[iBin] || "").trim() : "",
+      classification: cls
+    };
+    added++;
+  }
+  if (!added) throw new Error("No data rows found in the NISC capture file.");
+  var rows = Object.keys(byItem).map(function(k) { return byItem[k]; });
+  appData.nisc_capture = rows;
+  rcNiscMeta = { importedAt: new Date().toISOString(), fileName: fileName || "" };
+  TimDB.set(RC_NISC_KEY, { rows: rows, importedAt: rcNiscMeta.importedAt, fileName: rcNiscMeta.fileName }).catch(function(){});
+  rcRenderCard();
+}
+
+// Wrapper importers for the universal drop router (read file → process).
+function rcImportCountCsv(file, cb)    { var r = new FileReader(); r.onload = function(e){ try { rcProcessCountCsv(e.target.result, file.name);    if (cb) cb(null); } catch(err){ if (cb) cb(err); else alert(err.message); } }; r.readAsText(file); }
+function rcImportMovementCsv(file, cb) { var r = new FileReader(); r.onload = function(e){ try { rcProcessMovementCsv(e.target.result, file.name); if (cb) cb(null); } catch(err){ if (cb) cb(err); else alert(err.message); } }; r.readAsText(file); }
+function rcImportNiscCsv(file, cb)     { var r = new FileReader(); r.onload = function(e){ try { rcProcessNiscCsv(e.target.result, file.name);     if (cb) cb(null); } catch(err){ if (cb) cb(err); else alert(err.message); } }; r.readAsText(file); }
+
+// ── Load / clear worklist source data ───────────────────────────────
+function rcLoadWorklistData() {
+  return Promise.all([
+    TimDB.get(RC_COUNT_KEY).then(function(s){ if (s && Array.isArray(s.rows)) { appData.external_count = s.rows;    rcCountMeta = { importedAt: s.importedAt || null, fileName: s.fileName || null }; } }).catch(function(){}),
+    TimDB.get(RC_MOVE_KEY ).then(function(s){ if (s && Array.isArray(s.rows)) { appData.product_movements = s.rows; rcMoveMeta  = { importedAt: s.importedAt || null, fileName: s.fileName || null }; } }).catch(function(){}),
+    TimDB.get(RC_NISC_KEY ).then(function(s){ if (s && Array.isArray(s.rows)) { appData.nisc_capture = s.rows;      rcNiscMeta  = { importedAt: s.importedAt || null, fileName: s.fileName || null }; } }).catch(function(){})
+  ]).then(function(){ if (rcView === "worklist") rcRenderCard(); }).catch(function(){});
+}
+
+function rcClearCountData() { if (!confirm("Clear the imported physical count file?")) return; appData.external_count = [];    rcCountMeta = { importedAt: null, fileName: null }; TimDB.remove(RC_COUNT_KEY).catch(function(){}); rcRenderCard(); }
+function rcClearMoveData()  { if (!confirm("Clear the imported product movement file?")) return; appData.product_movements = []; rcMoveMeta  = { importedAt: null, fileName: null }; TimDB.remove(RC_MOVE_KEY ).catch(function(){}); rcRenderCard(); }
+function rcClearNiscData()  { if (!confirm("Clear the imported NISC capture data?")) return; appData.nisc_capture = [];        rcNiscMeta  = { importedAt: null, fileName: null }; TimDB.remove(RC_NISC_KEY ).catch(function(){}); rcRenderCard(); }
+
+// ── Join engine (port of docs/recount_reference.js) ─────────────────
+// focusSet: Set of UPPER item numbers to include; null/empty = all counted items.
+function rcBuildWorklist(focusSet) {
+  var count = appData.external_count || [];
+  var moves = appData.product_movements || [];
+  var nisc  = appData.nisc_capture || [];
+
+  var niscByItem = {};
+  nisc.forEach(function(r){ niscByItem[r.item.toUpperCase()] = r; });
+
+  // countByItem keyed by UPPER item; carries original-case item, max count day, per-shelf qty/lines, recount total
+  var countByItem = new Map();
+  count.forEach(function(r) {
+    if (!r.item) return;
+    var key = r.item.toUpperCase();
+    if (!countByItem.has(key)) countByItem.set(key, { item: r.item, desc: r.description || "", day: null, locs: new Map(), recountQty: 0, total: 0 });
+    var rec = countByItem.get(key);
+    if (!rec.desc && r.description) rec.desc = r.description;
+    if (r.day != null) rec.day = rec.day == null ? r.day : Math.max(rec.day, r.day);
+    if (!rec.locs.has(r.location)) rec.locs.set(r.location, { qty: 0, lines: [] });
+    var l = rec.locs.get(r.location); l.qty += r.qty; l.lines.push(r.qty);
+    rec.total += r.qty;
+    if (r.isRecount) rec.recountQty += r.qty;
+  });
+
+  // moveByItem with per-item since-count gating (movement counts only if day >= item's count day)
+  var moveByItem = new Map();
+  moves.forEach(function(m) {
+    var key = m.item.toUpperCase();
+    var crec = countByItem.get(key);
+    var cday = crec ? crec.day : null;
+    var since = (m.day != null && cday != null) ? (m.day >= cday) : true; // unknown dates → treat as since-count
+    if (!moveByItem.has(key)) moveByItem.set(key, { outAfter: 0, inAfter: 0, before: 0, rows: [] });
+    var rec = moveByItem.get(key);
+    if (!since) rec.before += m.qty;
+    else if (m.io === "OUT") rec.outAfter += m.qty;
+    else if (m.io === "IN")  rec.inAfter += m.qty;
+    rec.rows.push({ date: m.date, reference: m.reference, io: m.io, label: m.label, qty: m.qty, since: since });
+  });
+
+  var useFocus = !!(focusSet && focusSet.size);
+  var flat = [], itemsSeen = {};
+  countByItem.forEach(function(rec, key) {
+    if (useFocus && !focusSet.has(key)) return;
+    var mv = moveByItem.get(key);
+    var out_ = mv ? mv.outAfter : 0;
+    var in_  = mv ? mv.inAfter : 0;
+    var total = rec.total;
+    var nrec = niscByItem[key];
+    var cap = nrec ? nrec.captured : null;
+    itemsSeen[key] = true;
+    var first = true;
+    rec.locs.forEach(function(l, loc) {
+      flat.push({
+        loc: loc, item: rec.item, itemUpper: key, desc: rec.desc,
+        shelfQty: l.qty, lines: l.lines.length > 1 ? l.lines.join(" + ") : "",
+        countDate: rcDayToDisplay(rec.day),
+        total: total, outAfter: out_, expected: total - out_, inAfter: in_,
+        captured: cap, shortVsNisc: cap != null ? (cap - total) : null,
+        shelves: rec.locs.size, recountQty: rec.recountQty,
+        classification: nrec ? nrec.classification : "bulk", isFirst: first
+      });
+      first = false;
+    });
+  });
+
+  // absent = focus items with no count rows → counted zero (found nothing)
+  var absent = [];
+  if (useFocus) {
+    focusSet.forEach(function(up) {
+      if (itemsSeen[up]) return;
+      var nrec = niscByItem[up];
+      absent.push({ item: up, captured: nrec ? nrec.captured : null, niscCount: nrec ? nrec.niscCount : null,
+        description: nrec ? nrec.description : "", aisleBin: nrec ? nrec.aisleBin : "", classification: nrec ? nrec.classification : "bulk" });
+    });
+  }
+
+  // Secondary: NISC row-drop candidates (Captured > NISC's own Current Count)
+  var niscDrops = [];
+  nisc.forEach(function(r) {
+    if (useFocus && !focusSet.has(r.item.toUpperCase())) return;
+    if (r.captured > r.niscCount) niscDrops.push({ item: r.item, captured: r.captured, niscCount: r.niscCount, dropped: r.captured - r.niscCount, description: r.description });
+  });
+
+  return { flat: flat, absent: absent, niscDrops: niscDrops };
+}
+
+// ── Session helpers ─────────────────────────────────────────────────
+function rcSessionFocusSet(session) {
+  var s = new Set();
+  ["serialized", "bulk", "reels"].forEach(function(t) {
+    (session.items[t] || []).forEach(function(it) { if (it.itemNumber) s.add(it.itemNumber.toUpperCase()); });
+  });
+  return s;
+}
+function rcFindItemByNumber(session, itemUpper) {
+  var found = null;
+  ["bulk", "serialized", "reels"].forEach(function(t) {
+    if (found) return;
+    (session.items[t] || []).forEach(function(it) { if (!found && it.itemNumber && it.itemNumber.toUpperCase() === itemUpper) found = { item: it, type: t }; });
+  });
+  return found;
+}
+
+// ── Worklist view transitions ───────────────────────────────────────
+function rcShowWorklistHome() {
+  rcView = "worklist"; rcActiveId = null;
+  invShowSubview("recount");
+  var card = $("rcSessionsCard"); if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+  rcRenderCard();
+}
+function rcOpenWorklist(recountId) { rcView = "worklist"; rcActiveId = recountId; rcWlIsolate = ""; rcWlSort = "location"; rcRenderCard(); }
+function rcWlSetSort(v)    { rcWlSort = v; rcRenderWorklist(); }
+function rcWlSetIsolate(v) { rcWlIsolate = v || ""; rcRenderWorklist(); }
+
+function rcConfirmWorklistCreate() {
+  if (!(appData.external_count || []).length) { alert("Import a physical count file first — drop it on the Data Import zone."); return; }
+  var nameEl = $("rcWlName");
+  var name = nameEl ? nameEl.value.trim() : "";
+  if (!name) { alert("Enter a worklist name."); if (nameEl) nameEl.focus(); return; }
+  var countersRaw = $("rcWlCounters") ? $("rcWlCounters").value.trim() : "";
+  var counters = countersRaw ? countersRaw.split(",").map(function(s){ return s.trim(); }).filter(Boolean) : [];
+  var all = $("rcWlAllItems") && $("rcWlAllItems").checked;
+  var pasteRaw = $("rcWlPaste") ? $("rcWlPaste").value : "";
+  var pasted = pasteRaw.split(/[\s,;]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+
+  var countedItems = {};
+  (appData.external_count || []).forEach(function(r){ if (r.item) countedItems[r.item.toUpperCase()] = r.item; });
+
+  var focus;
+  if (all) { focus = Object.keys(countedItems).map(function(k){ return countedItems[k]; }); }
+  else {
+    if (!pasted.length) { alert('Paste at least one item number, or check "All counted items".'); return; }
+    focus = pasted;
+  }
+
+  var nisc = {}; (appData.nisc_capture || []).forEach(function(r){ nisc[r.item.toUpperCase()] = r; });
+  var cagg = {}; (appData.external_count || []).forEach(function(r){ var k = r.item.toUpperCase(); if (!cagg[k]) cagg[k] = { total: 0, loc: r.location, desc: r.description }; cagg[k].total += r.qty; if (!cagg[k].desc && r.description) cagg[k].desc = r.description; });
+
+  var items = { serialized: [], bulk: [], reels: [] };
+  focus.forEach(function(it) {
+    var up = it.toUpperCase();
+    var n = nisc[up], c = cagg[up];
+    var cls = n ? n.classification : "bulk";
+    var pm = findProductMapMatch(it);
+    var desc = (c && c.desc) || (n && n.description) || ((pm && pm.entry) ? (pm.entry.name || pm.entry.description || "") : "");
+    // Location comes ONLY from the physical count's Ticket shelf — the trustworthy walk target.
+    // NISC Aisle/Bin is reference-only and wildly out of date, so it is never stored as a location.
+    var loc  = (c && c.loc) || "";
+    var cap  = n ? n.captured : null;
+    var base = { rcItemId: rcGenItemId(), itemNumber: it, description: desc, location: loc, gapType: "manual", niscExpectedQty: (cap != null ? cap : null), status: "pending" };
+    if (cls === "serialized") items.serialized.push(Object.assign(base, { serial: "" }));
+    else if (cls === "reels") items.reels.push(Object.assign(base, { reelNumber: "", odooFt: null, countedFt: (c ? c.total : null) }));
+    else items.bulk.push(Object.assign(base, { odooQty: null, countedQty: (c ? c.total : null) }));
+  });
+
+  var session = {
+    recountId: rcGenSessionId(), recountName: name,
+    cycleId: invSession ? (invSession.cycleId || invSession.sessionId) : null,
+    parentId: invSession ? invSession.sessionId : null,
+    counters: counters, createdAt: invNow(), status: "active",
+    worklist: true, wlAllItems: !!all, items: items
+  };
+  rcSessions.push(session); rcSaveStorage();
+  rcActiveId = session.recountId; rcView = "worklist"; rcWlIsolate = ""; rcWlSort = "location";
+  rcRenderCard();
+}
+
+function rcWlSetRecount(recountId, itemUpper, val) {
+  var s = rcSessions.find(function(x){ return x.recountId === recountId; });
+  if (!s) return;
+  var f = rcFindItemByNumber(s, itemUpper);
+  if (!f) return;
+  var n = parseFloat(val);
+  if (val === "" || isNaN(n)) { delete f.item.recountedQty; if (f.item.status === "complete") f.item.status = "pending"; }
+  else { f.item.recountedQty = n; f.item.status = "complete"; }
+  rcSaveStorage();
+  rcRenderWorklist();
+}
+
+// ── Worklist rendering ──────────────────────────────────────────────
+function rcClsBadge(cls) {
+  var map = {
+    bulk:       '<span style="background:#e0f2fe;color:#075985;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">BULK</span>',
+    serialized: '<span style="background:#fae8ff;color:#86198f;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">SERIAL</span>',
+    reels:      '<span style="background:#fef3c7;color:#92400e;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;">REEL</span>'
+  };
+  return map[cls] || map.bulk;
+}
+
+function rcDataStatusRow(label, meta, count, clearFn) {
+  var loaded = count > 0;
+  var right = loaded
+    ? '<span style="color:#166534;font-weight:600;">' + count.toLocaleString() + ' rows</span>' +
+      (meta && meta.fileName ? ' <span class="small" style="color:#94a3b8;">· ' + escapeHtml(meta.fileName) + '</span>' : '') +
+      ' <button class="secondary" style="padding:1px 8px;font-size:11px;margin-left:6px;" onclick="' + clearFn + '()">Clear</button>'
+    : '<span style="color:#b45309;">Not loaded — drop on Data Import</span>';
+  return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #f1f5f9;">' +
+    '<span style="font-size:13px;font-weight:600;">' + escapeHtml(label) + '</span>' +
+    '<span style="font-size:13px;">' + right + '</span>' +
+  '</div>';
+}
+
+function rcRenderWorklistHome() {
+  var el = $("rcWorklistContent");
+  if (!el) return;
+  var nCount = (appData.external_count || []).length;
+  var nMove  = (appData.product_movements || []).length;
+  var nNisc  = (appData.nisc_capture || []).length;
+
+  var html = '';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+    '<h3 style="margin:0;">Recount Worklist</h3>' +
+    '<button class="secondary" onclick="rcShowList()" style="font-size:13px;">&#8592; Back to Sessions</button>' +
+  '</div>';
+  html += '<p class="small" style="margin:0 0 12px;color:#64748b;">Paste the items to recount. TIM cross-references the imported physical count and shows every shelf each item was counted at — in bin-walk order — adjusted for movement since the count.</p>';
+
+  // Data status
+  html += '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:14px;">' +
+    '<div style="font-weight:700;font-size:12px;text-transform:uppercase;color:#64748b;margin-bottom:4px;">Source Data</div>' +
+    rcDataStatusRow("Physical Count (shelf-by-shelf)", rcCountMeta, nCount, "rcClearCountData") +
+    rcDataStatusRow("Product Movement (Odoo)",         rcMoveMeta,  nMove,  "rcClearMoveData") +
+    rcDataStatusRow("NISC Capture (expected qty)",     rcNiscMeta,  nNisc,  "rcClearNiscData") +
+  '</div>';
+
+  if (!nCount) {
+    html += '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;color:#92400e;font-size:13px;">Import a <b>physical count file</b> before building a worklist. Drop your count / movement / NISC CSVs on the <b>Data Import</b> zone — TIM auto-detects them.</div>';
+  } else {
+    var num = rcSessions.length + 1;
+    var mo  = new Date().toLocaleString("default", { month: "long", year: "numeric" });
+    html += '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">' +
+      '<div style="display:grid;gap:10px;max-width:560px;">' +
+        '<label style="font-size:13px;">Worklist Name<br><input id="rcWlName" type="text" value="Worklist #' + num + ' – ' + escapeHtml(mo) + '" style="width:100%;" /></label>' +
+        '<label style="font-size:13px;">Counter(s) <span class="small" style="color:#94a3b8;">comma-separated</span><br><input id="rcWlCounters" type="text" value="' + escapeHtml(timGetUsername() || "") + '" placeholder="Joe Herring" style="width:100%;" /></label>' +
+        '<label style="font-size:13px;">Items to recount <span class="small" style="color:#94a3b8;">paste any mix of spaces / commas / new lines</span><br>' +
+          '<textarea id="rcWlPaste" rows="4" placeholder="190 6150DP 200 708 434 …" style="width:100%;font-family:monospace;font-size:13px;"></textarea></label>' +
+        '<label style="font-size:13px;display:flex;align-items:center;gap:8px;"><input type="checkbox" id="rcWlAllItems" style="width:auto;" /> Or: build for <b>all ' + Object.keys((function(){var o={};(appData.external_count||[]).forEach(function(r){if(r.item)o[r.item.toUpperCase()]=1;});return o;})()).length + '</b> counted items</label>' +
+        '<div><button onclick="rcConfirmWorklistCreate()">Build Worklist &#8594;</button></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Existing worklist sessions
+  var wls = rcSessions.filter(function(s){ return s.worklist; });
+  if (wls.length) {
+    html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Existing Worklists</div>';
+    wls.slice().reverse().forEach(function(s) {
+      var focus = rcSessionFocusSet(s);
+      var done = [].concat(s.items.serialized, s.items.bulk, s.items.reels).filter(function(i){ return i.status === "complete"; }).length;
+      html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;">' +
+        '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:14px;">' + escapeHtml(s.recountName) + '</div>' +
+          '<div class="small" style="color:#64748b;">' + (s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '') + ' &bull; ' + focus.size + ' items &bull; ' + done + ' recounted</div></div>' +
+        '<button class="secondary" onclick="rcOpenWorklist(\'' + s.recountId + '\')" style="padding:5px 12px;font-size:13px;">Open</button>' +
+      '</div>';
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function rcRenderWorklistTable(session) {
+  var el = $("rcWorklistContent");
+  if (!el) return;
+  var focus = rcSessionFocusSet(session);
+  var wl = rcBuildWorklist(focus);
+
+  // recount overlay lookup by UPPER item
+  var recByItem = {};
+  ["bulk", "serialized", "reels"].forEach(function(t) {
+    (session.items[t] || []).forEach(function(it) {
+      if (it.itemNumber) recByItem[it.itemNumber.toUpperCase()] = { rcItemId: it.rcItemId, type: t, recountedQty: it.recountedQty, status: it.status };
+    });
+  });
+
+  var rows = wl.flat.slice();
+  if (rcWlIsolate) rows = rows.filter(function(r){ return r.itemUpper === rcWlIsolate; });
+  if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
+  else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
+
+  var html = '';
+  // Header
+  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap;">' +
+    '<div><h3 style="margin:0 0 2px;">' + escapeHtml(session.recountName) + '</h3>' +
+      '<div class="small" style="color:#64748b;">' + focus.size + ' items &bull; ' + wl.flat.length + ' shelf lines' + (wl.absent.length ? ' &bull; ' + wl.absent.length + ' zero-count' : '') + '</div></div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+      '<button class="secondary" onclick="rcShowWorklistHome()" style="font-size:12px;">&#8592; Worklists</button>' +
+      '<button class="secondary" onclick="rcShowDetail(\'' + session.recountId + '\')" style="font-size:12px;">Table view</button>' +
+      '<button onclick="rcExportWorklistCsv(\'' + session.recountId + '\')" style="font-size:12px;">&#8595; Export CSV</button>' +
+    '</div>' +
+  '</div>';
+
+  // Controls
+  var isoOpts = '<option value="">All items</option>' + Array.from(focus).sort().map(function(u){
+    return '<option value="' + escapeHtml(u) + '"' + (u === rcWlIsolate ? ' selected' : '') + '>' + escapeHtml(u) + '</option>';
+  }).join("");
+  html += '<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">' +
+    '<span style="font-size:12px;font-weight:600;">Sort:</span>' +
+    '<label style="font-size:13px;margin:0;display:flex;align-items:center;gap:4px;"><input type="radio" name="rcWlSort" style="width:auto;" ' + (rcWlSort === "location" ? "checked" : "") + ' onclick="rcWlSetSort(\'location\')"> Location</label>' +
+    '<label style="font-size:13px;margin:0;display:flex;align-items:center;gap:4px;"><input type="radio" name="rcWlSort" style="width:auto;" ' + (rcWlSort === "item" ? "checked" : "") + ' onclick="rcWlSetSort(\'item\')"> Item</label>' +
+    '<span style="font-size:12px;font-weight:600;margin-left:8px;">Isolate:</span>' +
+    '<select onchange="rcWlSetIsolate(this.value)" style="font-size:13px;padding:4px 8px;">' + isoOpts + '</select>' +
+  '</div>';
+
+  // Worktable
+  html += '<div class="scroll"><table style="font-size:13px;width:100%;">' +
+    '<thead><tr>' +
+      '<th>Location</th><th>Item</th><th>Type</th><th>Description</th>' +
+      '<th style="text-align:right;">Shelf Qty</th><th>Lines</th><th>Count Date</th>' +
+      '<th style="text-align:right;">Count Total</th><th style="text-align:right;">Out (&minus;)</th>' +
+      '<th style="text-align:right;">Expected</th><th>Inbound (verify)</th>' +
+      '<th style="text-align:right;">NISC Cap</th><th style="text-align:right;">Short</th><th>Recount</th>' +
+    '</tr></thead><tbody>';
+
+  if (!rows.length) {
+    html += '<tr><td colspan="14" style="color:#94a3b8;padding:12px;text-align:center;">No matching shelf lines.</td></tr>';
+  }
+  rows.forEach(function(r) {
+    var rec = recByItem[r.itemUpper] || {};
+    var shortCell = r.shortVsNisc == null ? '—'
+      : (r.shortVsNisc > 0 ? '<span style="color:#b91c1c;font-weight:700;">' + r.shortVsNisc + '</span>'
+      : r.shortVsNisc < 0 ? '<span style="color:#7c3aed;font-weight:600;">+' + (-r.shortVsNisc) + '</span>'
+      : '<span style="color:#166534;">0</span>');
+    var inCell = r.isFirst && r.inAfter ? '<span style="color:#b45309;font-weight:600;">+' + r.inAfter + ' ⚑</span>' : '';
+    var recountCell;
+    if (r.isFirst) {
+      if (r.classification === "bulk") {
+        recountCell = '<input type="number" min="0" step="any" value="' + (rec.recountedQty != null ? rec.recountedQty : "") + '" placeholder="—" style="width:70px;" onchange="rcWlSetRecount(\'' + session.recountId + '\',\'' + r.itemUpper + '\',this.value)" />';
+      } else {
+        recountCell = rec.rcItemId
+          ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (r.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>'
+          : '—';
+      }
+    } else {
+      recountCell = (rec.recountedQty != null) ? '<span class="small" style="color:#94a3b8;">' + rec.recountedQty + '</span>' : '';
+    }
+    var doneMark = (rec.status === "complete") ? ' style="background:#f0fdf4;"' : '';
+    html += '<tr' + doneMark + '>' +
+      '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(r.loc) + '</td>' +
+      '<td style="font-family:monospace;">' + escapeHtml(r.item) + '</td>' +
+      '<td>' + rcClsBadge(r.classification) + '</td>' +
+      '<td style="max-width:200px;white-space:normal;">' + escapeHtml(r.desc) + '</td>' +
+      '<td style="text-align:right;">' + r.shelfQty + '</td>' +
+      '<td class="small" style="color:#64748b;">' + escapeHtml(r.lines) + '</td>' +
+      '<td>' + (r.isFirst ? escapeHtml(r.countDate) : '') + '</td>' +
+      '<td style="text-align:right;">' + (r.isFirst ? r.total : '') + '</td>' +
+      '<td style="text-align:right;color:#b91c1c;">' + (r.isFirst && r.outAfter ? '-' + r.outAfter : '') + '</td>' +
+      '<td style="text-align:right;font-weight:600;">' + (r.isFirst ? r.expected : '') + '</td>' +
+      '<td>' + inCell + '</td>' +
+      '<td style="text-align:right;">' + (r.isFirst && r.captured != null ? r.captured : '') + '</td>' +
+      '<td style="text-align:right;">' + (r.isFirst ? shortCell : '') + '</td>' +
+      '<td>' + recountCell + '</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table></div>';
+
+  // Zero-count / not-found items
+  var absent = wl.absent.slice();
+  if (rcWlIsolate) absent = absent.filter(function(a){ return a.item === rcWlIsolate; });
+  if (absent.length) {
+    html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;color:#b91c1c;margin-bottom:2px;">⚑ Counted ZERO / not found (' + absent.length + ') — walk to confirm truly absent</div>' +
+      '<div class="small" style="color:#94a3b8;margin-bottom:6px;">NISC Aisle/Bin is <b>reference only and out of date</b> — a faint hint, not a location to trust.</div>' +
+      '<div class="scroll"><table style="font-size:13px;"><thead><tr><th>Item</th><th>Type</th><th>Description</th><th>NISC Cap</th><th>Aisle/Bin (NISC — stale)</th><th>Recount</th></tr></thead><tbody>';
+    absent.forEach(function(a) {
+      var rec = recByItem[a.item] || {};
+      var recountCell = (a.classification === "bulk")
+        ? '<input type="number" min="0" step="any" value="' + (rec.recountedQty != null ? rec.recountedQty : "") + '" placeholder="—" style="width:70px;" onchange="rcWlSetRecount(\'' + session.recountId + '\',\'' + a.item + '\',this.value)" />'
+        : (rec.rcItemId ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (a.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>' : '—');
+      html += '<tr>' +
+        '<td style="font-family:monospace;">' + escapeHtml(a.item) + '</td>' +
+        '<td>' + rcClsBadge(a.classification) + '</td>' +
+        '<td style="max-width:220px;white-space:normal;">' + escapeHtml(a.description) + '</td>' +
+        '<td style="text-align:right;">' + (a.captured != null ? a.captured : '—') + '</td>' +
+        '<td style="font-family:monospace;color:#b0b7c3;font-style:italic;">' + escapeHtml(a.aisleBin || "") + '</td>' +
+        '<td>' + recountCell + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // Secondary: NISC row-drop candidates
+  var drops = wl.niscDrops.slice();
+  if (rcWlIsolate) drops = drops.filter(function(d){ return d.item.toUpperCase() === rcWlIsolate; });
+  if (drops.length) {
+    var dropId = "rcWlDrops_" + session.recountId.slice(-6);
+    html += '<div style="margin-top:16px;"><div class="collapsible-header" onclick="var b=document.getElementById(\'' + dropId + '\');if(b)b.classList.toggle(\'hidden\');" style="cursor:pointer;padding:6px 0;border-bottom:1px solid #e2e8f0;">' +
+      '<b style="font-size:12px;color:#7c3aed;">NISC capture vs NISC posted — ' + drops.length + ' item(s) where Captured &gt; NISC Counted (possible dropped rows)</b></div>' +
+      '<div id="' + dropId + '" class="hidden" style="padding-top:8px;"><div class="scroll"><table style="font-size:13px;"><thead><tr><th>Item</th><th>Description</th><th style="text-align:right;">NISC Captured</th><th style="text-align:right;">NISC Counted</th><th style="text-align:right;">Dropped</th></tr></thead><tbody>';
+    drops.forEach(function(d) {
+      html += '<tr><td style="font-family:monospace;">' + escapeHtml(d.item) + '</td><td style="max-width:220px;white-space:normal;">' + escapeHtml(d.description) + '</td><td style="text-align:right;">' + d.captured + '</td><td style="text-align:right;">' + d.niscCount + '</td><td style="text-align:right;color:#b91c1c;font-weight:600;">' + d.dropped + '</td></tr>';
+    });
+    html += '</tbody></table></div></div></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function rcRenderWorklist() {
+  var session = rcActiveId ? rcSessions.find(function(s){ return s.recountId === rcActiveId; }) : null;
+  if (session && session.worklist) rcRenderWorklistTable(session);
+  else rcRenderWorklistHome();
+}
+
+function rcExportWorklistCsv(recountId) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var focus = rcSessionFocusSet(session);
+  var wl = rcBuildWorklist(focus);
+  var recByItem = {};
+  ["bulk", "serialized", "reels"].forEach(function(t) {
+    (session.items[t] || []).forEach(function(it) { if (it.itemNumber) recByItem[it.itemNumber.toUpperCase()] = it; });
+  });
+  var rows = wl.flat.slice();
+  if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
+  else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
+
+  var out = [["Location","Item","Type","Description","Shelf Qty","Count Lines","Count Date","Count Total","Outbound Since Count","Expected Now","Inbound Since Count (VERIFY)","NISC Captured","Short vs NISC","Recount Qty","Notes"]];
+  rows.forEach(function(r) {
+    var rec = recByItem[r.itemUpper] || {};
+    out.push([r.loc, r.item, r.classification, r.desc, r.shelfQty, r.lines,
+      r.isFirst ? r.countDate : "", r.isFirst ? r.total : "",
+      r.isFirst && r.outAfter ? ("-" + r.outAfter) : "", r.isFirst ? r.expected : "",
+      r.isFirst && r.inAfter ? ("+" + r.inAfter + " verify") : "",
+      r.isFirst && r.captured != null ? r.captured : "", r.isFirst && r.shortVsNisc != null ? r.shortVsNisc : "",
+      (r.isFirst && rec.recountedQty != null) ? rec.recountedQty : "",
+      (r.isFirst && r.recountQty) ? ("incl +" + r.recountQty + " recounted (blank-LINE)") : ""]);
+  });
+  wl.absent.forEach(function(a) {
+    var rec = recByItem[a.item] || {};
+    out.push(["", a.item, a.classification, a.description, "", "", "", 0, "", 0, "", a.captured != null ? a.captured : "", a.captured != null ? a.captured : "",
+      rec.recountedQty != null ? rec.recountedQty : "", "Counted ZERO (no shelf line) — walk to confirm truly absent"]);
+  });
+
+  var csv = out.map(function(row){ return row.map(function(v){ var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; }).join(","); }).join("\r\n") + "\r\n";
+  var safe = (session.recountName || "worklist").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
+  var blob = new Blob([csv], { type: "text/csv" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "recount-worklist-" + safe + "-" + new Date().toISOString().slice(0,10) + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+}
+
 // ── Persistence ────────────────────────────────────────────────────
 
 function rcSaveStorage() {
@@ -9845,24 +10549,32 @@ function rcShowDetail(recountId) {
 // ── Card rendering ─────────────────────────────────────────────────
 
 function rcRenderCard() {
-  var createForm = $("rcCreateForm");
-  var listView   = $("rcListView");
-  var detailView = $("rcDetailView");
+  var createForm   = $("rcCreateForm");
+  var listView     = $("rcListView");
+  var detailView   = $("rcDetailView");
+  var worklistView = $("rcWorklistView");
   if (!listView) return;
 
-  if (rcView === "create") {
-    if (createForm) createForm.classList.remove("hidden");
+  function hideAll() {
+    if (createForm)   createForm.classList.add("hidden");
     listView.classList.add("hidden");
-    if (detailView) detailView.classList.add("hidden");
+    if (detailView)   detailView.classList.add("hidden");
+    if (worklistView) worklistView.classList.add("hidden");
+  }
+
+  if (rcView === "create") {
+    hideAll();
+    if (createForm) createForm.classList.remove("hidden");
     // rcShowCreate fills fields — called separately
   } else if (rcView === "detail") {
-    if (createForm) createForm.classList.add("hidden");
-    listView.classList.add("hidden");
+    hideAll();
     if (detailView) { detailView.classList.remove("hidden"); rcRenderDetail(); }
+  } else if (rcView === "worklist") {
+    hideAll();
+    if (worklistView) { worklistView.classList.remove("hidden"); rcRenderWorklist(); }
   } else {
-    if (createForm) createForm.classList.add("hidden");
+    hideAll();
     listView.classList.remove("hidden");
-    if (detailView) detailView.classList.add("hidden");
     rcRenderList();
   }
 }
@@ -9881,6 +10593,10 @@ function rcRenderList() {
     var statusBadge = s.status === "active"
       ? '<span style="background:#dbeafe;color:#1d4ed8;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Active</span>'
       : '<span style="background:#f1f5f9;color:#64748b;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Closed</span>';
+    var wlBadge = s.worklist ? '<span style="background:#dcfce7;color:#15803d;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Worklist</span>' : '';
+    var openBtn = s.worklist
+      ? '<button class="secondary" onclick="rcOpenWorklist(\'' + s.recountId + '\')" style="padding:5px 12px;font-size:13px;">Open</button>'
+      : '<button class="secondary" onclick="rcShowDetail(\'' + s.recountId + '\')" style="padding:5px 12px;font-size:13px;">View</button>';
     return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;">' +
       '<div style="flex:1;min-width:0;">' +
         '<div style="font-weight:600;font-size:14px;">' + escapeHtml(s.recountName) + '</div>' +
@@ -9889,8 +10605,9 @@ function rcRenderList() {
           ' &bull; ' + (total - pending) + '/' + total + ' addressed' +
         '</div>' +
       '</div>' +
+      wlBadge +
       statusBadge +
-      '<button class="secondary" onclick="rcShowDetail(\'' + s.recountId + '\')" style="padding:5px 12px;font-size:13px;">View</button>' +
+      openBtn +
     '</div>';
   }).join("");
 }
@@ -10658,14 +11375,10 @@ function rcMovementsSummary(item) {
 }
 
 function rcResolutionLabel(val) {
-  var map = {
-    confirmed_correct: "Confirmed Correct",
-    adjusted_up:       "Adjusted Up",
-    adjusted_down:     "Adjusted Down",
-    product_movement:  "Product Movement",
-    unable_to_locate:  "Unable to Locate"
-  };
-  return map[val] || val || "";
+  if (!val) return "";
+  // Derive from the single source of truth so dropdown + export labels can never drift.
+  var opt = RC_RESOLUTION_OPTIONS.find(function(o){ return o.value === val; });
+  return opt ? opt.label : val;
 }
 
 function rcAutoColWidths(headers, rows) {

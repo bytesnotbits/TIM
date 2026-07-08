@@ -940,11 +940,14 @@
 
     <!-- Phase 3: Recount Sessions -->
     <div class="card inv-subview" data-inv-subview="recount" id="rcSessionsCard">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;gap:8px;flex-wrap:wrap;">
         <h2 style="margin:0;">Recount Sessions</h2>
-        <button onclick="rcShowCreate(false)" id="rcNewBtn" class="secondary">+ New Session</button>
+        <div style="display:flex;gap:8px;">
+          <button onclick="rcShowWorklistHome()" id="rcWorklistBtn">&#128694; Recount Worklist</button>
+          <button onclick="rcShowCreate(false)" id="rcNewBtn" class="secondary">+ New Session</button>
+        </div>
       </div>
-      <p class="small" style="margin:8px 0 0;">Post-submission recount tracking. Create sessions from gap analysis results or manually, enter NISC expected quantities, and drive physical recounts.</p>
+      <p class="small" style="margin:8px 0 0;">Post-submission recount tracking. Build a <b>location-ordered worklist</b> from an imported count, or create sessions from gap analysis / manually, enter NISC expected quantities, and drive physical recounts.</p>
 
       <!-- Create form (hidden until activated) -->
       <div id="rcCreateForm" class="hidden" style="margin-top:14px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
@@ -976,6 +979,11 @@
       <div id="rcDetailView" class="hidden" style="margin-top:12px;">
         <button class="secondary" onclick="rcShowList()" style="margin-bottom:14px;font-size:13px;">&#8592; Back to Sessions</button>
         <div id="rcDetailContent"></div>
+      </div>
+
+      <!-- Recount worklist view (location-ordered worktable) -->
+      <div id="rcWorklistView" class="hidden" style="margin-top:12px;">
+        <div id="rcWorklistContent"></div>
       </div>
     </div>
 
