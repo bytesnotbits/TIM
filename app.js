@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.04";
+const APP_VERSION = "v2.30.05";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -9774,8 +9774,9 @@ let rcCountMeta = { importedAt: null, fileName: null };
 let rcMoveMeta  = { importedAt: null, fileName: null };
 let rcNiscMeta  = { importedAt: null, fileName: null };
 
-let rcWlSort    = "location"; // worklist sort: "location" | "item"
-let rcWlIsolate = "";          // isolate a single item (UPPER), "" = show all
+let rcWlSort        = "location"; // worklist sort: "location" | "item"
+let rcWlIsolate     = "";          // isolate a single item (UPPER), "" = show all
+let rcWlCountFilter = "all";       // "all" | "counted" | "uncounted" (recount entered vs not)
 
 // ── number / date helpers ──────────────────────────────────────────
 function rcNum(v) { var n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; }
@@ -10109,8 +10110,9 @@ function rcShowWorklistHome() {
   rcRenderCard();
 }
 function rcOpenWorklist(recountId) { rcView = "worklist"; rcActiveId = recountId; rcWlIsolate = ""; rcWlSort = "location"; rcRenderCard(); }
-function rcWlSetSort(v)    { rcWlSort = v; rcRenderWorklist(); }
-function rcWlSetIsolate(v) { rcWlIsolate = v || ""; rcRenderWorklist(); }
+function rcWlSetSort(v)        { rcWlSort = v; rcRenderWorklist(); }
+function rcWlSetIsolate(v)     { rcWlIsolate = v || ""; rcRenderWorklist(); }
+function rcWlSetCountFilter(v) { rcWlCountFilter = v || "all"; rcRenderWorklist(); }
 
 function rcConfirmWorklistCreate() {
   if (!(appData.external_count || []).length) { alert("Import a physical count file first — drop it on the Data Import zone."); return; }
@@ -10293,6 +10295,8 @@ function rcRenderWorklistTable(session) {
 
   var rows = wl.flat.slice();
   if (rcWlIsolate) rows = rows.filter(function(r){ return r.itemUpper === rcWlIsolate; });
+  if (rcWlCountFilter === "counted")   rows = rows.filter(function(r){ return r.recountVal != null || r.added; });
+  else if (rcWlCountFilter === "uncounted") rows = rows.filter(function(r){ return r.recountVal == null && !r.added; });
   if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
   else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
 
@@ -10318,6 +10322,12 @@ function rcRenderWorklistTable(session) {
     '<label style="font-size:13px;margin:0;display:flex;align-items:center;gap:4px;"><input type="radio" name="rcWlSort" style="width:auto;" ' + (rcWlSort === "item" ? "checked" : "") + ' onclick="rcWlSetSort(\'item\')"> Item</label>' +
     '<span style="font-size:12px;font-weight:600;margin-left:8px;">Isolate:</span>' +
     '<select onchange="rcWlSetIsolate(this.value)" style="font-size:13px;padding:4px 8px;">' + isoOpts + '</select>' +
+    '<span style="font-size:12px;font-weight:600;margin-left:8px;">Show:</span>' +
+    '<select onchange="rcWlSetCountFilter(this.value)" style="font-size:13px;padding:4px 8px;">' +
+      '<option value="all"' +       (rcWlCountFilter === "all" ? " selected" : "") +       '>All</option>' +
+      '<option value="uncounted"' + (rcWlCountFilter === "uncounted" ? " selected" : "") + '>Not yet recounted</option>' +
+      '<option value="counted"' +   (rcWlCountFilter === "counted" ? " selected" : "") +   '>Recounted</option>' +
+    '</select>' +
   '</div>';
 
   // Worktable
@@ -10349,9 +10359,7 @@ function rcRenderWorklistTable(session) {
       // per-location count box on EVERY shelf row — enter what you find at this bin
       recountCell = '<input type="number" min="0" step="any" value="' + (r.recountVal != null ? r.recountVal : "") + '" placeholder="' + r.shelfQty + '" style="width:64px;" onchange="rcWlSetLocRecount(\'' + session.recountId + '\',\'' + r.itemUpper + '\',\'' + encLoc + '\',this.value)" />';
     }
-    if (r.isFirst) {
-      recountCell += ' <button class="secondary" title="Found this item at a location the count missed" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + r.itemUpper + '\')">&#43;loc</button>';
-    }
+    recountCell += ' <button class="secondary" title="Found this item at another location" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + r.itemUpper + '\')">&#43;loc</button>';
     var doneMark = (r.recountVal != null) ? ' style="background:#f0fdf4;"' : '';
     html += '<tr' + doneMark + '>' +
       '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(r.loc) + (r.added ? ' <span style="background:#dcfce7;color:#15803d;border-radius:4px;padding:0 5px;font-size:9px;font-weight:700;vertical-align:middle;">ADDED</span>' : '') + '</td>' +
@@ -10372,8 +10380,8 @@ function rcRenderWorklistTable(session) {
   });
   html += '</tbody></table></div>';
 
-  // Zero-count / not-found items
-  var absent = wl.absent.slice();
+  // Zero-count / not-found items (hidden when filtering to already-recounted rows)
+  var absent = (rcWlCountFilter === "counted") ? [] : wl.absent.slice();
   if (rcWlIsolate) absent = absent.filter(function(a){ return a.item === rcWlIsolate; });
   if (absent.length) {
     html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;color:#b91c1c;margin-bottom:2px;">⚑ Counted ZERO / not found (' + absent.length + ') — walk to confirm truly absent</div>' +
@@ -10488,9 +10496,20 @@ function rcWlRemoveAddedRow(recountId, idx) {
 }
 
 function rcRenderWorklist() {
+  // Preserve scroll position so entering a count doesn't jump the page/table to the top.
+  var doc = document.scrollingElement || document.documentElement;
+  var docY = doc ? doc.scrollTop : 0;
+  var content = $("rcWorklistContent");
+  var prevScroll = content ? content.querySelector(".scroll") : null;
+  var innerY = prevScroll ? prevScroll.scrollTop : 0;
+
   var session = rcActiveId ? rcSessions.find(function(s){ return s.recountId === rcActiveId; }) : null;
   if (session && session.worklist) rcRenderWorklistTable(session);
   else rcRenderWorklistHome();
+
+  if (doc) doc.scrollTop = docY;
+  var newScroll = content ? content.querySelector(".scroll") : null;
+  if (newScroll) newScroll.scrollTop = innerY;
 }
 
 function rcExportWorklistCsv(recountId) {
