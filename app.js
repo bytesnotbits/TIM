@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.00";
+const APP_VERSION = "v2.30.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -9803,11 +9803,34 @@ function rcColIdx(header, names) {
   return -1;
 }
 
+// Full-text CSV parser — a state machine that correctly handles quoted commas
+// AND newlines inside quoted fields (e.g. a product name with a stray line break).
+// bcParseCsvRow is per-line and cannot; these source files can contain both.
+function rcParseCsvRows(text) {
+  var rows = [], row = [], field = "", inQ = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(field); field = ""; }
+      else if (c === '\r') { /* ignore */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+function rcRowBlank(r) { return !r || r.every(function(f) { return String(f == null ? "" : f).trim() === ""; }); }
+
 // ── Importers (fail loud on missing required headers — user fixes source) ──
 function rcProcessCountCsv(text, fileName) {
-  var lines = text.split(/\r?\n/);
-  if (!lines.length) throw new Error("Empty file.");
-  var header = bcParseCsvRow(lines[0] || "");
+  var parsedRows = rcParseCsvRows(text);
+  if (!parsedRows.length) throw new Error("Empty file.");
+  var header = parsedRows[0];
   var iItem = rcColIdx(header, ["Item"]);
   var iQty  = rcColIdx(header, ["QuantitySum", "Quantity Sum"]);
   var iTkt  = rcColIdx(header, ["Ticket"]);
@@ -9823,9 +9846,9 @@ function rcProcessCountCsv(text, fileName) {
   if (missing.length) throw new Error("Physical count file is missing required column(s): " + missing.join(", ") + ". Fix the source export and re-import.\nFound: " + header.join(", "));
 
   var rows = [];
-  for (var i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    var c = bcParseCsvRow(lines[i]);
+  for (var i = 1; i < parsedRows.length; i++) {
+    var c = parsedRows[i];
+    if (rcRowBlank(c)) continue;
     var item = (c[iItem] || "").trim();
     if (!item) continue; // skip blank-item rows (trailing blanks in the export)
     var lineNo = (c[iLine] || "").trim();
@@ -9848,9 +9871,9 @@ function rcProcessCountCsv(text, fileName) {
 }
 
 function rcProcessMovementCsv(text, fileName) {
-  var lines = text.split(/\r?\n/);
-  if (!lines.length) throw new Error("Empty file.");
-  var header = bcParseCsvRow(lines[0] || "");
+  var parsedRows = rcParseCsvRows(text);
+  if (!parsedRows.length) throw new Error("Empty file.");
+  var header = parsedRows[0];
   var iProd = rcColIdx(header, ["Product"]);
   var iRef  = rcColIdx(header, ["Reference"]);
   var iQty  = rcColIdx(header, ["Quantity"]);
@@ -9863,9 +9886,9 @@ function rcProcessMovementCsv(text, fileName) {
   if (missing.length) throw new Error("Product Movement file is missing required column(s): " + missing.join(", ") + ". Fix the source export and re-import.\nFound: " + header.join(", "));
 
   var rows = [], unknownRefs = 0;
-  for (var i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    var c = bcParseCsvRow(lines[i]);
+  for (var i = 1; i < parsedRows.length; i++) {
+    var c = parsedRows[i];
+    if (rcRowBlank(c)) continue;
     var prod = (c[iProd] || "").trim();
     var mm = prod.match(/^\[([^\]]+)\]/);
     if (!mm) continue; // no [item] bracket — skip summary/blank rows
@@ -9890,9 +9913,9 @@ function rcProcessMovementCsv(text, fileName) {
 }
 
 function rcProcessNiscCsv(text, fileName) {
-  var lines = text.split(/\r?\n/);
-  if (!lines.length) throw new Error("Empty file.");
-  var header = bcParseCsvRow(lines[0] || "");
+  var parsedRows = rcParseCsvRows(text);
+  if (!parsedRows.length) throw new Error("Empty file.");
+  var header = parsedRows[0];
   var iItem = rcColIdx(header, ["Item"]);
   var iCap  = rcColIdx(header, ["Captured Qty"]);
   var iCur  = rcColIdx(header, ["Current Count Qty"]);
@@ -9909,9 +9932,9 @@ function rcProcessNiscCsv(text, fileName) {
   var byItem = {};
   (appData.nisc_capture || []).forEach(function(r) { byItem[r.item.toUpperCase()] = r; });
   var added = 0;
-  for (var i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue;
-    var c = bcParseCsvRow(lines[i]);
+  for (var i = 1; i < parsedRows.length; i++) {
+    var c = parsedRows[i];
+    if (rcRowBlank(c)) continue;
     var item = (c[iItem] || "").trim();
     if (!item) continue;
     var srRaw = iSR >= 0 ? (c[iSR] || "").trim().toUpperCase() : "";
