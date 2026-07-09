@@ -732,7 +732,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `rcImportCountCsv/MovementCsv/NiscCsv(file, cb)` | File-reader wrappers for the universal drop router |
 | `rcLoadWorklistData()` | Restore the 3 source files from IDB on startup |
 | `rcClearCountData/MoveData/NiscData()` | Clear a source file (confirm + IDB remove) |
-| `rcBuildWorklist(focusSet, extraRows)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged. `extraRows` = session `addedCountRows` (walk-time found-at rows) folded into totals + flagged `added` |
+| `rcBuildWorklist(focusSet, extraRows, locRecounts)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged. `extraRows` = session `addedCountRows` (walk-time found-at rows) folded into totals + flagged `added`. `locRecounts` = `{ITEM\|\|LOC:qty}` per-location walk counts that override that shelf's file qty → Item Total + Short self-correct |
+| `rcWlSetLocRecount(id,itemUp,loc,val)` | Per-location recount box (every shelf row): store/clear `session.locRecounts[item\|\|loc]`; sets item status |
 | `rcWlOpenAddRow / rcWlCloseAddRow / rcWlCommitAddRow(id,itemUp) / rcWlRemoveAddedRow(id,idx)` | "＋loc" add-a-found-location flow: modal → append to `session.addedCountRows` (isRecount, dated today) → Short self-corrects; undo via removal |
 | `rcSessionFocusSet(session)` / `rcFindItemByNumber(session, up)` | Session helpers: item-number set / lookup |
 | `rcShowWorklistHome()` / `rcOpenWorklist(id)` | Enter worklist home (build form + data status) / open a saved worklist |

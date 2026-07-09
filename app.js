@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.02";
+const APP_VERSION = "v2.30.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -9977,13 +9977,16 @@ function rcClearNiscData()  { if (!confirm("Clear the imported NISC capture data
 
 // ── Join engine (port of docs/recount_reference.js) ─────────────────
 // focusSet: Set of UPPER item numbers to include; null/empty = all counted items.
-function rcBuildWorklist(focusSet, extraRows) {
+function rcBuildWorklist(focusSet, extraRows, locRecounts) {
   // extraRows: session-scoped "found-at" rows added during the walk (count-row shape).
-  // Kept on the session, not in the imported count file, so a count re-import can't wipe them.
+  //   Kept on the session, not in the imported count file, so a count re-import can't wipe them.
+  // locRecounts: { "ITEMUPPER||LOCATION": qty } — per-location recount entered on the walk;
+  //   overrides that shelf's file count and rolls into the item total (Short self-corrects).
   var count = (appData.external_count || []);
   if (extraRows && extraRows.length) count = count.concat(extraRows);
   var moves = appData.product_movements || [];
   var nisc  = appData.nisc_capture || [];
+  locRecounts = locRecounts || {};
 
   var addedKeys = {};
   (extraRows || []).forEach(function(r){ addedKeys[r.item.toUpperCase() + "||" + r.location] = true; });
@@ -10028,19 +10031,31 @@ function rcBuildWorklist(focusSet, extraRows) {
     var mv = moveByItem.get(key);
     var out_ = mv ? mv.outAfter : 0;
     var in_  = mv ? mv.inAfter : 0;
-    var total = rec.total;
     var nrec = niscByItem[key];
     var cap = nrec ? nrec.captured : null;
     itemsSeen[key] = true;
+    // Effective per-shelf qty: a per-location recount overrides that shelf's file count.
+    // Added rows keep their own qty. Item total = sum of effective shelf qtys.
+    var total = 0;
+    rec.locs.forEach(function(l, loc) {
+      var isAdded = !!addedKeys[key + "||" + loc];
+      var ov = (!isAdded && locRecounts[key + "||" + loc] != null) ? locRecounts[key + "||" + loc] : null;
+      l._eff = ov != null ? ov : l.qty;
+      l._recount = ov;
+      total += l._eff;
+    });
+    var anyRecount = false;
+    rec.locs.forEach(function(l, loc) { if (l._recount != null) anyRecount = true; });
     var first = true;
     rec.locs.forEach(function(l, loc) {
       flat.push({
         loc: loc, item: rec.item, itemUpper: key, desc: rec.desc,
-        shelfQty: l.qty, lines: l.lines.length > 1 ? l.lines.join(" + ") : "",
+        shelfQty: l.qty, recountVal: l._recount, effQty: l._eff,
+        lines: l.lines.length > 1 ? l.lines.join(" + ") : "",
         countDate: rcDayToDisplay(rec.day),
         total: total, outAfter: out_, expected: total - out_, inAfter: in_,
         captured: cap, shortVsNisc: cap != null ? (cap - total) : null,
-        shelves: rec.locs.size, recountQty: rec.recountQty,
+        shelves: rec.locs.size, recountQty: rec.recountQty, anyRecount: anyRecount,
         added: !!addedKeys[key + "||" + loc],
         classification: nrec ? nrec.classification : "bulk", isFirst: first
       });
@@ -10150,6 +10165,25 @@ function rcConfirmWorklistCreate() {
   rcRenderCard();
 }
 
+// Per-location recount: records what was counted at a specific shelf during the walk.
+function rcWlSetLocRecount(recountId, itemUpper, location, val) {
+  var s = rcSessions.find(function(x){ return x.recountId === recountId; });
+  if (!s) return;
+  s.locRecounts = s.locRecounts || {};
+  var key = itemUpper + "||" + location;
+  var n = parseFloat(val);
+  if (val === "" || isNaN(n)) delete s.locRecounts[key];
+  else s.locRecounts[key] = n;
+  // Reflect progress on the rcItem so the session list shows addressed/complete.
+  var f = rcFindItemByNumber(s, itemUpper);
+  if (f) {
+    var anyForItem = Object.keys(s.locRecounts).some(function(k){ return k.indexOf(itemUpper + "||") === 0; });
+    f.item.status = anyForItem ? "complete" : "pending";
+  }
+  rcSaveStorage();
+  rcRenderWorklist();
+}
+
 function rcWlSetRecount(recountId, itemUpper, val) {
   var s = rcSessions.find(function(x){ return x.recountId === recountId; });
   if (!s) return;
@@ -10247,7 +10281,7 @@ function rcRenderWorklistTable(session) {
   var el = $("rcWorklistContent");
   if (!el) return;
   var focus = rcSessionFocusSet(session);
-  var wl = rcBuildWorklist(focus, session.addedCountRows || []);
+  var wl = rcBuildWorklist(focus, session.addedCountRows || [], session.locRecounts || {});
 
   // recount overlay lookup by UPPER item
   var recByItem = {};
@@ -10290,10 +10324,10 @@ function rcRenderWorklistTable(session) {
   html += '<div class="scroll"><table style="font-size:13px;width:100%;">' +
     '<thead><tr>' +
       '<th>Location</th><th>Item</th><th>Type</th><th>Description</th>' +
-      '<th style="text-align:right;">Shelf Qty</th><th>Lines</th><th>Count Date</th>' +
-      '<th style="text-align:right;">Count Total</th><th style="text-align:right;">Out (&minus;)</th>' +
+      '<th style="text-align:right;">Count<br>(file)</th><th>Lines</th><th>Count Date</th>' +
+      '<th style="text-align:right;">Item Total</th><th style="text-align:right;">Out (&minus;)</th>' +
       '<th style="text-align:right;">Expected</th><th>Inbound (verify)</th>' +
-      '<th style="text-align:right;">NISC Cap</th><th style="text-align:right;">Short</th><th>Recount</th>' +
+      '<th style="text-align:right;">NISC Cap</th><th style="text-align:right;">Short</th><th>Recount<br>here</th>' +
     '</tr></thead><tbody>';
 
   if (!rows.length) {
@@ -10306,20 +10340,19 @@ function rcRenderWorklistTable(session) {
       : r.shortVsNisc < 0 ? '<span style="color:#7c3aed;font-weight:600;">+' + (-r.shortVsNisc) + '</span>'
       : '<span style="color:#166534;">0</span>');
     var inCell = r.isFirst && r.inAfter ? '<span style="color:#b45309;font-weight:600;">+' + r.inAfter + ' ⚑</span>' : '';
+    var encLoc = String(r.loc).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     var recountCell;
-    if (r.isFirst) {
-      if (r.classification === "bulk") {
-        recountCell = '<input type="number" min="0" step="any" value="' + (rec.recountedQty != null ? rec.recountedQty : "") + '" placeholder="—" style="width:70px;" onchange="rcWlSetRecount(\'' + session.recountId + '\',\'' + r.itemUpper + '\',this.value)" />';
-      } else {
-        recountCell = rec.rcItemId
-          ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (r.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>'
-          : '—';
-      }
-      recountCell += ' <button class="secondary" title="Found this item at a location the count missed" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + r.itemUpper + '\')">&#43;loc</button>';
+    if (r.added) {
+      // added-on-walk shelf line — qty was entered when added; edit via the "Added on walk" list
+      recountCell = '<span class="small" style="color:#15803d;font-weight:600;">' + r.shelfQty + '</span>';
     } else {
-      recountCell = (rec.recountedQty != null) ? '<span class="small" style="color:#94a3b8;">' + rec.recountedQty + '</span>' : '';
+      // per-location count box on EVERY shelf row — enter what you find at this bin
+      recountCell = '<input type="number" min="0" step="any" value="' + (r.recountVal != null ? r.recountVal : "") + '" placeholder="' + r.shelfQty + '" style="width:64px;" onchange="rcWlSetLocRecount(\'' + session.recountId + '\',\'' + r.itemUpper + '\',\'' + encLoc + '\',this.value)" />';
     }
-    var doneMark = (rec.status === "complete") ? ' style="background:#f0fdf4;"' : '';
+    if (r.isFirst) {
+      recountCell += ' <button class="secondary" title="Found this item at a location the count missed" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + r.itemUpper + '\')">&#43;loc</button>';
+    }
+    var doneMark = (r.recountVal != null) ? ' style="background:#f0fdf4;"' : '';
     html += '<tr' + doneMark + '>' +
       '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(r.loc) + (r.added ? ' <span style="background:#dcfce7;color:#15803d;border-radius:4px;padding:0 5px;font-size:9px;font-weight:700;vertical-align:middle;">ADDED</span>' : '') + '</td>' +
       '<td style="font-family:monospace;">' + escapeHtml(r.item) + '</td>' +
@@ -10348,10 +10381,8 @@ function rcRenderWorklistTable(session) {
       '<div class="scroll"><table style="font-size:13px;"><thead><tr><th>Item</th><th>Type</th><th>Description</th><th>NISC Cap</th><th>Aisle/Bin (NISC — stale)</th><th>Recount</th></tr></thead><tbody>';
     absent.forEach(function(a) {
       var rec = recByItem[a.item] || {};
-      var recountCell = (a.classification === "bulk")
-        ? '<input type="number" min="0" step="any" value="' + (rec.recountedQty != null ? rec.recountedQty : "") + '" placeholder="—" style="width:70px;" onchange="rcWlSetRecount(\'' + session.recountId + '\',\'' + a.item + '\',this.value)" />'
-        : (rec.rcItemId ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (a.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>' : '—');
-      recountCell += ' <button class="secondary" title="Found this item at a location" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + a.item + '\')">&#43;loc</button>';
+      // Absent = not at any counted shelf, so any find is a new location → +loc is the action
+      var recountCell = '<button class="secondary" title="Found this item somewhere — record the location" style="padding:2px 8px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + a.item + '\')">&#43; Found it</button>';
       html += '<tr>' +
         '<td style="font-family:monospace;">' + escapeHtml(a.item) + '</td>' +
         '<td>' + rcClsBadge(a.classification) + '</td>' +
@@ -10466,30 +10497,24 @@ function rcExportWorklistCsv(recountId) {
   var session = rcSessions.find(function(s){ return s.recountId === recountId; });
   if (!session) return;
   var focus = rcSessionFocusSet(session);
-  var wl = rcBuildWorklist(focus, session.addedCountRows || []);
-  var recByItem = {};
-  ["bulk", "serialized", "reels"].forEach(function(t) {
-    (session.items[t] || []).forEach(function(it) { if (it.itemNumber) recByItem[it.itemNumber.toUpperCase()] = it; });
-  });
+  var wl = rcBuildWorklist(focus, session.addedCountRows || [], session.locRecounts || {});
   var rows = wl.flat.slice();
   if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
   else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
 
-  var out = [["Location","Item","Type","Description","Shelf Qty","Count Lines","Count Date","Count Total","Outbound Since Count","Expected Now","Inbound Since Count (VERIFY)","NISC Captured","Short vs NISC","Recount Qty","Notes"]];
+  var out = [["Location","Item","Type","Description","Count Qty (file)","Recount Qty (this loc)","Count Lines","Count Date","Item Total (live)","Outbound Since Count","Expected Now","Inbound Since Count (VERIFY)","NISC Captured","Short vs NISC","Notes"]];
   rows.forEach(function(r) {
-    var rec = recByItem[r.itemUpper] || {};
-    out.push([r.loc, r.item, r.classification, r.desc, r.shelfQty, r.lines,
+    out.push([r.loc, r.item, r.classification, r.desc, r.shelfQty,
+      r.added ? (r.shelfQty + " (added)") : (r.recountVal != null ? r.recountVal : ""), r.lines,
       r.isFirst ? r.countDate : "", r.isFirst ? r.total : "",
       r.isFirst && r.outAfter ? ("-" + r.outAfter) : "", r.isFirst ? r.expected : "",
       r.isFirst && r.inAfter ? ("+" + r.inAfter + " verify") : "",
       r.isFirst && r.captured != null ? r.captured : "", r.isFirst && r.shortVsNisc != null ? r.shortVsNisc : "",
-      (r.isFirst && rec.recountedQty != null) ? rec.recountedQty : "",
       (r.isFirst && r.recountQty) ? ("incl +" + r.recountQty + " recounted (blank-LINE)") : ""]);
   });
   wl.absent.forEach(function(a) {
-    var rec = recByItem[a.item] || {};
-    out.push(["", a.item, a.classification, a.description, "", "", "", 0, "", 0, "", a.captured != null ? a.captured : "", a.captured != null ? a.captured : "",
-      rec.recountedQty != null ? rec.recountedQty : "", "Counted ZERO (no shelf line) — walk to confirm truly absent"]);
+    out.push(["", a.item, a.classification, a.description, "", "", "", "", 0, "", 0, "", a.captured != null ? a.captured : "", a.captured != null ? a.captured : "",
+      "Counted ZERO (no shelf line) — walk to confirm truly absent"]);
   });
 
   var csv = out.map(function(row){ return row.map(function(v){ var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; }).join(","); }).join("\r\n") + "\r\n";
