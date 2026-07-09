@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.05";
+const APP_VERSION = "v2.30.06";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8927,13 +8927,16 @@ function timLoadMasterCache() {
     if (Array.isArray(parsed.inventory_events))   { appData.inventory_events = parsed.inventory_events; if (parsed.inventory_events.length) hadData = true; }
     if (Array.isArray(parsed.recount_sessions))   appData.recount_sessions  = parsed.recount_sessions;
     if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
-    if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
     if (parsed.boxes && typeof parsed.boxes === "object") appData.boxes = parsed.boxes;
     if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
     if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
       Object.assign(BARCODE_MAP, parsed.barcode_map);
       appData.barcode_map = BARCODE_MAP;
     }
+    // Sync recount state into rcSessions LAST — after every collection is in appData —
+    // because rcLoadFromAppData()→rcSaveStorage()→timSaveMasterCache() re-writes the whole
+    // cache; running it earlier would persist a half-restored payload (empty boxes/quants).
+    if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
     return hadData;
   }).catch(function() { return false; });
 }
@@ -10552,6 +10555,10 @@ function rcSaveStorage() {
   TimDB.set(RC_STORAGE_KEY, { sessions: rcSessions, movements: rcMovements, savedAt: invNow() }).catch(function(){});
   appData.recount_sessions  = rcSessions;
   appData.recount_movements = rcMovements;
+  // Keep the full-dataset master cache in sync. Without this the cache goes stale
+  // (it isn't rewritten on recount edits), and on the next refresh timLoadMasterCache
+  // restores the stale recount_sessions over the fresh ones — silently losing recounts.
+  if (typeof timSaveMasterCache === "function") timSaveMasterCache();
 }
 
 function rcLoadStorage() {
