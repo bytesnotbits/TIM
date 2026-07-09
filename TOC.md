@@ -732,7 +732,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `rcImportCountCsv/MovementCsv/NiscCsv(file, cb)` | File-reader wrappers for the universal drop router |
 | `rcLoadWorklistData()` | Restore the 3 source files from IDB on startup |
 | `rcClearCountData/MoveData/NiscData()` | Clear a source file (confirm + IDB remove) |
-| `rcBuildWorklist(focusSet)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged |
+| `rcBuildWorklist(focusSet, extraRows)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged. `extraRows` = session `addedCountRows` (walk-time found-at rows) folded into totals + flagged `added` |
+| `rcWlOpenAddRow / rcWlCloseAddRow / rcWlCommitAddRow(id,itemUp) / rcWlRemoveAddedRow(id,idx)` | "＋loc" add-a-found-location flow: modal → append to `session.addedCountRows` (isRecount, dated today) → Short self-corrects; undo via removal |
 | `rcSessionFocusSet(session)` / `rcFindItemByNumber(session, up)` | Session helpers: item-number set / lookup |
 | `rcShowWorklistHome()` / `rcOpenWorklist(id)` | Enter worklist home (build form + data status) / open a saved worklist |
 | `rcConfirmWorklistCreate()` | Build session from pasted list (or all counted items); classify items via NISC; seed niscExpectedQty from Captured |

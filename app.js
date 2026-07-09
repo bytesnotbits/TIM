@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.01";
+const APP_VERSION = "v2.30.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -9977,10 +9977,16 @@ function rcClearNiscData()  { if (!confirm("Clear the imported NISC capture data
 
 // ── Join engine (port of docs/recount_reference.js) ─────────────────
 // focusSet: Set of UPPER item numbers to include; null/empty = all counted items.
-function rcBuildWorklist(focusSet) {
-  var count = appData.external_count || [];
+function rcBuildWorklist(focusSet, extraRows) {
+  // extraRows: session-scoped "found-at" rows added during the walk (count-row shape).
+  // Kept on the session, not in the imported count file, so a count re-import can't wipe them.
+  var count = (appData.external_count || []);
+  if (extraRows && extraRows.length) count = count.concat(extraRows);
   var moves = appData.product_movements || [];
   var nisc  = appData.nisc_capture || [];
+
+  var addedKeys = {};
+  (extraRows || []).forEach(function(r){ addedKeys[r.item.toUpperCase() + "||" + r.location] = true; });
 
   var niscByItem = {};
   nisc.forEach(function(r){ niscByItem[r.item.toUpperCase()] = r; });
@@ -10035,6 +10041,7 @@ function rcBuildWorklist(focusSet) {
         total: total, outAfter: out_, expected: total - out_, inAfter: in_,
         captured: cap, shortVsNisc: cap != null ? (cap - total) : null,
         shelves: rec.locs.size, recountQty: rec.recountQty,
+        added: !!addedKeys[key + "||" + loc],
         classification: nrec ? nrec.classification : "bulk", isFirst: first
       });
       first = false;
@@ -10240,7 +10247,7 @@ function rcRenderWorklistTable(session) {
   var el = $("rcWorklistContent");
   if (!el) return;
   var focus = rcSessionFocusSet(session);
-  var wl = rcBuildWorklist(focus);
+  var wl = rcBuildWorklist(focus, session.addedCountRows || []);
 
   // recount overlay lookup by UPPER item
   var recByItem = {};
@@ -10308,12 +10315,13 @@ function rcRenderWorklistTable(session) {
           ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (r.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>'
           : '—';
       }
+      recountCell += ' <button class="secondary" title="Found this item at a location the count missed" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + r.itemUpper + '\')">&#43;loc</button>';
     } else {
       recountCell = (rec.recountedQty != null) ? '<span class="small" style="color:#94a3b8;">' + rec.recountedQty + '</span>' : '';
     }
     var doneMark = (rec.status === "complete") ? ' style="background:#f0fdf4;"' : '';
     html += '<tr' + doneMark + '>' +
-      '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(r.loc) + '</td>' +
+      '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(r.loc) + (r.added ? ' <span style="background:#dcfce7;color:#15803d;border-radius:4px;padding:0 5px;font-size:9px;font-weight:700;vertical-align:middle;">ADDED</span>' : '') + '</td>' +
       '<td style="font-family:monospace;">' + escapeHtml(r.item) + '</td>' +
       '<td>' + rcClsBadge(r.classification) + '</td>' +
       '<td style="max-width:200px;white-space:normal;">' + escapeHtml(r.desc) + '</td>' +
@@ -10343,6 +10351,7 @@ function rcRenderWorklistTable(session) {
       var recountCell = (a.classification === "bulk")
         ? '<input type="number" min="0" step="any" value="' + (rec.recountedQty != null ? rec.recountedQty : "") + '" placeholder="—" style="width:70px;" onchange="rcWlSetRecount(\'' + session.recountId + '\',\'' + a.item + '\',this.value)" />'
         : (rec.rcItemId ? '<button class="secondary" style="padding:2px 8px;font-size:11px;" onclick="rcOpenWorkflow(\'' + session.recountId + '\',\'' + rec.rcItemId + '\',\'' + rec.type + '\')">' + (a.classification === "reels" ? "Reel ↗" : "Scan ↗") + '</button>' : '—');
+      recountCell += ' <button class="secondary" title="Found this item at a location" style="padding:2px 6px;font-size:11px;" onclick="rcWlOpenAddRow(\'' + session.recountId + '\',\'' + a.item + '\')">&#43;loc</button>';
       html += '<tr>' +
         '<td style="font-family:monospace;">' + escapeHtml(a.item) + '</td>' +
         '<td>' + rcClsBadge(a.classification) + '</td>' +
@@ -10369,7 +10378,82 @@ function rcRenderWorklistTable(session) {
     html += '</tbody></table></div></div></div>';
   }
 
+  // Rows added during the walk (found-at locations) — with undo
+  var added = (session.addedCountRows || []);
+  if (added.length) {
+    html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;color:#15803d;margin-bottom:6px;">&#43; Added on walk (' + added.length + ')</div>' +
+      '<div class="scroll"><table style="font-size:13px;"><thead><tr><th>Item</th><th>Location</th><th style="text-align:right;">Qty</th><th>Date</th><th>By</th><th></th></tr></thead><tbody>';
+    added.forEach(function(ar, idx) {
+      html += '<tr>' +
+        '<td style="font-family:monospace;">' + escapeHtml(ar.item) + '</td>' +
+        '<td style="font-family:monospace;">' + escapeHtml(ar.location) + '</td>' +
+        '<td style="text-align:right;">' + ar.qty + '</td>' +
+        '<td>' + escapeHtml(ar.dateRaw || "") + '</td>' +
+        '<td class="small" style="color:#64748b;">' + escapeHtml(ar.addedBy || "") + '</td>' +
+        '<td><button class="secondary danger" title="Remove this added row" style="padding:2px 7px;font-size:11px;" onclick="rcWlRemoveAddedRow(\'' + session.recountId + '\',' + idx + ')">&#215;</button></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
   el.innerHTML = html;
+}
+
+// ── Add a "found-at" location row during the walk ───────────────────
+function rcWlOpenAddRow(recountId, itemUpper) {
+  var s = rcSessions.find(function(x){ return x.recountId === recountId; });
+  if (!s) return;
+  var f = rcFindItemByNumber(s, itemUpper);
+  var itemNumber = f ? f.item.itemNumber : itemUpper;
+  var desc = f ? f.item.description : "";
+  var existing = (appData.external_count || []).filter(function(r){ return r.item.toUpperCase() === itemUpper; }).map(function(r){ return r.location; });
+  var overlay = document.createElement("div");
+  overlay.id = "rcWlAddOverlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9999;display:flex;align-items:center;justify-content:center;";
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:12px;padding:20px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3);">' +
+      '<h3 style="margin:0 0 4px;">Add found location</h3>' +
+      '<div class="small" style="color:#64748b;margin-bottom:12px;">Item <b>' + escapeHtml(itemNumber) + '</b>' + (desc ? (' — ' + escapeHtml(desc)) : '') + '</div>' +
+      '<label style="font-size:13px;display:block;margin-bottom:8px;">Shelf / location<br><input id="rcWlAddLoc" type="text" placeholder="e.g. WH05100" style="width:100%;text-transform:uppercase;" /></label>' +
+      '<label style="font-size:13px;display:block;margin-bottom:12px;">Quantity found<br><input id="rcWlAddQty" type="number" min="0" step="any" style="width:100%;" /></label>' +
+      (existing.length ? ('<div class="small" style="color:#94a3b8;margin-bottom:12px;">Already counted at: ' + escapeHtml(existing.join(", ")) + '</div>') : '') +
+      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+        '<button class="secondary" onclick="rcWlCloseAddRow()">Cancel</button>' +
+        '<button onclick="rcWlCommitAddRow(\'' + recountId + '\',\'' + itemUpper + '\')">Add row</button>' +
+      '</div>' +
+    '</div>';
+  overlay.addEventListener("click", function(e){ if (e.target === overlay) rcWlCloseAddRow(); });
+  document.body.appendChild(overlay);
+  setTimeout(function(){ var el = $("rcWlAddLoc"); if (el) el.focus(); }, 50);
+}
+function rcWlCloseAddRow() { var o = $("rcWlAddOverlay"); if (o) o.remove(); }
+function rcWlCommitAddRow(recountId, itemUpper) {
+  var s = rcSessions.find(function(x){ return x.recountId === recountId; });
+  if (!s) return;
+  var locEl = $("rcWlAddLoc"), qtyEl = $("rcWlAddQty");
+  var loc = (locEl ? locEl.value : "").trim().toUpperCase();
+  var qtyRaw = (qtyEl ? qtyEl.value : "").trim();
+  var qty = parseFloat(qtyRaw);
+  if (!loc) { alert("Enter a shelf / location."); if (locEl) locEl.focus(); return; }
+  if (qtyRaw === "" || isNaN(qty)) { alert("Enter a numeric quantity."); if (qtyEl) qtyEl.focus(); return; }
+  var f = rcFindItemByNumber(s, itemUpper);
+  var itemNumber = f ? f.item.itemNumber : itemUpper;
+  var desc = f ? f.item.description : "";
+  var d = new Date();
+  var dayInt = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  var dateStr = (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear();
+  s.addedCountRows = s.addedCountRows || [];
+  s.addedCountRows.push({ item: itemNumber, description: desc, location: loc, qty: qty, day: dayInt, dateRaw: dateStr, line: "", isRecount: true, addedBy: (timGetUsername() || ""), addedAt: invNow() });
+  rcSaveStorage();
+  rcWlCloseAddRow();
+  rcRenderWorklist();
+}
+function rcWlRemoveAddedRow(recountId, idx) {
+  var s = rcSessions.find(function(x){ return x.recountId === recountId; });
+  if (!s || !s.addedCountRows) return;
+  s.addedCountRows.splice(idx, 1);
+  rcSaveStorage();
+  rcRenderWorklist();
 }
 
 function rcRenderWorklist() {
@@ -10382,7 +10466,7 @@ function rcExportWorklistCsv(recountId) {
   var session = rcSessions.find(function(s){ return s.recountId === recountId; });
   if (!session) return;
   var focus = rcSessionFocusSet(session);
-  var wl = rcBuildWorklist(focus);
+  var wl = rcBuildWorklist(focus, session.addedCountRows || []);
   var recByItem = {};
   ["bulk", "serialized", "reels"].forEach(function(t) {
     (session.items[t] || []).forEach(function(it) { if (it.itemNumber) recByItem[it.itemNumber.toUpperCase()] = it; });
