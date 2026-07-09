@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.03";
+const APP_VERSION = "v2.30.04";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -10325,7 +10325,7 @@ function rcRenderWorklistTable(session) {
     '<thead><tr>' +
       '<th>Location</th><th>Item</th><th>Type</th><th>Description</th>' +
       '<th style="text-align:right;">Count<br>(file)</th><th>Lines</th><th>Count Date</th>' +
-      '<th style="text-align:right;">Item Total</th><th style="text-align:right;">Out (&minus;)</th>' +
+      '<th style="text-align:right;">Here / Total</th><th style="text-align:right;">Out (&minus;)</th>' +
       '<th style="text-align:right;">Expected</th><th>Inbound (verify)</th>' +
       '<th style="text-align:right;">NISC Cap</th><th style="text-align:right;">Short</th><th>Recount<br>here</th>' +
     '</tr></thead><tbody>';
@@ -10361,12 +10361,12 @@ function rcRenderWorklistTable(session) {
       '<td style="text-align:right;">' + r.shelfQty + '</td>' +
       '<td class="small" style="color:#64748b;">' + escapeHtml(r.lines) + '</td>' +
       '<td>' + (r.isFirst ? escapeHtml(r.countDate) : '') + '</td>' +
-      '<td style="text-align:right;">' + (r.isFirst ? r.total : '') + '</td>' +
+      '<td style="text-align:right;white-space:nowrap;">' + r.effQty + ' of <b>' + r.total + '</b></td>' +
       '<td style="text-align:right;color:#b91c1c;">' + (r.isFirst && r.outAfter ? '-' + r.outAfter : '') + '</td>' +
       '<td style="text-align:right;font-weight:600;">' + (r.isFirst ? r.expected : '') + '</td>' +
       '<td>' + inCell + '</td>' +
-      '<td style="text-align:right;">' + (r.isFirst && r.captured != null ? r.captured : '') + '</td>' +
-      '<td style="text-align:right;">' + (r.isFirst ? shortCell : '') + '</td>' +
+      '<td style="text-align:right;">' + (r.captured != null ? r.captured : '') + '</td>' +
+      '<td style="text-align:right;">' + shortCell + '</td>' +
       '<td>' + recountCell + '</td>' +
     '</tr>';
   });
