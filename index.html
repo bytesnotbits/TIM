@@ -1155,6 +1155,29 @@
       <div id="chkBody"><p class="small" style="color:#94a3b8;margin:0;">Click <strong>Run check</strong> to scan the catalog.</p></div>
     </div>
 
+    <!-- New Item — Dup Check & Numbering -->
+    <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        New Item — Dup Check &amp; Numbering
+        <span id="niCatStatus" class="small" style="font-weight:400;color:#94a3b8;"></span>
+      </h2>
+      <p class="small" style="color:#475569;margin:0 0 12px;">Before minting a number, check a prospective item against the NISC catalog — exact / fuzzy part-number and name-similarity matches. If a shared exact part number exists, TIM warns instead of suggesting a number. Otherwise it suggests a class-aware number (Inventory → generic max+1; Exempt / Non-inventory → <code>AABBCC-N</code> scheme). Import your <strong>NISC Full Item Export</strong> in the Data Import tab first.</p>
+      <div class="prod-search-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <input type="text" id="niName" placeholder="Product name / description" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <input type="text" id="niMfgPn" placeholder="Manufacturer part number" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <input type="text" id="niSpecs" placeholder="Key specs (optional)" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <input type="text" id="niGroup" placeholder="NISC Group (optional, e.g. IFIX)" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <select id="niClass" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;">
+          <option value="">Class… (required for numbering)</option>
+          <option value="INVENTORY">Inventory</option>
+          <option value="EXEMPT">Exempt</option>
+          <option value="NON-INVENTORY">Non-inventory</option>
+        </select>
+        <button onclick="niCheckItem()" style="margin:0;">Check catalog</button>
+      </div>
+      <div id="niResults"></div>
+    </div>
+
     <!-- Design Notes & Architecture Decisions -->
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;">

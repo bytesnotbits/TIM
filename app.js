@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.30.06";
+const APP_VERSION = "v2.31.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8,7 +8,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, external_count: [], product_movements: [], nisc_capture: [] };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, external_count: [], product_movements: [], nisc_capture: [], nisc_catalog: {} };
 let PRODUCT_MAP = appData.product_map;
 // True once the UI has been rendered (by loadSourceData or timRenderRestored).
 // Lets a failed boot sync fall back to rendering the cached data instead of
@@ -1104,6 +1104,24 @@ var _CSV_IMPORT_TYPES = [
       { key: "Serial/Reel",       label: "Serial/Reel flag", required: false }
     ],
     run: function(text, name) { rcProcessNiscCsv(text, name); }
+  },
+  {
+    id: "nisc_catalog",
+    label: "NISC Full Item Export",
+    desc: "NISC advanced-search export — catalog master (class derived, feeds dup-check + numbering)",
+    fields: [
+      { key: "Item",            label: "Item #",          required: true  },
+      { key: "Item Description",label: "Item Description", required: true  },
+      { key: "Long Description",label: "Long Description", required: false },
+      { key: "UOM",             label: "UOM",             required: false },
+      { key: "Group",           label: "Group",           required: false },
+      { key: "Manufacturer",    label: "Manufacturer",    required: false },
+      { key: "D-ofNotes",       label: "Notes",           required: false },
+      { key: "D-ofSearchKeys",  label: "Search Keys",     required: false },
+      { key: "Status",          label: "Status",          required: false },
+      { key: "Inventory Group", label: "Class (if present)", required: false }
+    ],
+    run: function(text, name) { catImportNiscExport(text, name); }
   }
 ];
 
@@ -11799,6 +11817,8 @@ Promise.all([_invRestoreP, boxLoadFromStorage()]).then(function() {
   invShowOpenBoxGate();
 }).catch(function() {});
 chkLoadState();
+catLoadState().then(niUpdateStatus).catch(function(){});
+numLoadDb();
 
 // Render tones up front, and keep audio unlocked across gestures and wake-ups.
 // Browsers (esp. iOS) suspend idle audio and re-lock after backgrounding, so we
@@ -13783,5 +13803,446 @@ function histMgrEditSave() {
   timSaveMasterCache();
   histMgrEditClose();
   histMgrRender();
+}
+
+// ===================================================================
+// NISC CATALOG + DEDUP/NUMBERING  (pn* / cat* / num* / ni*)  — Phase 1
+// -------------------------------------------------------------------
+// Ports the NISC catalog dedup + product-numbering process into TIM.
+//   pn*  = shared part-number miner (Get-PartTokens / Get-ExplicitPNs /
+//          Norm-PN / LevRatio / Dice). Reused by Phase 2 dedup.
+//   cat* = NISC "Full Item Export" catalog master layer (appData.nisc_catalog,
+//          TimDB key tim_nisc_catalog_v1). Supplies status/group/long-desc/class.
+//          Class is DERIVED (group + number-format overrides); new items get
+//          class from the user. Kept separate from product_map (Odoo-mapping
+//          layer); product_map.aliases[] feed the miner.
+//   num* = AABBCC-N numbering. Legend seeded from bundled numbering_db.json
+//          (TimDB tim_numbering_db_v1); occupancy + next-iteration computed LIVE
+//          so "next = max+1, never gap-fill" stays current.
+//   ni*  = New Item intake: dup-check before minting (port of check_new_item.ps1)
+//          + class-aware number suggestion. Report-first, non-lossy, offline.
+// ===================================================================
+
+// ---- pn*: shared part-number mining primitives (ported 1:1 from PS) ----
+var PN_STOP    = ["10GBASE-LR","10GBASE-SR","1000BASE-T","100BASE-T","10GBASE-T"];
+var PN_STOPSEG = ["PORT","PORTS","PACK","PACKS","PIN","PINS","WAY","WAYS","INCH","FOOT","FEET","GANG","PAIR","PAIRS","POLE","TON","DAY","YR","PK","CT","DWDM","CWDM","BASE","POE","GBE","SLOT","SLOTS","RU","BAY","AWG","COND","CORE","FIBER","FIBERS","STRAND","POSITION","OUTLET","WATT","VOLT","AMP","METER","METERS","MM","CM","SIDED","SIDE","BUTTON","KEY","KEYS","ROW","BIDI","SMF","MMF"];
+var PN_MEAS_RE = /^[0-9]+(\.[0-9]+)?(FT|FEET|M|MM|CM|IN|G|GB|GBIT|GBPS|DB|DBM|NM|V|VDC|VAC|W|A|AWG|KM|MHZ|GHZ|HZ|OHM|PR|PK|CT|K|KW|KV|MW)$/;
+var PN_NAMESTOP = ["THE","FOR","AND","WITH","PER","EA","OF","TO","IN","ON"];
+
+// Get-PartTokens: general miner -> { token: score(3|4|5) }
+function pnMineTokens(text) {
+  var out = {};
+  if (!text) return out;
+  var raw = String(text).toUpperCase().split(/[\s,;()]+/);
+  for (var i = 0; i < raw.length; i++) {
+    var t = raw[i];
+    if (!t) continue;
+    t = t.replace(/^[^A-Z0-9]+/, "").replace(/[^A-Z0-9]+$/, "");
+    if (t.length < 5) continue;
+    if (!/^[A-Z0-9][A-Z0-9\-\/\.]*[A-Z0-9]$/.test(t)) continue;
+    if (!/[0-9]/.test(t)) continue;
+    if (PN_STOP.indexOf(t) !== -1) continue;
+    if (t.indexOf("BASE-") !== -1) continue;
+    var segs = t.split(/[\-\/]/);
+    var bad = false;
+    for (var s = 0; s < segs.length; s++) { if (PN_STOPSEG.indexOf(segs[s]) !== -1) { bad = true; break; } }
+    if (bad) continue;
+    if (segs.length <= 2) {
+      var meas = false;
+      for (var m = 0; m < segs.length; m++) { if (PN_MEAS_RE.test(segs[m])) { meas = true; break; } }
+      if (meas) continue;
+    }
+    var score = 0;
+    if (/^[0-9]{2,}(-[0-9A-Z]{2,})+$/.test(t)) score = 5;
+    else if (t.indexOf("-") !== -1 && /[A-Z]/.test(t)) score = 4;
+    else if (t.indexOf("-") === -1 && t.indexOf("/") === -1 && /[A-Z]/.test(t) && t.length >= 7) score = 3;
+    else continue;
+    if (!(t in out) || score > out[t]) out[t] = score;
+  }
+  return out;
+}
+
+// Get-ExplicitPNs: labelled PART#/PN#/P/N/MODEL# -> { token: 6 }
+function pnExplicit(text) {
+  var out = {};
+  if (!text) return out;
+  var re = /(?:PART\s*#|PART\s*NO\.?|P\s*\/\s*N|PN\s*#|MODEL\s*#?)\s*[:\.]?\s*([A-Z0-9][A-Z0-9\-\/\.]{3,})/gi;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    var t = String(m[1]).toUpperCase().replace(/[^A-Z0-9\-\/\.]+$/, "");
+    if (t.length >= 4) out[t] = 6;
+  }
+  return out;
+}
+
+function pnNorm(t) { return String(t == null ? "" : t).toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+
+// LevRatio: rounded 1 - dist/max(len), 3 decimals
+function pnLevRatio(a, b) {
+  a = String(a == null ? "" : a); b = String(b == null ? "" : b);
+  var la = a.length, lb = b.length;
+  if (!la && !lb) return 1.0;
+  if (!la || !lb) return 0.0;
+  var prev = new Array(lb + 1), cur = new Array(lb + 1);
+  for (var j = 0; j <= lb; j++) prev[j] = j;
+  for (var i = 1; i <= la; i++) {
+    cur[0] = i;
+    for (var k = 1; k <= lb; k++) {
+      var cost = a.charCodeAt(i - 1) === b.charCodeAt(k - 1) ? 0 : 1;
+      cur[k] = Math.min(prev[k] + 1, cur[k - 1] + 1, prev[k - 1] + cost);
+    }
+    var tmp = prev; prev = cur; cur = tmp;
+  }
+  return Math.round((1.0 - prev[lb] / Math.max(la, lb)) * 1000) / 1000;
+}
+
+// Name tokens: len>=2, minus stopwords -> Set
+function pnNameTokens(text) {
+  var s = new Set();
+  if (!text) return s;
+  String(text).toUpperCase().split(/[^A-Z0-9]+/).forEach(function (w) {
+    if (w.length >= 2 && PN_NAMESTOP.indexOf(w) === -1) s.add(w);
+  });
+  return s;
+}
+
+// Sørensen–Dice over two Sets, rounded 3 decimals
+function pnDice(a, b) {
+  if (!a.size || !b.size) return 0.0;
+  var inter = 0;
+  a.forEach(function (x) { if (b.has(x)) inter++; });
+  return Math.round((2 * inter / (a.size + b.size)) * 1000) / 1000;
+}
+
+// ---- cat*: NISC catalog master layer ----
+var CAT_STATE_KEY = "tim_nisc_catalog_v1";
+var _catPnIndex = null; // { normPN: { part_number: raw, items: [{item,name,status,class,group}] } }
+
+// Class derivation (group map + number-format overrides). Best-effort backfill
+// for the existing catalog; known outliers accepted. New items get class from user.
+function catDeriveClass(group, item) {
+  // NISC Group arrives as "CODE - LABEL" (e.g. "EXPT - EXEMPT"); use the leading code.
+  var g = ((String(group || "").match(/^\s*([A-Za-z]+)/) || [])[1] || "").toUpperCase();
+  var it = String(item || "").trim().toUpperCase();
+  var EXEMPT_G = ["EXPT", "EXOR", "IFXE", "SECN"];
+  var NONINV_G = ["NINV", "OFF", "TOOL", "IFXN", "SECO", "FOOD", "CART", "FORM"];
+  var INV_G    = ["IFIX", "FUEL", "SCXR", "OSP", "SECA", "DROP", "COE", "NCPE", "BIP", "DSL", "TCPE", "SAT", "CLEC", "IPTV", "FTE"];
+  // Number-format overrides win.
+  if (/^18\d{4}(-|$)/.test(it)) return "EXEMPT";        // 18-block is always Exempt
+  var isAlnum = /[A-Z]/.test(it);                        // alphanumeric legacy code
+  var base = null;
+  if (EXEMPT_G.indexOf(g) !== -1) base = "EXEMPT";
+  else if (NONINV_G.indexOf(g) !== -1) base = "NON-INVENTORY";
+  else if (INV_G.indexOf(g) !== -1) base = "INVENTORY";
+  // Alphanumerics are never Inventory except the DROP group.
+  if (isAlnum && g !== "DROP" && (base === "INVENTORY" || base === null)) base = "EXEMPT";
+  return base || "UNKNOWN";
+}
+
+function catImportNiscExport(text, name) {
+  var rows = _parseCsvToRowObjects(text);
+  if (!rows.length) throw new Error("No data rows found in the NISC export.");
+  var cat = {};
+  var n = 0, derived = 0, fromCol = 0;
+  rows.forEach(function (r) {
+    var item = getField(r, ["Item", "item"]);
+    if (!item) return;
+    var group = getField(r, ["Group", "group"]);
+    var colClass = getField(r, ["Inventory Group"]).toUpperCase();
+    var cls, csrc;
+    if (colClass) { cls = colClass; csrc = "column"; fromCol++; }
+    else { cls = catDeriveClass(group, item); csrc = "derived"; derived++; }
+    cat[item] = {
+      item: item,
+      name: getField(r, ["Item Description", "name", "Description"]),
+      long_desc: getField(r, ["Long Description"]),
+      uom: getField(r, ["UOM"]),
+      group: group,
+      manufacturer: getField(r, ["Manufacturer"]),
+      notes: getField(r, ["D-ofNotes"]),
+      search_keys: getField(r, ["D-ofSearchKeys"]),
+      status: getField(r, ["Status"]),
+      class: cls,
+      class_source: csrc,
+      source: "nisc_export",
+      imported_at: invNow()
+    };
+    n++;
+  });
+  appData.nisc_catalog = cat;
+  catSaveState();
+  catBuildPnIndex();
+  niUpdateStatus();
+  var msg = "NISC catalog imported: " + n + " items (" + fromCol + " class from column, " + derived + " derived).";
+  if (typeof setDropState === "function") {
+    setDropState("universalDropZone", "universalDropStatus", true, msg);
+  }
+  if (typeof prodShowSaveToast === "function") prodShowSaveToast(msg);
+}
+
+function catSaveState() { TimDB.set(CAT_STATE_KEY, appData.nisc_catalog || {}).catch(function () {}); }
+function catLoadState() {
+  return TimDB.get(CAT_STATE_KEY).then(function (v) {
+    if (v && typeof v === "object") appData.nisc_catalog = v;
+    catBuildPnIndex();
+  }).catch(function () {});
+}
+
+// Build the in-memory part-number index (reproduces partnumber_index.json shape).
+function catBuildPnIndex() {
+  var idx = {};
+  var cat = appData.nisc_catalog || {};
+  Object.keys(cat).forEach(function (item) {
+    var e = cat[item];
+    var pmEntry = PRODUCT_MAP[item];
+    var aliases = (pmEntry && Array.isArray(pmEntry.aliases)) ? pmEntry.aliases : [];
+    var pnMap = {};
+    var ex = pnExplicit(e.long_desc);
+    Object.keys(ex).forEach(function (k) { pnMap[k] = Math.max(pnMap[k] || 0, ex[k]); });
+    [e.name, e.long_desc, e.manufacturer].concat(aliases).forEach(function (t) {
+      var mined = pnMineTokens(t);
+      Object.keys(mined).forEach(function (k) { pnMap[k] = Math.max(pnMap[k] || 0, mined[k]); });
+    });
+    var rec = { item: item, name: e.name, status: e.status, class: e.class, group: e.group };
+    Object.keys(pnMap).forEach(function (raw) {
+      var norm = pnNorm(raw);
+      if (norm.length < 5) return;
+      if (!idx[norm]) idx[norm] = { part_number: raw, items: [] };
+      idx[norm].items.push(rec);
+    });
+  });
+  _catPnIndex = idx;
+  return idx;
+}
+
+// ---- num*: AABBCC-N numbering ----
+var NUM_DB_KEY = "tim_numbering_db_v1";
+var _numDb = null;
+
+function numLoadDb() {
+  // Prefer the shipped legend (avoids a stale TimDB copy shadowing an updated file);
+  // cache to TimDB only as an offline fallback.
+  return fetch("numbering_db.json", { cache: "no-store" }).then(function (r) {
+    if (!r.ok) throw new Error("http " + r.status);
+    return r.json();
+  }).then(function (j) {
+    _numDb = j;
+    TimDB.set(NUM_DB_KEY, j).catch(function () {});
+  }).catch(function () {
+    return TimDB.get(NUM_DB_KEY).then(function (v) {
+      _numDb = (v && v.bases) ? v : { bases: {}, classes: {}, exempt_departments: {} };
+    }).catch(function () { _numDb = { bases: {}, classes: {}, exempt_departments: {} }; });
+  });
+}
+
+// Group arrives as "CODE - LABEL"; compare on the leading code.
+function numGroupCode(g) { return ((String(g || "").match(/^\s*([A-Za-z]+)/) || [])[1] || "").toUpperCase(); }
+
+// Live occupancy of AABBCC bases from all known item numbers.
+function numOccupancy() {
+  var bases = {};
+  function scan(item) {
+    var m = /^(\d{6})(?:-(\d+))?$/.exec(String(item || "").trim());
+    if (!m) return;
+    if (!bases[m[1]]) bases[m[1]] = [];
+    if (m[2] != null) bases[m[1]].push(parseInt(m[2], 10));
+  }
+  Object.keys(appData.nisc_catalog || {}).forEach(scan);
+  Object.keys(PRODUCT_MAP || {}).forEach(scan);
+  return { bases: bases };
+}
+
+// Live next iteration for a base = max(used ∪ legend.used) + 1 (never gap-fill).
+function numLiveNext(base) {
+  var occ = numOccupancy();
+  var used = (occ.bases[base] || []).slice();
+  var db = _numDb && _numDb.bases && _numDb.bases[base];
+  if (db && Array.isArray(db.used_iterations)) used = used.concat(db.used_iterations);
+  var max = -1;
+  used.forEach(function (v) { v = parseInt(v, 10); if (!isNaN(v) && v > max) max = v; });
+  return max < 0 ? 1 : max + 1;
+}
+
+// Class-aware suggestion. Inventory -> generic max+1 within group; Exempt/Non-inv
+// -> scheme (user picks the base via niSearchBases; TIM computes next-after-max).
+function numSuggest(cls, group) {
+  var C = String(cls || "").toUpperCase();
+  if (C === "INVENTORY") {
+    var g = numGroupCode(group);
+    var max = -1, sample = null;
+    var cat = appData.nisc_catalog || {};
+    Object.keys(cat).forEach(function (item) {
+      var e = cat[item];
+      if (String(e.class || "").toUpperCase() !== "INVENTORY") return;
+      if (g && numGroupCode(e.group) !== g) return;
+      var m = /^(\d{3,6})$/.exec(String(item).trim());
+      if (m) { var v = parseInt(m[1], 10); if (v > max) { max = v; sample = item; } }
+    });
+    if (max < 0) return { kind: "inventory", text: null, note: "No existing numeric INVENTORY items for group " + (g || "(any)") + " — assign a generic number per your group convention." };
+    return { kind: "inventory", text: String(max + 1), note: "Next generic number after max (" + sample + ") for INVENTORY" + (g ? (" / " + g) : "") + ". Gaps are archived — reuse only if you confirm the number was never in service." };
+  }
+  if (C === "EXEMPT" || C === "NON-INVENTORY") {
+    return { kind: "scheme", cls: C, note: "Scheme number = base-(next). Pick the base that matches this item below." };
+  }
+  return { kind: "unknown", text: null, note: "Set the item's class to get a numbering suggestion." };
+}
+
+// ---- ni*: New Item intake ----
+var _niLastClass = "";
+
+function niUpdateStatus() {
+  var el = $("niCatStatus");
+  if (!el) return;
+  var n = Object.keys(appData.nisc_catalog || {}).length;
+  el.textContent = n ? (n + " catalog items loaded") : "No catalog loaded — import Full Item Export first (Data Import tab)";
+  el.style.color = n ? "#16a34a" : "#b45309";
+}
+
+function niCheckItem() {
+  var name  = ($("niName")  && $("niName").value  || "").trim();
+  var mfgpn = ($("niMfgPn") && $("niMfgPn").value || "").trim();
+  var specs = ($("niSpecs") && $("niSpecs").value || "").trim();
+  var cls   = ($("niClass") && $("niClass").value || "").trim();
+  var group = ($("niGroup") && $("niGroup").value || "").trim();
+  if (!name && !mfgpn) { niRenderResults({ error: "Enter at least a product name or a manufacturer part number." }); return; }
+  var cat = appData.nisc_catalog || {};
+  if (!Object.keys(cat).length) { niRenderResults({ error: "No NISC catalog loaded. Import your Full Item Export first (Data Import tab)." }); return; }
+  if (!_catPnIndex) catBuildPnIndex();
+  var idx = _catPnIndex;
+
+  var qtext = [name, mfgpn, specs].filter(Boolean).join(" ");
+  var pnMap = {};
+  var ex = pnExplicit(qtext); Object.keys(ex).forEach(function (k) { pnMap[k] = 1; });
+  var mined = pnMineTokens(qtext); Object.keys(mined).forEach(function (k) { pnMap[k] = 1; });
+  if (mfgpn) pnMap[mfgpn.toUpperCase()] = 1; // treat raw MFG PN as a candidate even if miner rejects it
+  var pnNormMap = {};
+  Object.keys(pnMap).forEach(function (t) { var nrm = pnNorm(t); if (nrm.length >= 5) pnNormMap[nrm] = t; });
+
+  var exact = [], fuzzy = [];
+  Object.keys(pnNormMap).forEach(function (nrm) {
+    if (idx[nrm]) idx[nrm].items.forEach(function (rec) { exact.push({ rec: rec, why: "exact PN " + idx[nrm].part_number }); });
+  });
+  Object.keys(pnNormMap).forEach(function (nrm) {
+    Object.keys(idx).forEach(function (k) {
+      if (k === nrm) return;
+      if (Math.abs(k.length - nrm.length) > 3) return;
+      var r = pnLevRatio(nrm, k);
+      if (r >= 0.85) idx[k].items.forEach(function (rec) { fuzzy.push({ rec: rec, why: "fuzzy PN " + nrm + "~" + idx[k].part_number + " (" + r + ")", ratio: r }); });
+    });
+  });
+
+  // dedup by item; strongest first; fuzzy excludes exact items; name-sim excludes both
+  var exMap = {}; exact.forEach(function (x) { if (!exMap[x.rec.item]) exMap[x.rec.item] = x; });
+  var exactList = Object.keys(exMap).map(function (k) { return exMap[k]; });
+  var exactItems = {}; exactList.forEach(function (x) { exactItems[x.rec.item] = true; });
+  var fzMap = {}; fuzzy.forEach(function (x) { if (exactItems[x.rec.item]) return; if (!fzMap[x.rec.item] || x.ratio > fzMap[x.rec.item].ratio) fzMap[x.rec.item] = x; });
+  var fuzzyList = Object.keys(fzMap).map(function (k) { return fzMap[k]; }).sort(function (a, b) { return b.ratio - a.ratio; });
+
+  var qt = pnNameTokens(name || qtext);
+  var sims = [];
+  Object.keys(cat).forEach(function (item) {
+    var d = pnDice(qt, pnNameTokens(cat[item].name));
+    if (d >= 0.60) sims.push({ rec: { item: item, name: cat[item].name, status: cat[item].status, class: cat[item].class, group: cat[item].group }, why: "name sim " + d, score: d });
+  });
+  sims.sort(function (a, b) { return b.score - a.score; });
+  var seen = {}; exactList.concat(fuzzyList).forEach(function (x) { seen[x.rec.item] = true; });
+  var nameList = sims.filter(function (x) { return !seen[x.rec.item]; }).slice(0, 12);
+
+  var strong = exactList.length > 0;
+  var suggestion = strong ? null : numSuggest(cls, group);
+  _niLastClass = cls;
+  niRenderResults({
+    name: name, mfgpn: mfgpn, cls: cls, group: group,
+    exact: exactList, fuzzy: fuzzyList, nameSim: nameList,
+    strong: strong, suggestion: suggestion,
+    pnCandidates: Object.keys(pnNormMap).map(function (k) { return pnNormMap[k]; })
+  });
+}
+
+function niRowsHtml(list) {
+  if (!list.length) return '<p class="small" style="color:#94a3b8;margin:4px 0;">None.</p>';
+  var h = '<div class="scroll" style="max-height:220px;"><table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+    '<thead><tr style="text-align:left;color:#64748b;">' +
+    '<th style="padding:3px 6px;">Item #</th><th style="padding:3px 6px;">Name</th><th style="padding:3px 6px;">Class</th><th style="padding:3px 6px;">Status</th><th style="padding:3px 6px;">Group</th><th style="padding:3px 6px;">Match</th></tr></thead><tbody>';
+  list.forEach(function (x) {
+    var st = String(x.rec.status || "");
+    var stColor = /inactive/i.test(st) ? "#94a3b8" : "#16a34a";
+    h += '<tr style="border-top:1px solid #e2e8f0;">' +
+      '<td style="padding:3px 6px;font-weight:600;">' + escapeHtml(x.rec.item) + '</td>' +
+      '<td style="padding:3px 6px;">' + escapeHtml(x.rec.name || "") + '</td>' +
+      '<td style="padding:3px 6px;">' + escapeHtml(x.rec.class || "") + '</td>' +
+      '<td style="padding:3px 6px;color:' + stColor + ';">' + escapeHtml(st) + '</td>' +
+      '<td style="padding:3px 6px;">' + escapeHtml(x.rec.group || "") + '</td>' +
+      '<td style="padding:3px 6px;color:#64748b;">' + escapeHtml(x.why || "") + '</td></tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+
+function niRenderResults(r) {
+  var el = $("niResults");
+  if (!el) return;
+  if (r.error) { el.innerHTML = '<p class="small" style="color:#b45309;margin:8px 0 0;">' + escapeHtml(r.error) + '</p>'; return; }
+  var h = "";
+  if (r.pnCandidates && r.pnCandidates.length) {
+    h += '<p class="small" style="color:#64748b;margin:8px 0 4px;">Extracted part numbers: <strong>' + escapeHtml(r.pnCandidates.join(", ")) + '</strong></p>';
+  }
+  if (r.strong) {
+    h += '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;margin:8px 0;">' +
+      '<strong style="color:#b91c1c;">⚠ Likely already in the catalog.</strong> ' +
+      '<span class="small" style="color:#7f1d1d;">A shared exact part number was found. Use / reactivate the existing item instead of minting a new number — no suggestion shown.</span></div>';
+  }
+  h += '<h4 style="margin:10px 0 2px;">Exact part-number matches</h4>' + niRowsHtml(r.exact);
+  h += '<h4 style="margin:10px 0 2px;">Fuzzy part-number matches (≥ 0.85)</h4>' + niRowsHtml(r.fuzzy);
+  h += '<h4 style="margin:10px 0 2px;">High name similarity (≥ 0.60)</h4>' + niRowsHtml(r.nameSim);
+
+  if (r.suggestion) {
+    var s = r.suggestion;
+    h += '<h4 style="margin:12px 0 2px;">Suggested number</h4>';
+    if (s.kind === "inventory") {
+      if (s.text) h += '<p style="margin:2px 0;"><span style="font-size:20px;font-weight:800;color:#0f766e;">' + escapeHtml(s.text) + '</span></p>';
+      h += '<p class="small" style="color:#64748b;margin:2px 0;">' + escapeHtml(s.note) + '</p>';
+    } else if (s.kind === "scheme") {
+      h += '<p class="small" style="color:#64748b;margin:2px 0;">' + escapeHtml(s.note) + '</p>' +
+        '<input type="search" id="niBaseSearch" placeholder="Search bases by category / description / example…" oninput="niSearchBases()" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;margin:6px 0;" />' +
+        '<div id="niBaseResults"></div>';
+    } else {
+      h += '<p class="small" style="color:#b45309;margin:2px 0;">' + escapeHtml(s.note) + '</p>';
+    }
+  }
+  el.innerHTML = h;
+  if (r.suggestion && r.suggestion.kind === "scheme") niSearchBases();
+}
+
+function niSearchBases() {
+  var out = $("niBaseResults");
+  if (!out) return;
+  var q = ($("niBaseSearch") && $("niBaseSearch").value || "").trim().toUpperCase();
+  var cls = String(_niLastClass || "").toUpperCase();
+  var prefixes = cls === "EXEMPT" ? ["18"] : ["27", "96", "97", "98", "99"];
+  var db = (_numDb && _numDb.bases) || {};
+  var rows = [];
+  Object.keys(db).forEach(function (base) {
+    if (prefixes.indexOf(base.slice(0, 2)) === -1) return;
+    var e = db[base];
+    var hay = [base, e.category, e.description, e.label, (e.examples || []).join(" ")].join(" ").toUpperCase();
+    if (q && hay.indexOf(q) === -1) return;
+    rows.push({ base: base, e: e });
+  });
+  rows.sort(function (a, b) { return a.base < b.base ? -1 : 1; });
+  var capped = rows.slice(0, 25);
+  if (!capped.length) { out.innerHTML = '<p class="small" style="color:#94a3b8;margin:4px 0;">No matching bases for AA=' + escapeHtml(prefixes.join("/")) + '. Refine the search, or this item may need a new base.</p>'; return; }
+  var h = '<div class="scroll" style="max-height:260px;"><table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+    '<thead><tr style="text-align:left;color:#64748b;"><th style="padding:3px 6px;">Base</th><th style="padding:3px 6px;">Label</th><th style="padding:3px 6px;">Suggested</th><th style="padding:3px 6px;">Examples</th></tr></thead><tbody>';
+  capped.forEach(function (r) {
+    var next = numLiveNext(r.base);
+    h += '<tr style="border-top:1px solid #e2e8f0;">' +
+      '<td style="padding:3px 6px;font-weight:600;">' + escapeHtml(r.base) + '</td>' +
+      '<td style="padding:3px 6px;">' + escapeHtml(r.e.label || r.e.category || "") + '</td>' +
+      '<td style="padding:3px 6px;font-weight:800;color:#0f766e;">' + escapeHtml(r.base + "-" + next) + '</td>' +
+      '<td style="padding:3px 6px;color:#64748b;">' + escapeHtml((r.e.examples || []).slice(0, 2).join("; ")) + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  if (rows.length > capped.length) h += '<p class="small" style="color:#94a3b8;margin:4px 0;">+ ' + (rows.length - capped.length) + ' more not shown — refine the search.</p>';
+  out.innerHTML = h;
 }
 

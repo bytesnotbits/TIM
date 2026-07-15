@@ -54,6 +54,8 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_gh_token_v1` | GitHub fine-grained PAT (Contents: read on the data repo) |
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
 | `tim_catalog_health_v1` | Catalog Health review state `{ ignored: { extId → true } }` (dismissed alias groups) |
+| `tim_nisc_catalog_v1` | NISC catalog master layer `{ item → {name,long_desc,group,status,class,class_source,…} }` (device-local; feeds dup-check + numbering) |
+| `tim_numbering_db_v1` | AABBCC-N numbering legend, seeded from bundled `numbering_db.json` (occupancy computed live) |
 
 `localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`.
 
@@ -787,6 +789,33 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `chkSetCanonical(sig, key)` | Override which member survives a merge |
 | `chkMergeAliasGroup(sig)` | **Non-lossy merge** — fold aliases into canonical, preserve in `aliases[]`, save, re-run (confirmed) |
 | `chkIgnoreGroup(sig)` / `chkClearIgnored()` | Dismiss a group / un-ignore all |
+
+---
+
+### NISC Catalog + Dedup/Numbering (`pn*` / `cat*` / `num*` / `ni*`)
+
+Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ingest + new-item intake). Report-first, non-lossy, fully offline. `_CSV_IMPORT_TYPES` entry `nisc_catalog` ("NISC Full Item Export") routes to `catImportNiscExport`.
+
+| Function | Purpose |
+|----------|---------|
+| `pnMineTokens(text)` | General part-number miner → `{token: score(3\|4\|5)}` (port of `Get-PartTokens`) |
+| `pnExplicit(text)` | Labelled `PART#/PN#/P/N/MODEL#` PNs → `{token: 6}` (port of `Get-ExplicitPNs`) |
+| `pnNorm(t)` | Separator-insensitive canonical PN form (strip non-alnum, upper) |
+| `pnLevRatio(a,b)` | Levenshtein ratio, rounded 3 decimals |
+| `pnNameTokens(text)` | Name → Set of tokens (len≥2, minus stopwords) |
+| `pnDice(a,b)` | Sørensen–Dice over two Sets, rounded 3 decimals |
+| `catDeriveClass(group,item)` | Derive Inventory/Exempt/Non-inventory (group map + number-format overrides: 18-block=Exempt, alphanumeric never Inventory except DROP) |
+| `catImportNiscExport(text,name)` | Parse Full Item Export → `appData.nisc_catalog`, persist, rebuild PN index |
+| `catSaveState()` / `catLoadState()` | Persist / restore catalog layer (TimDB `tim_nisc_catalog_v1`) |
+| `catBuildPnIndex()` | Build in-memory `{normPN:{part_number,items[]}}` index (reproduces `partnumber_index.json`) |
+| `numLoadDb()` | Seed numbering legend from bundled `numbering_db.json` (TimDB `tim_numbering_db_v1`) |
+| `numOccupancy()` | Live AABBCC base occupancy from all known item numbers |
+| `numLiveNext(base)` | Next iteration = max(used ∪ legend) + 1 (never gap-fill) |
+| `numSuggest(cls,group)` | Class-aware suggestion (Inventory → generic max+1; Exempt/Non-inv → scheme) |
+| `niUpdateStatus()` | Update the New Item card's catalog-loaded status chip |
+| `niCheckItem()` | New-item dup-check: exact/fuzzy PN + name-sim (port of `check_new_item.ps1`); warns on strong match, else suggests a number |
+| `niRenderResults(r)` / `niRowsHtml(list)` | Render dup-check results + numbering suggestion into `#niResults` |
+| `niSearchBases()` | Search scheme bases by category/desc/example; show base + live suggested `base-N` |
 
 ---
 
