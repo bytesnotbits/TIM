@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.31.00";
+const APP_VERSION = "v2.31.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2095,9 +2095,43 @@ window.addEventListener("beforeunload", function(e) {
 // ===================================================================
 // UPDATE CHECK
 // ===================================================================
+// Pull a detected update: skip-waiting the SW, wipe caches, refetch core files,
+// then reload onto the new build. Wired onto the Check-for-Updates button itself
+// when an update is available (a big, easy tap target on a tablet).
+async function _applyUpdate() {
+  const btn = $("checkUpdateBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Updating…"; }
+  try {
+    // Tell any waiting SW to activate immediately
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    // Clear SW cache so reload is guaranteed to hit the network
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map(n => caches.delete(n)));
+    // Re-fetch core files with cache:'reload' — this bypasses AND refreshes
+    // the browser HTTP cache, so the reload below loads the new build rather
+    // than a stale disk-cached copy (the root cause of "update won't stick").
+    await Promise.all(
+      ["./app.js", "./index.html", "./styles.css", "./manifest.json"]
+        .map(u => fetch(u, { cache: "reload" }).catch(() => {}))
+    );
+  } catch(_) {}
+  location.reload();
+}
+
+// Restore the button to its default "check" state (label + click action).
+function _resetUpdateBtn() {
+  const btn = $("checkUpdateBtn");
+  if (!btn) return;
+  btn.textContent = "Check for Updates";
+  btn.classList.remove("update-ready");
+  btn.onclick = checkForUpdate;
+}
+
 async function checkForUpdate() {
   const btn = $("checkUpdateBtn");
   const status = $("updateStatus");
+  _resetUpdateBtn();
   btn.disabled = true;
   status.style.color = "#64748b";
   status.textContent = "Checking…";
@@ -2121,27 +2155,12 @@ async function checkForUpdate() {
     const localVer  = localMatch  ? localMatch[1]  : null;
 
     if (remoteVer && localVer && remoteVer !== localVer) {
+      // Move the action onto the button itself — big, easy tap target on a tablet.
       status.style.color = "#16a34a";
-      status.innerHTML = "Update available (v" + remoteVer + "). <a href='#' id='applyUpdateLink' style='color:#2563eb;font-weight:700;'>Reload now</a>";
-      $("applyUpdateLink").addEventListener("click", async e => {
-        e.preventDefault();
-        try {
-          // Tell any waiting SW to activate immediately
-          const reg = await navigator.serviceWorker.getRegistration();
-          if (reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
-          // Clear SW cache so reload is guaranteed to hit the network
-          const cacheNames = await caches.keys();
-          await Promise.all(cacheNames.map(n => caches.delete(n)));
-          // Re-fetch core files with cache:'reload' — this bypasses AND refreshes
-          // the browser HTTP cache, so the reload below loads the new build rather
-          // than a stale disk-cached copy (the root cause of "update won't stick").
-          await Promise.all(
-            ["./app.js", "./index.html", "./styles.css", "./manifest.json"]
-              .map(u => fetch(u, { cache: "reload" }).catch(() => {}))
-          );
-        } catch(_) {}
-        location.reload();
-      });
+      status.textContent = "Update available (v" + remoteVer + ")";
+      btn.textContent = "Tap to update to v" + remoteVer;
+      btn.classList.add("update-ready");
+      btn.onclick = _applyUpdate;
     } else {
       status.style.color = "#64748b";
       status.textContent = localVer ? "Up to date (v" + localVer + ")" : "Up to date.";
@@ -2168,13 +2187,118 @@ const GH_SHAS_KEY   = "tim_gh_shas_v1";     // { "data/<file>": blobSha }
 const GH_PENDING_KEY = "tim_gh_pending_push_v1"; // true when local master has changes not yet pushed
 const GH_BASE_KEY   = "tim_gh_base_v1";     // last-synced repo payload — the 3-way merge base
 const GH_CONFLICTS_KEY = "tim_gh_conflicts_v1"; // local copy of the shared conflict log
+const GH_DEVICE_LABELS_KEY = "tim_gh_device_labels_v1"; // string[] — editable Device Label dropdown options
 const GH_DATA_DIR   = "data";
+
+// Defaults prefilled into the config modal when no value is saved on this device.
+const GH_DEFAULT_OWNER  = "bytesnotbits";
+const GH_DEFAULT_REPO   = "TIM-data";   // the DATA repo, not the code repo
+const GH_DEFAULT_BRANCH = "main";
+// Seed options for the Device Label dropdown (admin can add/remove — persisted per device).
+const GH_DEVICE_LABELS_DEFAULT = ["Joe Ipad", "Joe PC", "George Ipad", "George PC"];
 
 var ghConfig = null;
 var ghToken = null;
 var ghSyncInFlight = false;
 var ghOnlineRetryBound = false;
 var ghConflictLog = [];   // conflict entries (see MERGE_DESIGN.md); mirrors data/conflicts.json
+// Device Label dropdown options. Shared across devices via data/device_labels.json
+// using whole-list last-writer-wins: each edit stamps updated_at, and the newest
+// timestamp wins on sync. `ghDeviceLabels` is the in-memory array the UI reads;
+// `ghDeviceLabelsMeta` carries the {updated_at, updated_by} for the reconcile.
+var ghDeviceLabels = GH_DEVICE_LABELS_DEFAULT.slice();
+var ghDeviceLabelsMeta = { updated_at: "", updated_by: "" };
+var _ghDeviceLabelPushTimer = null;
+
+function ghLoadDeviceLabels() {
+  return TimDB.get(GH_DEVICE_LABELS_KEY).then(function(saved) {
+    if (Array.isArray(saved)) {                 // legacy format: bare array, no timestamp
+      ghDeviceLabels = saved.length ? saved.slice() : GH_DEVICE_LABELS_DEFAULT.slice();
+      ghDeviceLabelsMeta = { updated_at: "", updated_by: "" };
+    } else if (saved && Array.isArray(saved.labels)) {
+      ghDeviceLabels = saved.labels.slice();
+      ghDeviceLabelsMeta = { updated_at: saved.updated_at || "", updated_by: saved.updated_by || "" };
+    } else {
+      ghDeviceLabels = GH_DEVICE_LABELS_DEFAULT.slice();
+      ghDeviceLabelsMeta = { updated_at: "", updated_by: "" };
+    }
+    return ghDeviceLabels;
+  }).catch(function() {
+    ghDeviceLabels = GH_DEVICE_LABELS_DEFAULT.slice();
+    ghDeviceLabelsMeta = { updated_at: "", updated_by: "" };
+    return ghDeviceLabels;
+  });
+}
+
+// Persist the current list + meta without changing the timestamp (used when
+// adopting a remote copy, so its timestamp is preserved).
+function _ghPersistDeviceLabels() {
+  return TimDB.set(GH_DEVICE_LABELS_KEY, {
+    labels: ghDeviceLabels,
+    updated_at: ghDeviceLabelsMeta.updated_at || "",
+    updated_by: ghDeviceLabelsMeta.updated_by || ""
+  }).catch(function(){});
+}
+
+// A local admin edit: stamp a fresh timestamp, persist, and schedule a push so
+// the change propagates to other devices.
+function _ghStampAndSaveDeviceLabels() {
+  ghDeviceLabelsMeta = {
+    updated_at: new Date().toISOString(),
+    updated_by: (ghConfig && ghConfig.deviceLabel) || timGetUsername() || "this device"
+  };
+  _ghPersistDeviceLabels();
+  ghScheduleDeviceLabelPush();
+}
+
+// The device_labels.json payload written into the repo.
+function ghDeviceLabelsFile() {
+  return {
+    labels: ghDeviceLabels || [],
+    updated_at: ghDeviceLabelsMeta.updated_at || "",
+    updated_by: ghDeviceLabelsMeta.updated_by || ""
+  };
+}
+
+// Merge a pulled device_labels.json into ours (whole-list last-writer-wins).
+// Returns { adopted, localNewer } so callers can refresh UI / flag a push.
+function ghReconcileDeviceLabels(remote) {
+  var localTs  = ghDeviceLabelsMeta.updated_at || "";
+  var remoteTs = (remote && remote.updated_at) || "";
+  var remoteLabels = (remote && Array.isArray(remote.labels)) ? remote.labels : null;
+  if (remoteLabels && remoteTs > localTs) {          // remote strictly newer → adopt
+    ghDeviceLabels = remoteLabels.slice();
+    ghDeviceLabelsMeta = { updated_at: remoteTs, updated_by: (remote.updated_by || "") };
+    _ghPersistDeviceLabels();
+    _ghRefreshDeviceLabelUI();
+    return { adopted: true, localNewer: false };
+  }
+  // Ours is newer (or the repo has none yet) and differs → we owe a push.
+  var localNewer = (localTs > remoteTs) && !(remoteLabels && _ghEqual(remoteLabels, ghDeviceLabels));
+  return { adopted: false, localNewer: localNewer };
+}
+
+// Refresh the dropdown / editor if the config modal is currently open.
+function _ghRefreshDeviceLabelUI() {
+  var modal = $("ghConfigModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  var sel = $("ghCfgDeviceLabel");
+  ghPopulateDeviceLabelSelect(sel ? sel.value : "");
+  var mgr = $("ghCfgDeviceMgr");
+  if (mgr && !mgr.classList.contains("hidden")) ghRenderDeviceMgr();
+}
+
+// Debounced background push so rapid add/remove clicks coalesce into one commit.
+function ghScheduleDeviceLabelPush() {
+  if (!ghConfigured()) return;   // nothing to publish to yet
+  ghMarkPendingPush();
+  ghBindOnlineRetry();
+  if (_ghDeviceLabelPushTimer) clearTimeout(_ghDeviceLabelPushTimer);
+  _ghDeviceLabelPushTimer = setTimeout(function() {
+    _ghDeviceLabelPushTimer = null;
+    if (navigator.onLine && !ghSyncInFlight) ghPushToGitHub({ auto: true });
+  }, 1500);
+}
 
 function ghLoadConflictLog() {
   return TimDB.get(GH_CONFLICTS_KEY).then(function(arr) {
@@ -2322,17 +2446,101 @@ function ghLoadSettings() {
 // -- Config modal ---------------------------------------------------
 
 function ghOpenConfig() {
-  $("ghCfgOwner").value  = (ghConfig && ghConfig.owner)  || "";
-  $("ghCfgRepo").value   = (ghConfig && ghConfig.repo)   || "";
-  $("ghCfgBranch").value = (ghConfig && ghConfig.branch) || "main";
-  $("ghCfgDeviceLabel").value = (ghConfig && ghConfig.deviceLabel) || "";
+  $("ghCfgOwner").value  = (ghConfig && ghConfig.owner)  || GH_DEFAULT_OWNER;
+  $("ghCfgRepo").value   = (ghConfig && ghConfig.repo)   || GH_DEFAULT_REPO;
+  $("ghCfgBranch").value = (ghConfig && ghConfig.branch) || GH_DEFAULT_BRANCH;
+  ghPopulateDeviceLabelSelect((ghConfig && ghConfig.deviceLabel) || "");
   $("ghCfgToken").value  = "";
   $("ghCfgToken").placeholder = ghToken
     ? "Token saved (…" + ghToken.slice(-4) + ") — leave blank to keep"
     : "github_pat_…";
   $("ghCfgAutoLoad").checked = ghConfig ? ghConfig.autoLoad !== false : true;
   $("ghCfgTestResult").textContent = "";
+  ghCloseDeviceMgr();
   $("ghConfigModal").classList.remove("hidden");
+}
+
+// -- Device Label dropdown + admin inline editor --------------------
+// The dropdown options are stored in TimDB (per device). Only an admin
+// (soft gate: the sidebar username contains an admin name — the app has
+// no real auth) sees the Manage control that adds/removes options.
+const TIM_ADMIN_NAMES = ["joe"];  // lowercase substrings; extend as needed
+function timIsAdmin() {
+  var u = (timGetUsername() || "").trim().toLowerCase();
+  if (!u) return false;
+  return TIM_ADMIN_NAMES.some(function(a) { return u.indexOf(a) !== -1; });
+}
+
+// Rebuild the <select>, keeping `selected` chosen even if it isn't a stored option.
+function ghPopulateDeviceLabelSelect(selected) {
+  var sel = $("ghCfgDeviceLabel");
+  if (!sel) return;
+  selected = selected || "";
+  var opts = ghDeviceLabels.slice();
+  if (selected && opts.indexOf(selected) === -1) opts.unshift(selected);
+  var html = '<option value="">— select device —</option>';
+  opts.forEach(function(label) {
+    html += '<option value="' + escapeHtml(label) + '"' +
+            (label === selected ? " selected" : "") + ">" + escapeHtml(label) + "</option>";
+  });
+  sel.innerHTML = html;
+  // Show the Manage (edit) control only to admins.
+  var mgrBtn = $("ghCfgDeviceMgrBtn");
+  if (mgrBtn) mgrBtn.style.display = timIsAdmin() ? "" : "none";
+}
+
+function ghToggleDeviceMgr() {
+  var panel = $("ghCfgDeviceMgr");
+  if (!panel) return;
+  if (panel.classList.contains("hidden")) { ghRenderDeviceMgr(); panel.classList.remove("hidden"); }
+  else { panel.classList.add("hidden"); }
+}
+function ghCloseDeviceMgr() {
+  var panel = $("ghCfgDeviceMgr");
+  if (panel) panel.classList.add("hidden");
+}
+
+function ghRenderDeviceMgr() {
+  var list = $("ghCfgDeviceList");
+  if (!list) return;
+  if (!ghDeviceLabels.length) {
+    list.innerHTML = '<p class="small" style="margin:0;color:#94a3b8;">No devices yet — add one below.</p>';
+    return;
+  }
+  var html = "";
+  ghDeviceLabels.forEach(function(label, i) {
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:5px;">' +
+              '<span style="font-size:13px;">' + escapeHtml(label) + '</span>' +
+              '<button type="button" title="Remove" onclick="ghRemoveDeviceLabel(' + i + ')" ' +
+                'style="background:none;border:none;color:#dc2626;font-size:16px;line-height:1;cursor:pointer;padding:0 4px;">&times;</button>' +
+            '</div>';
+  });
+  list.innerHTML = html;
+}
+
+function ghAddDeviceLabel() {
+  var inp = $("ghCfgDeviceNew");
+  if (!inp) return;
+  var val = sanitizeScannerValue(inp.value || "").trim();
+  if (!val) return;
+  if (ghDeviceLabels.some(function(l) { return l.toLowerCase() === val.toLowerCase(); })) {
+    inp.value = "";
+    return;  // already present
+  }
+  ghDeviceLabels.push(val);
+  _ghStampAndSaveDeviceLabels();
+  inp.value = "";
+  ghRenderDeviceMgr();
+  ghPopulateDeviceLabelSelect(val);  // keep current selection, offer the new one
+}
+
+function ghRemoveDeviceLabel(i) {
+  if (i < 0 || i >= ghDeviceLabels.length) return;
+  var current = $("ghCfgDeviceLabel") ? $("ghCfgDeviceLabel").value : "";
+  ghDeviceLabels.splice(i, 1);
+  _ghStampAndSaveDeviceLabels();
+  ghRenderDeviceMgr();
+  ghPopulateDeviceLabelSelect(current);
 }
 
 function ghCloseConfig() {
@@ -2509,8 +2717,11 @@ function ghSyncNow(silent) {
           TimDB.set(GH_BASE_KEY, remote).catch(function(){});
           TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
 
+          // Reconcile the shared Device Label list (whole-list newest-wins).
+          var dl = ghReconcileDeviceLabels(asm.deviceLabels);
+
           // If the merge produced local-only changes, they still need publishing.
-          var needsPush = _ghPayloadDiffers(res.merged, remote);
+          var needsPush = _ghPayloadDiffers(res.merged, remote) || dl.localNewer;
           if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
 
           var pCount = Object.keys(PRODUCT_MAP).length;
@@ -2542,6 +2753,7 @@ function ghSyncNow(silent) {
 // the app is never left blank.
 function ghInit() {
   ghBindOnlineRetry();
+  ghLoadDeviceLabels();
   ghLoadConflictLog().then(function() { ghRenderConflictBadge(); });
   return ghLoadSettings().then(function(configured) {
     if (!configured) { _bootRenderCacheStep(); return; }
@@ -2589,7 +2801,8 @@ function ghBuildDataFiles() {
     "quants.json": payload.odoo_quants,
     "recounts.json": { recount_sessions: payload.recount_sessions, recount_movements: payload.recount_movements },
     "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
-    "conflicts.json": ghConflictLog || []   // shared conflict log travels with the data
+    "conflicts.json": ghConflictLog || [],  // shared conflict log travels with the data
+    "device_labels.json": ghDeviceLabelsFile()  // shared Device Label dropdown options
   };
   (payload.history.records || []).forEach(function(r) {
     var name = ghHistoryShardName(r);
@@ -2609,12 +2822,14 @@ function ghBuildDataFiles() {
 function _ghAssembleRemote(fetched) {
   var payload = {};
   var remoteConflicts = [];
+  var remoteDeviceLabels = null;
   var historyShards = [];
   fetched.forEach(function(f) {
     if (f.name === "product_map.json" && f.json && typeof f.json === "object") payload.product_map = f.json;
     else if (f.name === "barcode_map.json" && f.json && typeof f.json === "object") payload.barcode_map = f.json;
     else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
     else if (f.name === "conflicts.json" && Array.isArray(f.json)) remoteConflicts = f.json;
+    else if (f.name === "device_labels.json" && f.json && typeof f.json === "object") remoteDeviceLabels = f.json;
     else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
       if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
       if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
@@ -2632,7 +2847,7 @@ function _ghAssembleRemote(fetched) {
     historyShards.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
     payload.history = { records: [].concat.apply([], historyShards.map(function(s) { return s.records; })) };
   }
-  return { payload: payload, conflicts: remoteConflicts, hadHistoryShards: historyShards.length > 0 };
+  return { payload: payload, conflicts: remoteConflicts, deviceLabels: remoteDeviceLabels, hadHistoryShards: historyShards.length > 0 };
 }
 
 // Cheap "do these two payloads differ across merge collections?" check — used
@@ -3319,6 +3534,7 @@ function ghPushToGitHub(opts) {
             ghSaveConflictLog();
             ghRenderConflictBadge();
             TimDB.set(GH_BASE_KEY, remote).catch(function(){});
+            ghReconcileDeviceLabels(asm.deviceLabels);  // newest-wins before we rebuild files
 
             // Recompute push inputs against the merged local + fresh remote SHAs.
             local = ghBuildDataFiles();

@@ -1811,8 +1811,21 @@
             <input id="ghCfgBranch" type="text" placeholder="main" autocomplete="off" autocapitalize="off" spellcheck="false" />
           </label>
           <label>Device Label
-            <input id="ghCfgDeviceLabel" type="text" placeholder="e.g. TIM-Joe-PC" autocomplete="off" spellcheck="false" title="Shown in push commit messages — set it to match this device's token name so commits show which authorization was used" />
+            <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+              <select id="ghCfgDeviceLabel" title="Shown in push commit messages — set it to match this device's token name so commits show which authorization was used" style="flex:1;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;">
+                <option value="">— select device —</option>
+              </select>
+              <button type="button" id="ghCfgDeviceMgrBtn" class="secondary" onclick="ghToggleDeviceMgr()" title="Manage device list (admin)" style="margin:0;padding:8px 10px;white-space:nowrap;">Manage</button>
+            </div>
           </label>
+        </div>
+        <div id="ghCfgDeviceMgr" class="hidden" style="margin-top:8px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#f8fafc;">
+          <p class="small" style="margin:0 0 8px;color:#475569;font-weight:600;">Manage device list</p>
+          <div id="ghCfgDeviceList"></div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <input id="ghCfgDeviceNew" type="text" placeholder="Add a device label…" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();ghAddDeviceLabel();}" style="flex:1;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px;" />
+            <button type="button" class="secondary" onclick="ghAddDeviceLabel()" style="margin:0;padding:8px 12px;">Add</button>
+          </div>
         </div>
         <div style="margin-top:10px;">
           <label style="font-size:13px;color:#475569;font-weight:700;">Personal Access Token

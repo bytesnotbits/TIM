@@ -216,7 +216,17 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghFetch(url, options)` | `fetch` wrapper with AbortController timeout + 1 retry; normalizes timeout→TypeError so callers defer & retry. All GitHub fetches route through this so a hung connection can't stick `ghSyncInFlight` |
 | `ghApi(path, accept, tokenOverride)` | api.github.com GET via `ghFetch` (no-store) |
 | `ghLoadSettings()` | Restore config + token from IDB on startup |
-| `ghOpenConfig()` / `ghCloseConfig()` | Show/hide the config modal |
+| `ghOpenConfig()` / `ghCloseConfig()` | Show/hide the config modal; prefills owner/repo/branch defaults + device dropdown |
+| `ghLoadDeviceLabels()` | Load Device Label options + meta from TimDB `tim_gh_device_labels_v1` (migrates legacy array) |
+| `_ghPersistDeviceLabels()` / `_ghStampAndSaveDeviceLabels()` | Persist list (no stamp / stamp new `updated_at` + schedule push) |
+| `ghDeviceLabelsFile()` | Build the `data/device_labels.json` payload `{labels, updated_at, updated_by}` |
+| `ghReconcileDeviceLabels(remote)` | Whole-list newest-wins merge of pulled labels; returns `{adopted, localNewer}` |
+| `ghScheduleDeviceLabelPush()` | Debounced (1.5s) background push so rapid edits coalesce into one commit |
+| `_ghRefreshDeviceLabelUI()` | Repopulate dropdown/editor if the config modal is open |
+| `timIsAdmin()` | Soft admin gate — sidebar username contains a `TIM_ADMIN_NAMES` entry |
+| `ghPopulateDeviceLabelSelect(selected)` | Rebuild the Device Label `<select>`; shows Manage btn to admins |
+| `ghToggleDeviceMgr()` / `ghCloseDeviceMgr()` / `ghRenderDeviceMgr()` | Admin inline editor for the device list |
+| `ghAddDeviceLabel()` / `ghRemoveDeviceLabel(i)` | Add/remove a device label; stamp + repopulate + schedule push |
 | `ghTestConnection()` | GET `/repos/{o}/{r}` with form values; report ok/401/404 |
 | `ghSaveConfig()` | Persist settings + token, then sync |
 | `ghClearConfig()` | Remove token/config/SHAs from this device |
