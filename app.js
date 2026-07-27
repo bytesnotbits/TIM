@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.31.01";
+const APP_VERSION = "v2.31.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2208,7 +2208,7 @@ var ghConflictLog = [];   // conflict entries (see MERGE_DESIGN.md); mirrors dat
 // `ghDeviceLabelsMeta` carries the {updated_at, updated_by} for the reconcile.
 var ghDeviceLabels = GH_DEVICE_LABELS_DEFAULT.slice();
 var ghDeviceLabelsMeta = { updated_at: "", updated_by: "" };
-var _ghDeviceLabelPushTimer = null;
+var _ghDeviceLabelsDirty = false;   // edited since the last publish/adopt (session hint)
 
 function ghLoadDeviceLabels() {
   return TimDB.get(GH_DEVICE_LABELS_KEY).then(function(saved) {
@@ -2240,15 +2240,16 @@ function _ghPersistDeviceLabels() {
   }).catch(function(){});
 }
 
-// A local admin edit: stamp a fresh timestamp, persist, and schedule a push so
-// the change propagates to other devices.
+// A local admin edit: stamp a fresh timestamp and persist. The change stays
+// local until the admin clicks Publish (ghPublishDeviceLabels).
 function _ghStampAndSaveDeviceLabels() {
   ghDeviceLabelsMeta = {
     updated_at: new Date().toISOString(),
     updated_by: (ghConfig && ghConfig.deviceLabel) || timGetUsername() || "this device"
   };
   _ghPersistDeviceLabels();
-  ghScheduleDeviceLabelPush();
+  _ghDeviceLabelsDirty = true;
+  _ghRenderDeviceMgrStatus();
 }
 
 // The device_labels.json payload written into the repo.
@@ -2269,6 +2270,7 @@ function ghReconcileDeviceLabels(remote) {
   if (remoteLabels && remoteTs > localTs) {          // remote strictly newer → adopt
     ghDeviceLabels = remoteLabels.slice();
     ghDeviceLabelsMeta = { updated_at: remoteTs, updated_by: (remote.updated_by || "") };
+    _ghDeviceLabelsDirty = false;                    // now in sync with the repo
     _ghPersistDeviceLabels();
     _ghRefreshDeviceLabelUI();
     return { adopted: true, localNewer: false };
@@ -2288,16 +2290,19 @@ function _ghRefreshDeviceLabelUI() {
   if (mgr && !mgr.classList.contains("hidden")) ghRenderDeviceMgr();
 }
 
-// Debounced background push so rapid add/remove clicks coalesce into one commit.
-function ghScheduleDeviceLabelPush() {
-  if (!ghConfigured()) return;   // nothing to publish to yet
-  ghMarkPendingPush();
-  ghBindOnlineRetry();
-  if (_ghDeviceLabelPushTimer) clearTimeout(_ghDeviceLabelPushTimer);
-  _ghDeviceLabelPushTimer = setTimeout(function() {
-    _ghDeviceLabelPushTimer = null;
-    if (navigator.onLine && !ghSyncInFlight) ghPushToGitHub({ auto: true });
-  }, 1500);
+// Publish the device list (and any other pending local changes) to the repo so
+// other devices pick it up on their next sync. Explicit, admin-triggered.
+function ghPublishDeviceLabels() {
+  if (!ghConfigured()) { alert("Configure GitHub Sync first (owner, repo, and token) before publishing."); return; }
+  if (ghSyncInFlight) return;
+  _ghRenderDeviceMgrStatus("Publishing…");
+  var p = ghPushToGitHub({ auto: false });  // manual push: confirms + surfaces errors
+  if (p && p.then) {
+    p.then(function() {
+      _ghDeviceLabelsDirty = false;
+      _ghRenderDeviceMgrStatus("Published — other devices get it on their next sync.");
+    });
+  }
 }
 
 function ghLoadConflictLog() {
@@ -2492,7 +2497,7 @@ function ghPopulateDeviceLabelSelect(selected) {
 function ghToggleDeviceMgr() {
   var panel = $("ghCfgDeviceMgr");
   if (!panel) return;
-  if (panel.classList.contains("hidden")) { ghRenderDeviceMgr(); panel.classList.remove("hidden"); }
+  if (panel.classList.contains("hidden")) { _ghDeviceLabelsDirty = false; ghRenderDeviceMgr(); panel.classList.remove("hidden"); }
   else { panel.classList.add("hidden"); }
 }
 function ghCloseDeviceMgr() {
@@ -2516,6 +2521,20 @@ function ghRenderDeviceMgr() {
             '</div>';
   });
   list.innerHTML = html;
+  _ghRenderDeviceMgrStatus();
+}
+
+// Reflect publish state in the panel: enable Publish only when configured, and
+// show a hint about whether there are unpublished edits. `msg` overrides the hint.
+function _ghRenderDeviceMgrStatus(msg) {
+  var btn = $("ghCfgDevicePublishBtn");
+  var note = $("ghCfgDevicePublishNote");
+  if (btn) btn.disabled = !ghConfigured();
+  if (!note) return;
+  if (msg) { note.textContent = msg; note.style.color = "#16a34a"; return; }
+  if (!ghConfigured()) { note.textContent = "Configure sync to share this list across devices."; note.style.color = "#94a3b8"; }
+  else if (_ghDeviceLabelsDirty) { note.textContent = "Unpublished changes — click Publish to share them."; note.style.color = "#b45309"; }
+  else { note.textContent = "Publish sends this list to the other devices."; note.style.color = "#64748b"; }
 }
 
 function ghAddDeviceLabel() {
@@ -2717,11 +2736,13 @@ function ghSyncNow(silent) {
           TimDB.set(GH_BASE_KEY, remote).catch(function(){});
           TimDB.set(GH_SHAS_KEY, shas).catch(function(){});
 
-          // Reconcile the shared Device Label list (whole-list newest-wins).
-          var dl = ghReconcileDeviceLabels(asm.deviceLabels);
+          // Reconcile the shared Device Label list (whole-list newest-wins):
+          // adopt a newer remote copy, but a newer LOCAL copy waits for the admin
+          // to click Publish — it deliberately does NOT trip the auto-push flag.
+          ghReconcileDeviceLabels(asm.deviceLabels);
 
           // If the merge produced local-only changes, they still need publishing.
-          var needsPush = _ghPayloadDiffers(res.merged, remote) || dl.localNewer;
+          var needsPush = _ghPayloadDiffers(res.merged, remote);
           if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
 
           var pCount = Object.keys(PRODUCT_MAP).length;

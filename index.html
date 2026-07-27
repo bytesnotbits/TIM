@@ -1826,6 +1826,10 @@
             <input id="ghCfgDeviceNew" type="text" placeholder="Add a device label…" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();ghAddDeviceLabel();}" style="flex:1;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px;" />
             <button type="button" class="secondary" onclick="ghAddDeviceLabel()" style="margin:0;padding:8px 12px;">Add</button>
           </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
+            <button type="button" id="ghCfgDevicePublishBtn" onclick="ghPublishDeviceLabels()" style="margin:0;padding:8px 14px;white-space:nowrap;">Publish</button>
+            <span id="ghCfgDevicePublishNote" class="small" style="color:#64748b;"></span>
+          </div>
         </div>
         <div style="margin-top:10px;">
           <label style="font-size:13px;color:#475569;font-weight:700;">Personal Access Token

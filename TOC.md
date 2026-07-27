@@ -220,8 +220,9 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghLoadDeviceLabels()` | Load Device Label options + meta from TimDB `tim_gh_device_labels_v1` (migrates legacy array) |
 | `_ghPersistDeviceLabels()` / `_ghStampAndSaveDeviceLabels()` | Persist list (no stamp / stamp new `updated_at` + schedule push) |
 | `ghDeviceLabelsFile()` | Build the `data/device_labels.json` payload `{labels, updated_at, updated_by}` |
-| `ghReconcileDeviceLabels(remote)` | Whole-list newest-wins merge of pulled labels; returns `{adopted, localNewer}` |
-| `ghScheduleDeviceLabelPush()` | Debounced (1.5s) background push so rapid edits coalesce into one commit |
+| `ghReconcileDeviceLabels(remote)` | Whole-list newest-wins merge of pulled labels (adopts newer remote only); returns `{adopted, localNewer}` |
+| `ghPublishDeviceLabels()` | Admin "Publish" button — explicit push of the device list (edits stay local until clicked) |
+| `_ghRenderDeviceMgrStatus(msg)` | Publish button enable/disable + unpublished-changes hint in the editor panel |
 | `_ghRefreshDeviceLabelUI()` | Repopulate dropdown/editor if the config modal is open |
 | `timIsAdmin()` | Soft admin gate — sidebar username contains a `TIM_ADMIN_NAMES` entry |
 | `ghPopulateDeviceLabelSelect(selected)` | Rebuild the Device Label `<select>`; shows Manage btn to admins |
