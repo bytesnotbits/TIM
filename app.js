@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.31.02";
+const APP_VERSION = "v2.32.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -898,7 +898,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.product_movements)) { appData.product_movements = parsed.product_movements; rcMoveMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (Array.isArray(parsed.nisc_capture))      { appData.nisc_capture      = parsed.nisc_capture;      rcNiscMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
-  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxSaveToStorage(); }
+  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -2374,6 +2374,43 @@ function ghConfigured() {
   return !!(ghToken && ghConfig && ghConfig.owner && ghConfig.repo);
 }
 
+// ── Testing mode ────────────────────────────────────────────────────
+// Work against the live DB + real data on a device, but suppress ALL pushes to
+// the shared GitHub repo so feature testing can't leak test artifacts upstream.
+// Reads/ingest are unaffected (those are separate fns) — only ghPushToGitHub is
+// gated, and it's the single choke point every push (auto + manual) goes through.
+// Failure-mode design: the SAFE failure is "stuck ON" (my changes just don't
+// sync). The DANGEROUS one is "OFF when I think it's ON" → test junk pushes. So
+// ON is made impossible to miss (persistent amber header banner); the ABSENCE of
+// the banner is the reliable "you are live and pushing" signal. UI-state only
+// (localStorage), never part of synced master data.
+const TIM_TESTING_MODE_KEY = "tim_testing_mode";
+function ghTestingMode() {
+  try { return localStorage.getItem(TIM_TESTING_MODE_KEY) === "1"; } catch(e) { return false; }
+}
+function ghSetTestingMode(on) {
+  try { localStorage.setItem(TIM_TESTING_MODE_KEY, on ? "1" : "0"); } catch(e) {}
+  ghRenderTestingBanner();
+  ghSetStatus(on
+    ? "Testing mode ON — GitHub push disabled. Work freely; nothing syncs to the shared repo until you turn it off."
+    : "Testing mode OFF — GitHub push re-enabled.", on ? "err" : "ok");
+}
+function ghToggleTestingMode() { ghSetTestingMode(!ghTestingMode()); }
+// Reflect state in the header banner + the toggle button. Called on load and on
+// every toggle so the banner can never drift from the actual flag.
+function ghRenderTestingBanner() {
+  var on = ghTestingMode();
+  var banner = $("timTestingBanner");
+  if (banner) banner.classList.toggle("hidden", !on);
+  var btn = $("ghTestingToggleBtn");
+  if (btn) {
+    btn.textContent = "🧪 Testing mode: " + (on ? "On" : "Off");
+    btn.style.background = on ? "#f59e0b" : "";
+    btn.style.color      = on ? "#1c1917" : "";
+    btn.style.fontWeight = on ? "800" : "";
+  }
+}
+
 function ghSetStatus(msg, state) {
   var el = $("ghSyncStatus");
   if (!el) return;
@@ -3452,6 +3489,13 @@ function _ghWriteCommit(repoBase, changed) {
 
 function ghPushToGitHub(opts) {
   opts = opts || {};
+  // Testing mode: suppress EVERY push (auto + manual). Local saves already
+  // happened upstream of here; we just skip the write to the shared repo.
+  if (ghTestingMode()) {
+    ghSetStatus("Testing mode is ON — GitHub push suppressed (data saved locally only). Turn it off to push.",
+      opts.auto ? "info" : "err");
+    return;
+  }
   if (ghSyncInFlight) return;
   if (!ghConfigured()) { if (opts.auto) return; ghOpenConfig(); return; }
   if (!Object.keys(PRODUCT_MAP).length && !(history.records || []).length) {
@@ -3679,6 +3723,10 @@ var _timTonePatterns = {
   bulk:       [{ f: 720,  t: 0,    d: 0.11, v: 0.26, shape: "triangle" }],
   location:   [{ f: 1100, t: 0,    d: 0.06, v: 0.26 }, { f: 770, t: 0.065, d: 0.09, v: 0.24 }],
   box:        [{ f: 600,  t: 0,    d: 0.07, v: 0.28 }, { f: 900, t: 0.07,  d: 0.07, v: 0.28 }, { f: 1200, t: 0.14, d: 0.11, v: 0.28 }],
+  // "New device — verify": a distinct wobble (high–low–high) that is clearly NOT
+  // the resolved-success tones (ok/serialized/box) and NOT the warn/error alarms —
+  // it means "I placed this, but it's unknown; complete the association." (v2.32.02)
+  verify:     [{ f: 1046, t: 0,    d: 0.07, v: 0.30 }, { f: 740, t: 0.075, d: 0.07, v: 0.30 }, { f: 1318, t: 0.15,  d: 0.13, v: 0.32 }],
   manual:     [{ f: 523,  t: 0,    d: 0.08, v: 0.26, shape: "triangle" }, { f: 659, t: 0.09, d: 0.08, v: 0.26, shape: "triangle" },
                { f: 784,  t: 0.18, d: 0.14, v: 0.28, shape: "triangle" }],
   mode:       [{ f: 520,  t: 0,    d: 0.05, v: 0.16 }],
@@ -3825,12 +3873,15 @@ function timFlash(severity) {
 // refines the success tone (serialized/reel/bulk/box/location).
 function timFeedback(type, toneVariant) {
   var t = type || "info";
+  // "verify" is its own channel: amber (warn-severity) flash to grab the eye, but a
+  // DISTINCT tone (not the warn alarm) so "new device, complete it" ≠ "something's wrong".
   var severity = (t === "error") ? "error"
-               : (t === "warn")  ? "warn"
+               : (t === "warn" || t === "verify") ? "warn"
                : (t === "ok" || t === "location" || t === "serialized" || t === "reel" || t === "bulk" || t === "box") ? "ok"
                : "info";
-  var tone = (severity === "error") ? "error"
-           : (severity === "warn")  ? "warn"
+  var tone = (t === "error")  ? "error"
+           : (t === "verify") ? "verify"
+           : (severity === "warn") ? "warn"
            : (toneVariant || t);
   if (!_timTonePatterns[tone]) tone = (severity === "ok") ? "ok" : "info";
   timPlayTone(tone);
@@ -3956,7 +4007,7 @@ function timInitVoice() {
 // -- Activity feed --------------------------------------------------
 var invActivityLog = [];
 var INV_ACTIVITY_MAX = 8;
-var _invActivityIcons = { ok:"✓", warn:"⚠", error:"✗", info:"i", location:"⊙", mode:"⇄" };
+var _invActivityIcons = { ok:"✓", warn:"⚠", error:"✗", info:"i", location:"⊙", mode:"⇄", verify:"⚑" };
 
 function invAddActivity(type, message, detail, beepType) {
   timFeedback(type, beepType);
@@ -5345,7 +5396,7 @@ function invCreateExceptionEvent(scannedValue, scanType, problem, suggestedActio
 function invSetScanFeedback(message, type, activityDetail, beepType) {
   var fb = $("invScanFeedback");
   if (fb) { fb.textContent = message; fb.className = "inv-scan-feedback " + (type || "info"); }
-  if (type === "ok" || type === "warn" || type === "error") {
+  if (type === "ok" || type === "warn" || type === "error" || type === "verify") {
     invAddActivity(type, message, activityDetail || "", beepType);
   }
 }
@@ -5447,8 +5498,160 @@ function boxSaveToStorage() {
 }
 function boxLoadFromStorage() {
   return TimDB.get(BOX_STORAGE_KEY).then(function(saved) {
-    if (saved && typeof saved === "object") appData.boxes = saved;
+    if (saved && typeof saved === "object") { appData.boxes = saved; boxMigrateDevices(); }
   }).catch(function(){});
+}
+
+// One-time upgrade: legacy boxes stored a flat expectedSerials:string[]. Convert
+// each to a structured expectedDevices:[{serial}] record and drop the old field.
+// Idempotent; also call after a master-JSON import that may carry old-shape boxes.
+function boxMigrateDevices() {
+  var boxes = appData.boxes || {}, changed = false;
+  Object.keys(boxes).forEach(function(k) {
+    var b = boxes[k]; if (!b) return;
+    if (!b.expectedDevices) {
+      b.expectedDevices = (b.expectedSerials || []).map(function(s) { return { serial: normalize(s) }; });
+      changed = true;
+    }
+    if ("expectedSerials" in b) { delete b.expectedSerials; changed = true; }
+  });
+  if (changed) boxSaveToStorage();
+}
+
+// ---- Device-record helpers (a box's contents are expectedDevices:[{serial?,fsan?,mac?,partial?}]) ----
+// A device's fields mirror TIM's history identifiers exactly: `serial` (the true
+// Calix serial printed on the box label), `fsan` (the FSAN = the CXNK number NISC
+// records as the "serial number" and that a device reports when queried), `mac`.
+// The capture modal lets the user pick which to record per box; scanning ANY one
+// identifier resolves the unit and the rest are filled from the catalog (history).
+var BOX_CAPTURE_COLUMNS = [
+  { key: "serial", label: "Serial", placeholder: "Scan serial" },
+  { key: "fsan",   label: "FSAN",   placeholder: "Scan FSAN" },
+  { key: "mac",    label: "MAC",    placeholder: "Scan MAC" }
+];
+function boxColLabel(key) {
+  for (var i = 0; i < BOX_CAPTURE_COLUMNS.length; i++) if (BOX_CAPTURE_COLUMNS[i].key === key) return BOX_CAPTURE_COLUMNS[i].label;
+  return key;
+}
+// PATTERN-ONLY classification for a scan that did NOT resolve against the DB
+// (used by the capture modal's unknown-device flow). No history/product-map
+// lookups — by the time this is called we already know the value is unknown.
+// Only two reliable signals; everything else is assumed a Serial (the default
+// bucket). Known/accepted limit: a bare 12-hex MAC is indistinguishable from a
+// serial and reads as "serial" — fine, MAC is vestigial. Returns a column key.
+function boxCapClassify(value) {
+  var v = String(value || "").trim().toUpperCase();
+  if (!v) return "serial";
+  if (/^CXNK/.test(v)) return "fsan";                     // Calix FSAN/CXNK prefix
+  var bare = v.replace(/[:\-\.]/g, "");                    // formatted MAC only (separators + 12 hex)
+  if (v.length === 17 && /^[0-9A-F]{12}$/.test(bare) &&
+      /^[0-9A-F]{2}([:.\-])[0-9A-F]{2}\1[0-9A-F]{2}\1[0-9A-F]{2}\1[0-9A-F]{2}\1[0-9A-F]{2}$/.test(v)) return "mac";
+  return "serial";
+}
+// A box's device array, migrating on read so no path sees the legacy shape.
+function boxDeviceList(b) {
+  if (!b) return [];
+  if (!b.expectedDevices) b.expectedDevices = (b.expectedSerials || []).map(function(s) { return { serial: normalize(s) }; });
+  return b.expectedDevices;
+}
+// Primary identifier (display + identity key): serial preferred (the human-facing
+// label scan), then FSAN, then MAC — so a device captured with only an FSAN or
+// only a MAC still has a stable identity.
+function boxDevPrimary(dev) { return dev ? (dev.serial || dev.fsan || dev.mac || "") : ""; }
+function boxDevKey(dev) { return normKey(boxDevPrimary(dev)); }
+// All non-empty identifiers on a device, normalized (cross-field matching).
+function boxDevKeys(dev) { return dev ? [dev.serial, dev.fsan, dev.mac].map(normKey).filter(Boolean) : []; }
+// Human label showing every captured identifier, e.g. "S/N ABC · FSAN … · MAC …".
+function boxDevLabel(dev) {
+  if (!dev) return "";
+  var parts = [];
+  if (dev.serial) parts.push("S/N " + dev.serial);
+  if (dev.fsan)   parts.push("FSAN " + dev.fsan);
+  if (dev.mac)    parts.push("MAC " + dev.mac);
+  return parts.join(" · ") || boxDevPrimary(dev);
+}
+// Normalize a raw device object to stored form (uppercased, blanks dropped).
+function boxNormDev(dev) {
+  dev = dev || {};
+  var out = {};
+  if (dev.serial) out.serial = normalize(dev.serial);
+  if (dev.fsan)   out.fsan   = normalize(dev.fsan);
+  if (dev.mac)    out.mac    = normalize(dev.mac);
+  if (dev.partial) out.partial = true;
+  if (dev.unverified) out.unverified = true;   // manually-placed unknown scan; needs review (v2.32.02)
+  return out;
+}
+// Fill target's blank identifier fields from src (used when the same device is
+// re-scanned/resolved with additional identifiers). A full re-capture clears `partial`.
+function boxMergeDev(target, src) {
+  if (src.serial && !target.serial) target.serial = src.serial;
+  if (src.fsan && !target.fsan) target.fsan = src.fsan;
+  if (src.mac && !target.mac) target.mac = src.mac;
+  if (!src.partial) delete target.partial;
+  return target;
+}
+// Resolve a scanned identifier (serial/FSAN/MAC) to a device record with any
+// siblings the catalog knows. Returns {serial,fsan,mac} (only known fields) or null.
+function boxResolveIdentifiers(value) {
+  var rec = (typeof invBoxResolveDevice === "function") ? invBoxResolveDevice(value) : null;
+  if (!rec) return null;
+  var out = {};
+  var s = normalize(rec.serial || rec.ref || "");        if (s) out.serial = s;
+  var f = normalize(rec.fsan   || rec.name || "");       if (f) out.fsan = f;
+  var m = normalize(rec.mac_address || rec.mac || "");   if (m) out.mac = m;
+  return out;
+}
+
+// Set when a manual association is learned this modal session, so the box-save
+// boundary can push history to GitHub ONCE rather than per device (v2.32.02).
+var _boxCapLearnedPending = false;
+
+// WRITE-BACK: a manually-completed unknown association → appData.history.records
+// so it resolves GLOBALLY next time (the founding reason the unknown-scan flow
+// exists). Dedup-safe, two paths:
+//   • an identifier already matches a history record → FILL that record's blank
+//     serial/fsan/mac fields (no duplicate row);
+//   • otherwise create a MINIMAL identity record — source_type "box_learned",
+//     status/history_only so it RESOLVES but NEVER imports to Odoo (protects
+//     receiving/shipment semantics; resolve fns ignore status, importers honor
+//     history_only). Requires >=2 identifiers (a lone value teaches nothing
+//     cross-resolvable). Persists locally now; GitHub push is batched at save.
+function boxCapLearnAssociation(dev) {
+  dev = boxNormDev(dev || {});
+  if ([dev.serial, dev.fsan, dev.mac].filter(Boolean).length < 2) return false;
+  if (!history.records) history.records = [];
+
+  var existing = (dev.serial && invResolveBySerial(normKey(dev.serial))) ||
+                 (dev.fsan   && invResolveByFsan(normKey(dev.fsan)))     ||
+                 (dev.mac    && invResolveByMac(normKey(dev.mac.replace(/[:\-\.]/g, "")))) || null;
+  var now = new Date().toISOString();
+
+  if (existing) {
+    var filled = false;
+    if (dev.serial && !normalize(existing.serial || existing.ref || ""))       { existing.serial = dev.serial; filled = true; }
+    if (dev.fsan   && !normalize(existing.fsan   || existing.name || ""))       { existing.fsan = dev.fsan; if (!existing.original_fsan) existing.original_fsan = dev.fsan; filled = true; }
+    if (dev.mac    && !normalize(existing.mac_address || existing.mac || ""))    { existing.mac_address = dev.mac; existing.mac = dev.mac; filled = true; }
+    if (!filled) return false;   // fully known already — no-op
+    (existing.messages = existing.messages || []).push("box_learned: identifier added during box capture " + now);
+  } else {
+    history.records.push({
+      row_number:     0,
+      source_type:    "box_learned",
+      serial:         dev.serial || "",
+      fsan:           dev.fsan   || "",
+      original_fsan:  dev.fsan   || "",
+      mac_address:    dev.mac    || "",
+      mac:            dev.mac    || "",
+      serial_tracked: true,
+      history_only:   true,
+      status:         "history_only",
+      imported_at:    now,
+      messages:       ["box_learned: association captured during box build"]
+    });
+  }
+  _boxCapLearnedPending = true;
+  if (typeof timSaveMasterCache === "function") timSaveMasterCache();
+  return true;
 }
 
 function boxGet(boxId) {
@@ -5460,18 +5663,20 @@ function boxAll() {
   return Object.keys(appData.boxes || {}).map(function(k) { return appData.boxes[k]; });
 }
 
-// Which box currently lists this serial (for move/relocation detection).
-function boxFindBySerial(serial) {
-  var sk = normKey(serial);
+// Which box currently contains a device with this identifier (serial/cxnk/mac),
+// for move/relocation detection. Matches on ANY of a device's identifiers.
+function boxFindByIdentifier(value) {
+  var sk = normKey(value);
   if (!sk) return null;
   var boxes = appData.boxes || {};
   var keys = Object.keys(boxes);
   for (var i = 0; i < keys.length; i++) {
     var b = boxes[keys[i]];
-    if (b && (b.expectedSerials || []).some(function(s) { return normKey(s) === sk; })) return b;
+    if (b && boxDeviceList(b).some(function(d) { return boxDevKeys(d).indexOf(sk) !== -1; })) return b;
   }
   return null;
 }
+function boxFindBySerial(serial) { return boxFindByIdentifier(serial); }   // back-compat alias
 
 // Create or merge a box record. `fields` may include calixProduct,
 // expectedQty, location, sealed, source. Never overwrites a stored value
@@ -5484,7 +5689,7 @@ function boxUpsert(boxId, fields) {
   var now = invNow();
   var b = appData.boxes[key];
   if (!b) {
-    b = { boxId: normalize(boxId), expectedSerials: [], status: "capturing", opened: false,
+    b = { boxId: normalize(boxId), expectedDevices: [], status: "capturing", opened: false,
           source: fields.source || "scanned", createdAt: now, createdBy: boxWho() };
     appData.boxes[key] = b;
   }
@@ -5498,50 +5703,84 @@ function boxUpsert(boxId, fields) {
   return b;
 }
 
-// Add a serial to a box's expected contents (dedup). If the serial was
-// listed in a different box, it is moved here. Returns
-// { box, added:bool, movedFrom:<box|null> }.
-function boxAddSerial(boxId, serial, fields) {
+// Add/merge a device into a box's contents. `dev` is {serial?,cxnk?,mac?,partial?}.
+// Dedup by shared identifier: if a record for this device already exists (here or
+// in another box), it is merged (blank fields filled) and moved here rather than
+// duplicated. Returns { box, added, merged, movedFrom:<box|null> }.
+function boxAddDevice(boxId, dev, fields) {
   var b = boxUpsert(boxId, fields);
-  if (!b) return { box: null, added: false, movedFrom: null };
-  var sk = normKey(serial);
-  if (!sk) return { box: b, added: false, movedFrom: null };
+  if (!b) return { box: null, added: false, merged: false, movedFrom: null };
+  dev = boxNormDev(dev);
+  var keys = boxDevKeys(dev);
+  if (!keys.length) return { box: b, added: false, merged: false, movedFrom: null };
 
-  var prior = boxFindBySerial(serial);
-  var movedFrom = (prior && boxNormId(prior.boxId) !== boxNormId(b.boxId)) ? prior : null;
-  if (movedFrom) {
-    movedFrom.expectedSerials = (movedFrom.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
-    movedFrom.updatedAt = invNow();
+  // Locate an existing record for this device (any box) by a shared identifier.
+  var prior = null, priorBox = null, boxes = appData.boxes || {};
+  Object.keys(boxes).some(function(k) {
+    var bx = boxes[k];
+    var hit = boxDeviceList(bx).filter(function(d) {
+      return boxDevKeys(d).some(function(kk) { return keys.indexOf(kk) !== -1; });
+    })[0];
+    if (hit) { prior = hit; priorBox = bx; return true; }
+    return false;
+  });
+
+  var movedFrom = null, added = false, merged = false;
+  var here = boxDeviceList(b);
+  if (prior && boxNormId(priorBox.boxId) !== boxNormId(b.boxId)) {
+    // Move: pull the record out of the other box, merge the new fields, re-add here.
+    priorBox.expectedDevices = boxDeviceList(priorBox).filter(function(d) { return d !== prior; });
+    priorBox.updatedAt = invNow();
+    movedFrom = priorBox;
+    here.push(boxMergeDev(prior, dev));
+    merged = true;
+  } else if (prior && priorBox === b) {
+    boxMergeDev(prior, dev);   // already here — just fill blank identifiers
+    merged = true;
+  } else {
+    here.push(dev);
+    added = true;
   }
-
-  var already = (b.expectedSerials || []).some(function(s) { return normKey(s) === sk; });
-  var added = false;
-  if (!already) { b.expectedSerials.push(normalize(serial)); added = true; }
   b.updatedAt = invNow();
   boxSaveToStorage();
-  return { box: b, added: added, movedFrom: movedFrom };
+  return { box: b, added: added, merged: merged, movedFrom: movedFrom };
+}
+// Back-compat: add a device by a single serial string.
+function boxAddSerial(boxId, serial, fields) {
+  var sk = normKey(serial);
+  if (!sk) { var b = boxUpsert(boxId, fields); return { box: b, added: false, movedFrom: null }; }
+  var r = boxAddDevice(boxId, { serial: serial }, fields);
+  return { box: r.box, added: r.added || r.merged, movedFrom: r.movedFrom };
 }
 
-// Replace a box's entire expected-serial list (open-box override).
-// Marks the box opened (sealed=false). Returns { box, missing:[...], extra:[...] }
-// diffed against the prior contents (normalized-uppercase serials).
-function boxSetSerials(boxId, serials, fields) {
+// Replace a box's entire device list (open-box override / modal edit-save).
+// `markOpened` (default true) flags the box opened for the audit trail; the
+// capture modal passes false when it's simply defining a fresh box. Returns
+// { box, missing:[...], extra:[...] } diffed by primary identifier.
+function boxSetDevices(boxId, devices, fields, markOpened) {
   var b = boxUpsert(boxId, fields);
   if (!b) return { box: null, missing: [], extra: [] };
-  var priorKeys = (b.expectedSerials || []).map(normKey);
-  var newList = [], newKeys = {};
-  (serials || []).forEach(function(s) {
-    var k = normKey(s);
-    if (k && !newKeys[k]) { newKeys[k] = 1; newList.push(normalize(s)); }
+  var priorKeys = boxDeviceList(b).map(boxDevKey).filter(Boolean);
+  var newList = [], seen = {};
+  (devices || []).forEach(function(d) {
+    d = boxNormDev(d);
+    var k = boxDevKey(d);
+    if (!k) { newList.push(d); return; }        // keep keyless partial rows
+    if (!seen[k]) { seen[k] = 1; newList.push(d); }
   });
-  var missing = priorKeys.filter(function(k) { return !newKeys[k]; });
-  var extra   = Object.keys(newKeys).filter(function(k) { return priorKeys.indexOf(k) === -1; });
-  b.expectedSerials = newList;
-  b.opened = true;
+  var newKeys = newList.map(boxDevKey).filter(Boolean);
+  var missing = priorKeys.filter(function(k) { return newKeys.indexOf(k) === -1; });
+  var extra   = newKeys.filter(function(k) { return priorKeys.indexOf(k) === -1; });
+  b.expectedDevices = newList;
+  if (markOpened !== false) b.opened = true;
   b.updatedAt = invNow();
   b.updatedBy = boxWho();
   boxSaveToStorage();
   return { box: b, missing: missing, extra: extra };
+}
+// Back-compat: replace by a list of serial strings.
+function boxSetSerials(boxId, serials, fields) {
+  return boxSetDevices(boxId, (serials || []).map(function(s) { return { serial: s }; }), fields);
 }
 
 function boxDelete(boxId) {
@@ -5577,12 +5816,12 @@ function boxReopen(boxId) {
 // each device gets its own serialized_device_scan (so dedup/reporting work).
 function invHandleBoxScan(boxId, contextItem, notes, location) {
   var b = boxGet(boxId);
-  var snapshot = b ? (b.expectedSerials || []).slice() : [];
+  var snapshot = b ? boxDeviceList(b).slice() : [];   // device records {serial,cxnk,mac}
 
   if (!b || !snapshot.length) {
     invCreateExceptionEvent(boxId, "box_id",
       "Box not found or empty in the box registry",
-      "Capture this box first in Box mode (scan the carton, then its devices), or scan devices individually.",
+      "Build this box first (Boxes → New Box: scan the carton, then its devices), or scan devices individually.",
       notes);
     invSetScanFeedback("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
     invSpeak("Box not found");
@@ -5595,23 +5834,28 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
     boxId:               b.boxId,
     location:            location || "",
     resolvedDeviceCount: snapshot.length,
-    expectedSerials:     snapshot,   // audit snapshot of what was asserted
+    expectedSerials:     snapshot.map(boxDevPrimary),   // audit snapshot (primary ids, back-compat)
+    expectedDevices:     snapshot,                       // full audit snapshot of what was asserted
     sealedTrust:         true,       // counted without opening the box
     notes:               notes
   });
 
   var counted = 0, dups = 0;
-  snapshot.forEach(function(s) {
-    var rec    = invResolveBySerial(normKey(s));
-    var serial = rec ? normalize(rec.serial || rec.ref || s) : normalize(s);
-    var fsan   = rec ? normalize(rec.fsan   || rec.name || "") : "";
-    var dup    = invFindSerializedDuplicate(serial, fsan);
+  snapshot.forEach(function(dev) {
+    // Resolve against the catalog by any captured identifier (serial/FSAN/MAC).
+    var rec    = invBoxResolveDevice(boxDevPrimary(dev)) ||
+                 (dev.mac ? invResolveByMac(normKey(String(dev.mac).replace(/[:\-\.]/g, ""))) : null);
+    var serial = rec ? normalize(rec.serial || rec.ref || "") : normalize(dev.serial || "");
+    var fsan   = rec ? normalize(rec.fsan   || rec.name || "") : normalize(dev.fsan || "");
+    var dup    = invFindSerializedDuplicate(serial, fsan) ||
+                 (!serial && !fsan && dev.mac ? invFindSerializedDuplicate(normalize(dev.mac), "") : null);
     if (dup) { dups++; return; }
     invCreateEvent("serialized_device_scan", {
       scanType:      "box_id",
       scannedValue:  boxId,
       serial:        serial,
       fsan:          fsan,
+      mac:           dev.mac  || "",
       boxId:         b.boxId,
       location:      location || "",
       itemNumber:    rec ? normalize(rec.hctc || rec.calix_product || "") : "",
@@ -5714,7 +5958,7 @@ function invBoxModeScan(rawValue, notes) {
     // it instead of silently resuming (the gap that let a box be re-counted).
     if (invBoxCountedThisSession(v)) {
       invSetScanFeedback('Box ' + existing.boxId + ' was already counted this session (' +
-        ((existing.expectedSerials || []).length) + ' device(s)). Tap "Open box" to re-count it, ' +
+        (boxDeviceList(existing).length) + ' device(s)). Tap "Open box" to re-count it, ' +
         'or scan a different carton ID.', "warn", "", "box");
       invSpeak("Already counted");
       invLastScannedBox = boxNormId(v);
@@ -5756,7 +6000,7 @@ function invBoxStartCapture(boxId, isOverride) {
   invLastScannedBox  = invActiveBox;
   invBoxIsOverride   = !!isOverride;
   invBoxArmed        = false;   // a box is now being captured; subsequent scans are its devices
-  var n = (b.expectedSerials || []).length;
+  var n = boxDeviceList(b).length;
   invSetScanFeedback(
     "Box " + b.boxId + " — capturing. " + n + " device(s) so far. Scan devices; tap Done when finished.",
     "ok", "", "box");
@@ -5792,7 +6036,7 @@ function invBoxCaptureDevice(rec, value, notes) {
 
   var res = boxAddSerial(invActiveBox, serial, {});
   b = res.box;
-  var n        = (b.expectedSerials || []).length;
+  var n        = boxDeviceList(b).length;
   var countTxt = b.expectedQty ? (n + " of " + b.expectedQty) : (n + " so far");
   var idTxt    = serial ? ("S/N " + serial) : fsan ? ("FSAN " + fsan) : value;
   var moved    = res.movedFrom ? "  (moved from box " + res.movedFrom.boxId + ")" : "";
@@ -5811,11 +6055,11 @@ function invBoxFinish() {
   if (!invActiveBox) { invSetScanFeedback("No box is being captured.", "info"); return; }
   var b = boxGet(invActiveBox);
   if (!b) { invBoxClearActive(); return; }
-  var n = (b.expectedSerials || []).length;
+  var n = boxDeviceList(b).length;
 
   if (invBoxIsOverride) {
-    var priorKeys = (invBoxOverridePrior || []).map(normKey);
-    var curKeys   = (b.expectedSerials || []).map(normKey);
+    var priorKeys = (invBoxOverridePrior || []).map(boxDevKey).filter(Boolean);
+    var curKeys   = boxDeviceList(b).map(boxDevKey).filter(Boolean);
     var missing = priorKeys.filter(function(k) { return curKeys.indexOf(k) === -1; });
     var extra   = curKeys.filter(function(k) { return priorKeys.indexOf(k) === -1; });
     b.opened = true;
@@ -5853,7 +6097,7 @@ function invBoxOpen() {
   if (!b) { invSetScanFeedback("No box to open — scan a known box first.", "warn"); return; }
 
   invBoxVoidSessionCounts(b.boxId);
-  invBoxOverridePrior = (b.expectedSerials || []).slice();
+  invBoxOverridePrior = boxDeviceList(b).slice();   // device records, for the Done diff
   boxSetSerials(b.boxId, [], {});      // clear contents; sets opened=true
   boxReopen(b.boxId);
   invActiveBox     = boxNormId(b.boxId);
@@ -5919,15 +6163,15 @@ function invBoxUndoLast() {
   if (!target.voidLog) target.voidLog = [];
   target.voidLog.push({ action: "voided", at: invNow(), reason: "undo last box scan" });
 
-  var sk = normKey(target.serial || target.fsan || "");
-  b.expectedSerials = (b.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
+  var sk = normKey(target.serial || target.fsan || target.mac || "");
+  b.expectedDevices = boxDeviceList(b).filter(function(d) { return boxDevKeys(d).indexOf(sk) === -1; });
   b.updatedAt = invNow();
   boxSaveToStorage();
   invSession.updatedAt = invNow();
   scheduleInvAutosave();
   renderInvEventLog();
   invSetScanFeedback("Removed " + label + " from box " + b.boxId + " — " +
-    (b.expectedSerials || []).length + " left.", "warn", "", "box");
+    boxDeviceList(b).length + " left.", "warn", "", "box");
   invBoxRenderBar();
 }
 
@@ -5941,6 +6185,410 @@ function invOpenBoxManager() {
 function invCloseBoxManager() {
   var modal = $("invBoxManagerModal");
   if (modal) modal.classList.add("hidden");
+}
+
+// ===================================================================
+// BOX CAPTURE MODAL — build/edit a box's device contents (registry work)
+// -------------------------------------------------------------------
+// Distinct from counting: this defines what a box contains (its device
+// records), independent of any inventory session — no count events are
+// created. Counting happens later when the built box is scanned during a
+// session (invHandleBoxScan fast-count). Flow: scan box ID → tick which
+// identifier columns to capture per device → scan devices row-by-row; focus
+// walks each row and a fresh row appears at the end → Save & New / Save & Done.
+// ===================================================================
+
+// { boxId, cols:[colKey], devices:[{serial?,cxnk?,mac?,partial?}], isEdit, origKey }
+var boxCapState = null;
+var _boxCapLastCols = ["serial", "fsan"];   // sticky column selection (scan serial → derive FSAN)
+
+function boxCapOpen(existingBoxId) {
+  var modal = $("boxCapModal");
+  if (!modal) return;
+  var b = existingBoxId ? boxGet(existingBoxId) : null;
+  if (b) {
+    // Edit: seed columns from which identifiers the box's devices actually use
+    // (union), falling back to the sticky selection if the box is empty.
+    var devs = boxDeviceList(b).map(function(d) { return boxNormDev(d); });
+    var used = {};
+    devs.forEach(function(d) { BOX_CAPTURE_COLUMNS.forEach(function(c) { if (d[c.key]) used[c.key] = 1; }); });
+    var cols = BOX_CAPTURE_COLUMNS.map(function(c) { return c.key; }).filter(function(k) { return used[k]; });
+    if (!cols.length) cols = _boxCapLastCols.slice();
+    boxCapState = { boxId: b.boxId, cols: cols, devices: devs, isEdit: true, origKey: boxNormId(b.boxId), entryUnverified: false };
+  } else {
+    boxCapState = { boxId: "", cols: _boxCapLastCols.slice(), devices: [], isEdit: false, origKey: "", entryUnverified: false };
+  }
+  modal.classList.remove("hidden");
+  boxCapRenderColumns();
+  boxCapRenderAll();
+  boxCapSetEntryFlag(false);
+  // Focus: box ID first for a fresh box; straight to scanning for an edit.
+  setTimeout(function() {
+    var idInput = $("boxCapBoxId");
+    if (idInput) idInput.value = boxCapState.boxId;
+    if (boxCapState.boxId) boxCapFocusEntry(0);
+    else if (idInput) idInput.focus();
+  }, 60);
+}
+
+function boxCapClose() {
+  var modal = $("boxCapModal");
+  if (modal) modal.classList.add("hidden");
+  boxCapState = null;
+}
+
+// Column picker — checkboxes in the canonical BOX_CAPTURE_COLUMNS order.
+function boxCapRenderColumns() {
+  var wrap = $("boxCapColPicker");
+  if (!wrap || !boxCapState) return;
+  wrap.innerHTML = BOX_CAPTURE_COLUMNS.map(function(c) {
+    var on = boxCapState.cols.indexOf(c.key) !== -1;
+    return '<label class="small" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-weight:600;">' +
+      '<input type="checkbox" ' + (on ? "checked" : "") + ' onchange="boxCapToggleCol(\'' + c.key + '\')" /> ' +
+      escapeHtml(c.label) + '</label>';
+  }).join("");
+}
+function boxCapToggleCol(key) {
+  if (!boxCapState) return;
+  var i = boxCapState.cols.indexOf(key);
+  if (i === -1) boxCapState.cols.push(key); else boxCapState.cols.splice(i, 1);
+  // Keep canonical column order regardless of tick order.
+  boxCapState.cols = BOX_CAPTURE_COLUMNS.map(function(c) { return c.key; })
+    .filter(function(k) { return boxCapState.cols.indexOf(k) !== -1; });
+  if (boxCapState.cols.length) _boxCapLastCols = boxCapState.cols.slice();
+  boxCapRenderAll();
+  if (boxCapState.boxId) boxCapFocusEntry(0);
+}
+
+// Box ID scanned/typed → lock it in and drop into device scanning.
+function boxCapSetBoxId(input) {
+  if (!boxCapState) return;
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (!v) { if (input) input.focus(); return; }
+  // Guard a duplicate ID only when creating a new box (editing keeps its own ID).
+  if (!boxCapState.isEdit) {
+    var clash = boxGet(v);
+    if (clash) {
+      if (!confirm('Box "' + v + '" already exists with ' + boxDeviceList(clash).length +
+          ' device(s). Open it for editing instead?')) { input.value = boxCapState.boxId; return; }
+      boxCapClose();
+      boxCapOpen(v);
+      return;
+    }
+  }
+  boxCapState.boxId = normalize(v);
+  if (input) input.value = boxCapState.boxId;
+  boxCapRenderAll();
+  boxCapFocusEntry(0);
+}
+
+// Render everything that depends on state (header, committed rows, entry row,
+// footer enablement) EXCEPT the live entry inputs' values.
+function boxCapRenderAll() {
+  if (!boxCapState) return;
+  var hasBox = !!boxCapState.boxId;
+  var hasCols = boxCapState.cols.length > 0;
+  var title = $("boxCapTitle"), sub = $("boxCapSubtitle");
+  if (title) title.textContent = boxCapState.isEdit ? ("Edit Box " + boxCapState.boxId) : (hasBox ? ("Box " + boxCapState.boxId) : "New Box");
+  if (sub) sub.textContent = !hasCols ? "Tick at least one column to capture." :
+    !hasBox ? "Scan the box / carton ID to begin." :
+    "Scan each device. A new row appears automatically.";
+
+  var wrap = $("boxCapGridWrap");
+  if (wrap) {
+    var active = hasBox && hasCols;
+    wrap.style.opacity = active ? "1" : "0.5";
+    wrap.style.pointerEvents = active ? "auto" : "none";
+  }
+  var cnt = $("boxCapCount"); if (cnt) cnt.textContent = String(boxCapState.devices.length);
+
+  // Column headers (+ a trailing slot for the row delete button).
+  var hdr = $("boxCapHeader");
+  if (hdr) {
+    hdr.innerHTML = boxCapState.cols.map(function(k) {
+      return '<div style="flex:1;min-width:160px;">' + escapeHtml(boxColLabel(k)) + '</div>';
+    }).join("") + '<div style="width:96px;"></div>';
+  }
+  boxCapRenderRows();
+  boxCapRenderEntry();
+
+  var canSave = hasBox && hasCols && boxCapState.devices.length > 0;
+  var nb = $("boxCapSaveNewBtn"); if (nb) nb.disabled = !canSave;
+  var db = $("boxCapSaveDoneBtn"); if (db) db.disabled = !canSave;
+}
+
+// Committed device rows. Read-only chips + row actions (edit, delete). A row flagged
+// `unverified` (a manually-placed unknown scan) is tinted amber with a "NEW" pill so
+// the review set is visible at a glance; editing pulls it back into the entry row.
+function boxCapRenderRows() {
+  var rows = $("boxCapRows");
+  if (!rows || !boxCapState) return;
+  if (!boxCapState.devices.length) {
+    rows.innerHTML = '<div class="small" style="color:#94a3b8;padding:8px 4px;">No devices yet.</div>';
+    return;
+  }
+  rows.innerHTML = boxCapState.devices.map(function(d, idx) {
+    var cells = boxCapState.cols.map(function(k) {
+      var val = d[k] || "";
+      var missing = !val;
+      return '<div style="flex:1;min-width:160px;font-family:monospace;font-size:13px;' +
+        (missing ? "color:#d97706;" : "") + '">' + (val ? escapeHtml(val) : "—") + '</div>';
+    }).join("");
+    var isNew = !!d.unverified;
+    return '<div style="display:flex;gap:8px;align-items:center;padding:5px 4px;border-bottom:1px solid #f1f5f9;' +
+        (isNew ? "background:#fffbeb;" : "") + '">' +
+      cells +
+      '<div style="width:96px;text-align:right;white-space:nowrap;">' +
+        (isNew ? '<span title="New device — verify the association" style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-right:4px;">NEW</span>' : '') +
+        (d._auto ? '<span title="Filled from the catalog" style="color:#0369a1;margin-right:4px;">⟲</span>' : '') +
+        (d.partial ? '<span title="Partial — a required field was skipped" style="color:#d97706;margin-right:4px;">⚠</span>' : '') +
+        '<button class="secondary" title="Edit" style="padding:0 7px;font-size:12px;line-height:1.5;margin-right:4px;" onclick="boxCapEditRow(' + idx + ')">✎</button>' +
+        '<button class="danger" title="Remove" style="padding:0 7px;font-size:12px;line-height:1.5;" onclick="boxCapDeleteRow(' + idx + ')">✕</button>' +
+      '</div>' +
+    '</div>';
+  }).join("");
+  rows.scrollTop = rows.scrollHeight;
+}
+
+// The live entry row: one focusable input per selected column, plus a ✓ that
+// commits the current row on demand ("Save as new / partial").
+function boxCapRenderEntry() {
+  var row = $("boxCapEntryRow");
+  if (!row || !boxCapState) return;
+  row.innerHTML = boxCapState.cols.map(function(k, ci) {
+    var col = null;
+    for (var i = 0; i < BOX_CAPTURE_COLUMNS.length; i++) if (BOX_CAPTURE_COLUMNS[i].key === k) col = BOX_CAPTURE_COLUMNS[i];
+    return '<input class="boxcap-cell" data-ci="' + ci + '" autocomplete="off" placeholder="' +
+      escapeHtml(col ? col.placeholder : k) + '" ' +
+      'style="flex:1;min-width:160px;font-family:monospace;padding:6px 9px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;" ' +
+      'onkeydown="boxCapCellKey(event,' + ci + ')" />';
+  }).join("") +
+  '<div style="width:96px;text-align:right;"><button class="secondary" title="Save this device now (partial allowed)" style="padding:2px 9px;font-size:13px;" onclick="boxCapSaveRow()">✓</button></div>';
+}
+
+// Pull a committed row back into the entry line for correction (removes it from the
+// list; re-committing re-learns if it's still an unknown association).
+function boxCapEditRow(idx) {
+  if (!boxCapState) return;
+  var d = boxCapState.devices[idx];
+  if (!d) return;
+  boxCapState.devices.splice(idx, 1);
+  boxCapState.entryUnverified = !!d.unverified;
+  boxCapRenderAll();
+  boxCapSetEntryFlag(!!d.unverified);
+  var row = $("boxCapEntryRow");
+  var inputs = row ? row.querySelectorAll(".boxcap-cell") : [];
+  boxCapState.cols.forEach(function(k, i) { if (inputs[i]) inputs[i].value = d[k] || ""; });
+  var next = boxCapNextEmpty(inputs);
+  boxCapFocusEntry(next === -1 ? 0 : next);
+}
+
+function boxCapFocusEntry(ci) {
+  var row = $("boxCapEntryRow");
+  if (!row) return;
+  var inputs = row.querySelectorAll(".boxcap-cell");
+  if (inputs[ci]) inputs[ci].focus();
+}
+
+// Index of the first ticked column whose input is still empty; -1 if the row is
+// full. Drives "advance to the next EMPTY field" so a relocated scan doesn't land
+// back on a cell that's already filled.
+function boxCapNextEmpty(inputs) {
+  for (var i = 0; i < inputs.length; i++) {
+    if (!sanitizeScannerValue(inputs[i] ? inputs[i].value : "", { uppercase: true })) return i;
+  }
+  return -1;
+}
+
+// Toggle the "this entry is an unknown device — verify it" look: amber entry row
+// + a visible "NEW — verify" badge. Paired with the distinct verify tone.
+function boxCapSetEntryFlag(on) {
+  var row = $("boxCapEntryRow");
+  if (row) {
+    row.style.background = on ? "#fffbeb" : "";
+    row.style.borderTop  = on ? "2px solid #f59e0b" : "2px solid #e5e7eb";
+  }
+  var badge = $("boxCapEntryBadge");
+  if (badge) badge.style.display = on ? "inline-flex" : "none";
+}
+
+// Core scan handler (Enter = scanner terminator). Three branches:
+//  1) RESOLVED (fast path): the scanned value matches a known unit → the CATALOG
+//     RECORD is authoritative, so drop each resolved identifier into ITS OWN column
+//     (overwriting whatever landed there — the scanner dumps into whatever has
+//     focus), commit, and stay on this column so a batch flows.
+//  2) UNKNOWN (new device): the scan resolves to nothing → classify by pattern,
+//     RELOCATE it into the correct column even if the cursor was elsewhere, flag the
+//     whole entry for verification (amber + badge + distinct tone), and DO NOT
+//     auto-commit — walk focus to the next empty ticked field so the human completes
+//     the association in place. Commits only when the row is full (or via the ✓).
+//  3) EMPTY Enter: manual skip → advance, or commit at the last field (partial).
+function boxCapCellKey(ev, ci) {
+  if (ev.key !== "Enter") return;
+  ev.preventDefault();
+  if (!boxCapState) return;
+  var row = $("boxCapEntryRow");
+  var inputs = row ? row.querySelectorAll(".boxcap-cell") : [];
+  var scanned = inputs[ci] ? sanitizeScannerValue(inputs[ci].value, { uppercase: true }) : "";
+
+  if (scanned) {
+    // (1) Resolved.
+    var ids = boxResolveIdentifiers(scanned);
+    if (ids) {
+      boxCapState.cols.forEach(function(k, i) {
+        if (ids[k] && inputs[i]) inputs[i].value = ids[k];
+      });
+      boxCapCommitEntry(inputs, ci, true);
+      return;
+    }
+
+    // (2) Unknown → classify, relocate, flag, keep the row open.
+    var target = boxCapClassify(scanned);
+    var ti = boxCapState.cols.indexOf(target);
+    if (ti !== -1 && ti !== ci) {              // relocate to the classified column
+      inputs[ti].value = scanned;
+      if (inputs[ci]) inputs[ci].value = "";
+    } else if (ti === -1 && inputs[ci]) {      // classified column not ticked → leave in place
+      inputs[ci].value = scanned;
+    }
+    // Alert loudly only on the FIRST unknown scan of this entry — subsequent fields
+    // of the same new device place quietly (amber/badge already up), no re-alarm.
+    var firstFlag = !boxCapState.entryUnverified;
+    boxCapState.entryUnverified = true;
+    boxCapSetEntryFlag(true);
+    if (firstFlag && typeof invSetScanFeedback === "function") {
+      invSetScanFeedback("NEW — verify: " + scanned + " → " + boxColLabel(target) +
+        ". Complete the association, then Save.", "verify", "", "box");
+    }
+    var next = boxCapNextEmpty(inputs);
+    if (next !== -1) { boxCapFocusEntry(next); return; }
+    boxCapCommitEntry(inputs, (ti !== -1 ? ti : ci), false);   // row full → commit as new
+    return;
+  }
+
+  // (3) Empty Enter.
+  if (ci < boxCapState.cols.length - 1) { boxCapFocusEntry(ci + 1); return; }
+  boxCapCommitEntry(inputs, ci, false);
+}
+
+// Commit the current entry row on demand (the ✓ button) — "Save as new / partial".
+// Honors whatever's there: a flagged unknown becomes an unverified+learned device,
+// blanks make it partial.
+function boxCapSaveRow() {
+  var row = $("boxCapEntryRow");
+  var inputs = row ? row.querySelectorAll(".boxcap-cell") : [];
+  boxCapCommitEntry(inputs, 0, false);
+}
+
+// Read the entry inputs into a device, commit it, clear the row, refresh, and
+// return focus to `focusCol`. `resolved` tags the row as catalog-filled (display
+// only — stripped on persist by boxNormDev).
+function boxCapCommitEntry(inputs, focusCol, resolved) {
+  var dev = {}, any = false, partial = false;
+  boxCapState.cols.forEach(function(k, i) {
+    var raw = inputs[i] ? sanitizeScannerValue(inputs[i].value, { uppercase: true }) : "";
+    if (raw) { dev[k] = normalize(raw); any = true; } else { partial = true; }
+  });
+  if (!any) {   // whole row blank — clear any stale flag and bail
+    boxCapState.entryUnverified = false; boxCapSetEntryFlag(false);
+    boxCapFocusEntry(focusCol || 0); return;
+  }
+  if (partial) dev.partial = true;
+  // A resolved scan is catalog-confirmed and never "unverified" even if the entry
+  // was mid-flag; otherwise a flagged entry commits as an unknown to be reviewed.
+  var unverified = !resolved && !!boxCapState.entryUnverified;
+  if (unverified) dev.unverified = true;
+  boxCapCommitDevice(dev, resolved);
+  // Write a completed new association back to history so it resolves globally.
+  var learned = unverified && boxCapLearnAssociation(dev);
+  // Reset the entry-flag state for the next device.
+  boxCapState.entryUnverified = false;
+  boxCapSetEntryFlag(false);
+  for (var j = 0; j < inputs.length; j++) inputs[j].value = "";
+  boxCapRenderRows();
+  var cnt = $("boxCapCount"); if (cnt) cnt.textContent = String(boxCapState.devices.length);
+  var canSave = boxCapState.devices.length > 0;
+  var nb = $("boxCapSaveNewBtn"); if (nb) nb.disabled = !canSave;
+  var db = $("boxCapSaveDoneBtn"); if (db) db.disabled = !canSave;
+  if (typeof invSetScanFeedback === "function") {
+    if (unverified) {
+      invSetScanFeedback("Saved NEW " + boxDevLabel(boxNormDev(dev)) +
+        (learned ? " — learned for next time" : "") + (partial ? "  ⚠ partial" : "") +
+        " · needs review", "verify", "", "box");
+    } else {
+      invSetScanFeedback((resolved ? "Resolved " : "Recorded ") + boxDevLabel(boxNormDev(dev)) +
+        (partial ? "  ⚠ partial" : ""), resolved || !partial ? "ok" : "warn", "", "box");
+    }
+  }
+  boxCapFocusEntry(focusCol || 0);
+}
+
+// Add a device to the in-modal list, merging into an existing row if it shares
+// any identifier (a re-scan/resolve that adds identifiers fills the blanks).
+function boxCapCommitDevice(dev, resolved) {
+  var keys = boxDevKeys(dev);
+  var existing = null;
+  boxCapState.devices.some(function(d) {
+    if (boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; })) { existing = d; return true; }
+    return false;
+  });
+  if (existing) {
+    boxMergeDev(existing, dev);
+    if (resolved) { existing._auto = true; delete existing.unverified; }  // catalog-confirmed clears review flag
+    else if (dev.unverified) existing.unverified = true;
+  } else {
+    if (resolved) dev._auto = true;
+    boxCapState.devices.push(dev);
+  }
+}
+
+function boxCapDeleteRow(idx) {
+  if (!boxCapState) return;
+  boxCapState.devices.splice(idx, 1);
+  boxCapRenderAll();
+  boxCapFocusEntry(0);
+}
+
+// Persist the modal's device list to the registry and finalize the box so it's
+// fast-countable when scanned during a session. Registry-only — no count events.
+function boxCapPersist() {
+  if (!boxCapState || !boxCapState.boxId) return null;
+  // markOpened=false: building/editing a definition isn't an "opened box" audit event.
+  boxSetDevices(boxCapState.boxId, boxCapState.devices, { source: "scanned" }, false);
+  boxFinalize(boxCapState.boxId);
+  // If this modal session learned any new associations, push history to GitHub ONCE
+  // here (the natural "done with this box" boundary) rather than per device.
+  if (_boxCapLearnedPending) {
+    _boxCapLearnedPending = false;
+    if (typeof ghConfigured === "function" && ghConfigured() && typeof ghPushToGitHub === "function") {
+      ghPushToGitHub({ auto: true });
+    }
+  }
+  if (typeof invBoxRenderBar === "function") invBoxRenderBar();
+  if (typeof invRenderBoxManager === "function") invRenderBoxManager();
+  return boxGet(boxCapState.boxId);
+}
+
+function boxCapSaveNew() {
+  var b = boxCapPersist();
+  if (!b) return;
+  if (typeof invSetScanFeedback === "function")
+    invSetScanFeedback("Box " + b.boxId + " saved: " + boxDeviceList(b).length + " device(s).", "ok", "", "box");
+  // Fresh box, same column config (sticky).
+  boxCapState = { boxId: "", cols: _boxCapLastCols.slice(), devices: [], isEdit: false, origKey: "", entryUnverified: false };
+  boxCapSetEntryFlag(false);
+  boxCapRenderColumns();
+  boxCapRenderAll();
+  var idInput = $("boxCapBoxId");
+  if (idInput) { idInput.value = ""; setTimeout(function() { idInput.focus(); }, 40); }
+}
+
+function boxCapSaveDone() {
+  var b = boxCapPersist();
+  if (!b) return;
+  if (typeof invSetScanFeedback === "function")
+    invSetScanFeedback("Box " + b.boxId + " saved: " + boxDeviceList(b).length + " device(s).", "ok", "", "box");
+  boxCapClose();
 }
 
 // ===================================================================
@@ -6002,14 +6650,14 @@ function invRenderOpenBoxGate() {
   if (!boxes.length) { invCloseOpenBoxGate(); return; }
   list.innerHTML = boxes.map(function(b) {
     var bjs = chkJsStr(b.boxId);
-    var serials = (b.expectedSerials || []);
-    var n = serials.length;
-    // Serials are listed expanded (not behind a tap) so the user can verify
+    var devices = boxDeviceList(b);
+    var n = devices.length;
+    // Devices are listed expanded (not behind a tap) so the user can verify
     // completeness against the physical box before choosing "Close as-is".
     var rows = n
-      ? serials.map(function(s) {
+      ? devices.map(function(d) {
           return '<span style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;' +
-            'padding:2px 8px;font-family:monospace;font-size:12px;">S/N ' + escapeHtml(s) + '</span>';
+            'padding:2px 8px;font-family:monospace;font-size:12px;">' + escapeHtml(boxDevLabel(d)) + '</span>';
         }).join(" ")
       : '<span style="color:#94a3b8;">No devices captured.</span>';
     return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:12px;">' +
@@ -6049,7 +6697,7 @@ function invGateCloseBox(boxId) {
   var b = boxGet(boxId);
   if (!b) { invRenderOpenBoxGate(); return; }
   boxFinalize(b.boxId);
-  var n = (b.expectedSerials || []).length;
+  var n = boxDeviceList(b).length;
   invSetScanFeedback("Box " + b.boxId + " closed: " + n + " device(s) recorded.", "ok", "", "box");
   if (invFindOrphanedCapturingBoxes().length) invRenderOpenBoxGate();
   else invCloseOpenBoxGate();
@@ -6087,7 +6735,7 @@ function invRenderBoxManager() {
   }
   list.innerHTML = boxes.map(function(b) {
     var key   = boxNormId(b.boxId);
-    var n     = (b.expectedSerials || []).length;
+    var n     = boxDeviceList(b).length;
     var qtyTxt= b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
     var statusPill = b.status === "ready" ? "ok" : "block";
     var expanded = !!_invBoxMgrExpanded[key];
@@ -6095,11 +6743,12 @@ function invRenderBoxManager() {
     var editor = "";
     if (expanded) {
       var deviceRows = n
-        ? (b.expectedSerials || []).map(function(s) {
+        ? boxDeviceList(b).map(function(d) {
+            var pk = boxDevPrimary(d);
             return '<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:2px 4px 2px 8px;font-family:monospace;font-size:12px;">' +
-              escapeHtml(s) +
+              escapeHtml(boxDevLabel(d)) + (d.partial ? ' <span title="Partial capture" style="color:#d97706;">⚠</span>' : '') +
               '<button class="danger" title="Remove this device" style="padding:0 6px;font-size:12px;line-height:1.4;" ' +
-                'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(s) + '\')">✕</button></span>';
+                'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(pk) + '\')">✕</button></span>';
           }).join(" ")
         : '<span style="color:#94a3b8">No devices in this box.</span>';
       editor =
@@ -6109,6 +6758,7 @@ function invRenderBoxManager() {
             '<input class="box-rename-input" value="' + escapeHtml(b.boxId) + '" ' +
               'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;" autocomplete="off" />' +
             '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxRename(\'' + bjs + '\', this)">Rename</button>' +
+            '<button style="padding:4px 10px;font-size:12px;margin-left:auto;" onclick="boxCapOpen(\'' + bjs + '\')">Edit contents ▸</button>' +
           '</div>' +
           '<div class="small" style="font-weight:700;margin-bottom:4px;">Devices (' + n + ')</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">' + deviceRows + '</div>' +
@@ -6140,7 +6790,7 @@ function invRenderBoxManager() {
 function invBoxManagerDelete(boxId) {
   var b = boxGet(boxId);
   if (!b) return;
-  var n = (b.expectedSerials || []).length;
+  var n = boxDeviceList(b).length;
   if (!confirm('Delete box "' + b.boxId + '"?\n\n' +
       "This removes the box from the registry" +
       (invSession ? " and voids its counts in the current session" : "") +
@@ -6201,7 +6851,7 @@ function invBoxRemoveSerial(boxId, serial) {
   if (!b) return;
   if (!confirm("Remove " + serial + " from box " + b.boxId + "?")) return;
   var sk = normKey(serial);
-  b.expectedSerials = (b.expectedSerials || []).filter(function(s) { return normKey(s) !== sk; });
+  b.expectedDevices = boxDeviceList(b).filter(function(d) { return boxDevKeys(d).indexOf(sk) === -1; });
   b.updatedAt = invNow();
   b.updatedBy = boxWho();
   boxSaveToStorage();
@@ -6211,7 +6861,8 @@ function invBoxRemoveSerial(boxId, serial) {
       if (e.status === "voided") return;
       if (e.eventType !== "serialized_device_scan") return;
       if (normKey(e.boxId || "") !== bk) return;
-      if (normKey(e.serial || "") === sk || normKey(e.fsan || "") === sk) {
+      if (normKey(e.serial || "") === sk || normKey(e.fsan || "") === sk ||
+          normKey(e.mac || "") === sk) {
         e.status = "voided";
         if (!e.voidLog) e.voidLog = [];
         e.voidLog.push({ action: "voided", at: invNow(), reason: "removed from box via manager" });
@@ -6294,7 +6945,7 @@ function invBoxRenderBar() {
   var b = invActiveBox ? boxGet(invActiveBox) : null;
   if (b) {
     bar.classList.remove("hidden");
-    var n = (b.expectedSerials || []).length;
+    var n = boxDeviceList(b).length;
     var qtyTxt = b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
     if (label) label.textContent = (invBoxIsOverride ? "Re-counting box " : "Capturing box ") + b.boxId + " — " + qtyTxt + " device(s)";
     if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = b.expectedQty || "";
@@ -9182,7 +9833,7 @@ function timLoadMasterCache() {
     if (Array.isArray(parsed.inventory_events))   { appData.inventory_events = parsed.inventory_events; if (parsed.inventory_events.length) hadData = true; }
     if (Array.isArray(parsed.recount_sessions))   appData.recount_sessions  = parsed.recount_sessions;
     if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
-    if (parsed.boxes && typeof parsed.boxes === "object") appData.boxes = parsed.boxes;
+    if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); }
     if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
     if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
       Object.assign(BARCODE_MAP, parsed.barcode_map);
@@ -12013,6 +12664,7 @@ try {
   if (_savedTab && ["receiving","inventory","products","mapping","barcodes"].includes(_savedTab)) {
     switchTab(_savedTab);
   }
+  ghRenderTestingBanner();   // reflect persisted testing-mode state on load
 } catch(e) {}
 
 // Boot: show the loading overlay with a step checklist, restore the cached

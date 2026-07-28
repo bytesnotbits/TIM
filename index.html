@@ -203,6 +203,10 @@
     <div class="app-header">
       <h1 class="app-title">TIM <span class="app-version">v1.30.10</span></h1>
     </div>
+    <div id="timTestingBanner" class="tim-testing-banner hidden" role="status" aria-live="polite">
+      <span>🧪 TESTING MODE — GitHub push is disabled. Changes save locally only and will <b>not</b> sync to the shared repo.</span>
+      <button type="button" class="tim-testing-banner-off" onclick="ghToggleTestingMode()">Turn off</button>
+    </div>
     <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
 
   <!-- ── Data Import view ── -->
@@ -260,6 +264,7 @@
           <button class="secondary" style="margin:0;" onclick="ghOpenConfig()">&#9881; Configure</button>
           <button id="ghSyncNowBtn" class="secondary" style="margin:0;" onclick="ghSyncNow()">&#8635; Sync Now</button>
           <button id="ghPushBtn" class="secondary" style="margin:0;" onclick="ghPushToGitHub()" title="Commit this device's current data to the repo (requires a token with Contents: Read and write)">&#8593; Push to GitHub</button>
+          <button id="ghTestingToggleBtn" class="secondary" style="margin:0;" onclick="ghToggleTestingMode()" title="Work with live data but suppress ALL pushes to GitHub while testing new features. Local saves still happen; nothing syncs to the shared repo until you turn it off.">&#129514; Testing mode: Off</button>
           <button class="secondary" style="margin:0;" onclick="ghDownloadSeedFiles()" title="Download the current local data as split JSON files to commit into the repo's data/ folder">&#8595; Download Seed Files</button>
         </div>
       </div>
@@ -1450,10 +1455,61 @@
           <h2 style="margin:0;">Boxes / Cartons</h2>
           <div class="small" id="invBoxManagerSummary"></div>
         </div>
-        <button class="secondary" onclick="invCloseBoxManager()">Close</button>
+        <div style="display:flex;gap:8px;">
+          <button onclick="boxCapOpen()">＋ New Box</button>
+          <button class="secondary" onclick="invCloseBoxManager()">Close</button>
+        </div>
       </div>
       <div class="modal-body">
         <div id="invBoxManagerList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Box capture modal: build/edit a box's device contents (registry work,
+       independent of counting). Scan the box ID, tick which identifier columns
+       to capture per device, then scan devices row by row. -->
+  <div id="boxCapModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:860px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;" id="boxCapTitle">New Box</h2>
+          <div class="small" id="boxCapSubtitle">Scan the box / carton ID to begin.</div>
+        </div>
+        <button class="secondary" onclick="boxCapClose()">Cancel</button>
+      </div>
+      <div class="modal-body">
+        <!-- Box ID + column picker -->
+        <div id="boxCapSetup" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;margin-bottom:14px;">
+          <div>
+            <label class="small" style="font-weight:700;display:block;margin-bottom:4px;">Box / Carton ID</label>
+            <input id="boxCapBoxId" autocomplete="off" placeholder="Scan box ID"
+              style="font-family:monospace;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;min-width:240px;font-size:15px;"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();boxCapSetBoxId(this);}" />
+          </div>
+          <div>
+            <label class="small" style="font-weight:700;display:block;margin-bottom:4px;">Capture per device</label>
+            <div id="boxCapColPicker" style="display:flex;gap:14px;flex-wrap:wrap;padding:6px 0;"></div>
+          </div>
+        </div>
+        <!-- Device grid -->
+        <div id="boxCapGridWrap" style="opacity:0.5;pointer-events:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div class="small" style="font-weight:700;">
+              Devices (<span id="boxCapCount">0</span>)
+              <span id="boxCapEntryBadge" style="display:none;align-items:center;gap:4px;background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:9px;margin-left:8px;">⚑ NEW — verify</span>
+            </div>
+            <div class="small" style="color:#94a3b8;">Scan a value, it auto-advances. Enter on a blank field skips it (device flagged partial).</div>
+          </div>
+          <div id="boxCapHeader" style="display:flex;gap:8px;font-weight:700;font-size:12px;color:#64748b;padding:0 4px 4px;"></div>
+          <div id="boxCapRows" style="max-height:340px;overflow:auto;"></div>
+          <div id="boxCapEntryRow" style="display:flex;gap:8px;align-items:center;padding:6px 4px;border-top:2px solid #e5e7eb;margin-top:4px;"></div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #e5e7eb;">
+        <button class="secondary" onclick="boxCapClose()">Cancel</button>
+        <button id="boxCapSaveNewBtn" onclick="boxCapSaveNew()" disabled>Save &amp; New</button>
+        <button id="boxCapSaveDoneBtn" onclick="boxCapSaveDone()" disabled>Save &amp; Done</button>
       </div>
     </div>
   </div>

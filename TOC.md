@@ -210,6 +210,8 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghConfig` / `ghToken` | In-memory settings `{ owner, repo, branch, autoLoad, deviceLabel }` + PAT |
 | `ghConfigured()` | True when token + owner + repo are set |
 | `ghSetStatus(msg, state)` | Update sync status line on the Data Import card |
+| `ghTestingMode()` / `ghSetTestingMode(on)` / `ghToggleTestingMode()` | **Testing mode** (v2.32.03): work against live data but suppress ALL GitHub pushes. Persisted in `localStorage` `tim_testing_mode`. Single guard at the top of `ghPushToGitHub` short-circuits every push (auto + manual); reads/ingest unaffected |
+| `ghRenderTestingBanner()` | Reflect testing-mode state → header banner (`#timTestingBanner`) + toggle button (`#ghTestingToggleBtn`); called on load and every toggle so the loud amber banner can't drift from the flag |
 | `ghMarkPendingPush()` / `ghClearPendingPush()` | Set/clear the deferred-push flag (local has/has-not changes not yet on GitHub) |
 | `ghBindOnlineRetry()` | Bind a one-time `online` listener that flushes a pending push on reconnect |
 | `ghHeaders(accept)` | Build auth headers for the GitHub API |
@@ -411,18 +413,42 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ### Box Registry — carton/container → device associations (`appData.boxes`)
 
-Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the device serials inside, so one scan of a sealed box counts all its devices. Built by scanning the carton serial manifest; overridden on open. Persisted under `BOX_STORAGE_KEY` (`tim_boxes_v1`) + included in master-JSON export/import. GitHub sync deferred. See Data Dictionary for the `BoxEntry` shape.
+Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the **devices** inside, so one scan of a sealed box counts all its devices. As of v2.32.00 a box's contents are `expectedDevices: [{serial?,fsan?,mac?,partial?}]` (was a flat `expectedSerials: string[]`), fields mirroring TIM's history identifiers (`serial` = true Calix serial on the box label; `fsan` = the CXNK/FSAN NISC records as the "serial number"; v2.32.01 renamed the field `cxnk`→`fsan`). A device's identity is any of its identifiers. Built by scanning the carton manifest (or the capture modal); overridden on open. Persisted under `BOX_STORAGE_KEY` (`tim_boxes_v1`) + included in master-JSON export/import. GitHub sync deferred. See Data Dictionary for the `BoxEntry` shape.
 
 | Function | Purpose |
 |----------|---------|
 | `boxGet(boxId)` / `boxAll()` | Look up one box (normalized key) / list all boxes |
-| `boxFindBySerial(serial)` | Find which box currently lists a serial (move detection) |
+| `boxMigrateDevices()` | One-time on-load upgrade: legacy `expectedSerials` → `expectedDevices:[{serial}]`; drops old field. Also called after master-JSON import |
+| `boxDeviceList(b)` | A box's `expectedDevices` (migrates on read). All contents reads go through this |
+| `boxDevPrimary(dev)` / `boxDevKey(dev)` | Primary identifier (serial→fsan→mac) / its normKey — the device's identity |
+| `boxDevKeys(dev)` | All non-empty identifiers normalized (cross-field matching) |
+| `boxDevLabel(dev)` | Human label showing every captured id ("S/N … · FSAN … · MAC …") |
+| `boxResolveIdentifiers(value)` | Resolve a scanned id (serial/FSAN/MAC) → `{serial,fsan,mac}` of known siblings via `invBoxResolveDevice`, or null. Powers the modal's auto-fill |
+| `boxCapClassify(value)` | PATTERN-ONLY classify an unresolved scan → column key `serial\|fsan\|mac` (CXNK→fsan, formatted MAC→mac, else serial). Drives the unknown-device flow (v2.32.02) |
+| `boxCapLearnAssociation(dev)` | WRITE-BACK: a completed unknown association → `history.records` so it resolves globally next time. Fills an existing record's blank ids or creates a minimal `source_type:"box_learned"`, `status:"history_only"` row (resolves, never imports). ≥2 ids required (v2.32.02) |
+| `boxNormDev(dev)` / `boxMergeDev(target,src)` | Normalize a raw device to stored form / fill target's blank ids from src |
+| `boxFindByIdentifier(value)` | Find which box contains a device with this identifier (any field); move detection. `boxFindBySerial` is a back-compat alias |
 | `boxUpsert(boxId, fields)` | Create/merge a box record; stamps audit fields; never overwrites with empty |
-| `boxAddSerial(boxId, serial, fields)` | Add serial to box (dedup), moving it from a prior box if needed |
-| `boxSetSerials(boxId, serials, fields)` | Replace contents (open-box override); returns `{missing, extra}` diff; sets `sealed=false` |
+| `boxAddDevice(boxId, dev, fields)` | Add/merge a device (dedup+move by shared identifier). `boxAddSerial(boxId,serial,fields)` is a back-compat wrapper |
+| `boxSetDevices(boxId, devices, fields, markOpened)` | Replace contents; returns `{missing,extra}` diff by primary id; `markOpened` (default true) sets `opened`. `boxSetSerials` is a back-compat wrapper |
 | `boxFinalize(boxId)` / `boxReopen(boxId)` | Capture lifecycle: set `status` `ready` (fast-countable) / `capturing` (re-scan resumes) |
 | `boxDelete(boxId)` | Remove a box record |
 | `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB |
+
+**Capture modal (v2.32.00; symmetric resolution v2.32.01; unknown-device flow v2.32.02)** — build/edit a box's device contents as **registry work, independent of any inventory session (creates no count events)**; counting still happens when the built box is scanned during a session. Flow: scan box ID → tick which columns to record per device (`BOX_CAPTURE_COLUMNS` = serial/fsan/mac; sticky in `_boxCapLastCols`, default serial+fsan) → scan devices. **Symmetric resolution:** scanning ANY identifier into any column resolves the unit and auto-fills the other ticked columns from history, commits the row, and keeps focus on the same column (batch of serials → derive FSANs, and vice-versa). **Unknown-device flow (v2.32.02):** a scan that resolves to nothing is pattern-classified (`boxCapClassify`), RELOCATED into the correct column even if the cursor was elsewhere, and flags the whole entry for verification — amber row + "NEW — verify" badge + a distinct `verify` tone — then keeps the row open (focus walks to the next empty ticked field) instead of auto-committing. Completing the association commits it as `unverified` (amber "NEW" pill on the committed row) AND writes it back to history (`boxCapLearnAssociation`) so it resolves globally next time. A blank required field flags the device `partial`. Auto-filled rows marked ⟲. Opened from Box manager ("＋ New Box" / per-box "Edit contents ▸"). Global `boxCapState` (+ `entryUnverified`).
+
+| Function | Purpose |
+|----------|---------|
+| `boxCapOpen(existingBoxId?)` / `boxCapClose()` | Open fresh or for edit (seeds columns from used identifiers) / close |
+| `boxCapRenderColumns()` / `boxCapToggleCol(key)` | Column checkboxes (canonical order) / toggle + persist sticky selection |
+| `boxCapSetBoxId(input)` | Lock in the scanned box ID (guards duplicate → offers edit) and drop into scanning |
+| `boxCapRenderAll()` / `boxCapRenderRows()` / `boxCapRenderEntry()` | Redraw header/committed rows/footer / committed device chips (⟲ = catalog-filled, amber "NEW" = unverified; ✎ edit / ✕ delete) / the live entry inputs + ✓ save button |
+| `boxCapCellKey(ev,ci)` | Enter handler: (1) resolve-and-commit fast path, (2) unknown → classify+relocate+flag+keep-open, (3) empty Enter → advance/commit |
+| `boxCapNextEmpty(inputs)` / `boxCapSetEntryFlag(on)` | First empty ticked field index (-1 if full) / toggle the amber "NEW — verify" entry look |
+| `boxCapSaveRow()` / `boxCapEditRow(idx)` | Commit the current entry on demand ("Save as new / partial") / pull a committed row back into the entry line for correction |
+| `boxCapCommitEntry(inputs,focusCol,resolved)` / `boxCapFocusEntry(ci)` | Read entry inputs → set `unverified` + learn if flagged → commit → clear → refresh → focus / focus a cell |
+| `boxCapCommitDevice(dev,resolved)` / `boxCapDeleteRow(idx)` | Add/merge a device into the in-modal list (tags `_auto` if resolved, clears `unverified`; else propagates it) / remove a committed row |
+| `boxCapPersist()` / `boxCapSaveNew()` / `boxCapSaveDone()` | Write devices to registry + finalize (no count events; pushes history to GitHub once if associations were learned) / save then fresh box (sticky cols) / save then close |
 
 **Box scan mode (Phase 2)** — a 5th scan mode (`invScanMode === "box"`, mode barcode `##MBOX`). Capture a carton by scanning its ID then its device serials (relies on shipment being imported first, so a scan that doesn't resolve to a known device = a carton ID). Globals: `invActiveBox`, `invLastScannedBox`, `invBoxIsOverride`, `invBoxOverridePrior`.
 

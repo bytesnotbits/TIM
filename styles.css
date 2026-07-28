@@ -357,6 +357,13 @@ th { background: #f1f5f9; position: sticky; top: 0; z-index: 1; }
    display rules (e.g. .inv-key-focus-row{display:grid}); this is why the
    per-component .X.hidden patches elsewhere are no longer strictly needed. */
 .hidden { display: none !important; }
+/* Testing mode: loud, impossible-to-miss banner while GitHub push is suppressed. */
+.tim-testing-banner { display: flex; align-items: center; justify-content: center; gap: 14px;
+  background: #f59e0b; color: #1c1917; font-weight: 700; font-size: 13px;
+  padding: 8px 16px; border: 2px solid #b45309; border-radius: 8px; margin: 8px 0 4px; }
+.tim-testing-banner-off { background: #1c1917; color: #fff; border: none; border-radius: 6px;
+  padding: 4px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.tim-testing-banner-off:hover { background: #44403c; }
 .scroll { max-height: 460px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
 textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12px; }
 
@@ -445,6 +452,7 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-scan-feedback.warn  { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
 .inv-scan-feedback.error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
 .inv-scan-feedback.info  { background: #f8fafc; border: 1px solid #e5e7eb; color: #475569; }
+.inv-scan-feedback.verify { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-weight: 600; }
 /* Full-screen scan-feedback flash overlay. Mandatory visual co-signal so a
    muted tablet can't fail silently. Success is subtle; error strobes loudly. */
 #timFlash { position: fixed; inset: 0; z-index: 99999; pointer-events: none; opacity: 0; }
