@@ -85,6 +85,10 @@
         <button class="sidebar-subnav-btn"        id="invSub_recount"    onclick="invShowSubview('recount')">Recount</button>
         <button class="sidebar-subnav-btn"        id="invSub_eventlog"   onclick="invShowSubview('eventlog')">Event Log</button>
       </div>
+      <button class="sidebar-nav-btn" id="sideNavBoxes" onclick="switchTab('boxes')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg></span>
+        <span class="sidebar-nav-label">Boxes</span>
+      </button>
       <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
         <span class="sidebar-nav-label">Products</span>
@@ -1303,6 +1307,27 @@
     </div>
 
   </div><!-- /tabBarcodes -->
+
+  <!-- ── Boxes view ── : dedicated registry front door. Building a box = defining
+       what's inside a carton (serial↔FSAN), independent of any inventory count.
+       No session needed here; counting a built box happens on the Inventory screen. -->
+  <div id="tabBoxes" class="tab-panel">
+    <div class="card" style="margin-top:0;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0;">Boxes / Cartons</h2>
+          <div class="small" id="boxTabSummary" style="color:#64748b;">No boxes captured yet.</div>
+        </div>
+        <button style="margin-left:auto;" onclick="boxCapOpen()">&#65291; New Box</button>
+      </div>
+      <p class="small" style="margin:10px 0 0;color:#6b7280;">
+        Build a box's contents here — scan the carton ID, then scan each unit's serial (TIM derives the FSAN from history without opening the box). This is <b>registry setup</b>, separate from counting: it creates no count events. Later, on the <b>Inventory</b> screen, scanning a built box counts every unit inside in one action.
+      </p>
+    </div>
+    <div class="card">
+      <div id="boxTabList"></div>
+    </div>
+  </div><!-- /tabBoxes -->
 
   <!-- ── Product Mapping view ── -->
   <div id="tabMapping" class="tab-panel">

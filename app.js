@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.32.03";
+const APP_VERSION = "v2.32.04";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -4132,7 +4132,7 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes"].forEach(function(t) {
+  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes", "boxes"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
@@ -4150,6 +4150,7 @@ function switchTab(name) {
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") { prodRenderList(); reelLookupRender(); }
+  if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   // Inventory sub-screens: show the sub-nav and apply the active sub-view.
   var invSubnav = $("invSubnav");
@@ -6721,9 +6722,15 @@ function invBoxManagerToggleContents(boxKey) {
   _invBoxMgrExpanded[boxKey] = !_invBoxMgrExpanded[boxKey];
   invRenderBoxManager();
 }
+// Renders the box registry into whichever target(s) are present — the in-count
+// modal (#invBoxManagerList) AND the dedicated Boxes section (#boxTabList). Since
+// only one is on screen at a time and every edit handler re-calls this, both stay
+// in sync without knowing which surface the user is on.
 function invRenderBoxManager() {
-  var list = $("invBoxManagerList");
-  var summary = $("invBoxManagerSummary");
+  _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));
+  _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"));
+}
+function _boxRenderRegistryInto(list, summary) {
   if (!list) return;
   var boxes = boxAll().slice().sort(function(a, b) {
     return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1;
@@ -12661,7 +12668,7 @@ try {
     if (_sb) _sb.classList.add("collapsed");
   }
   var _savedTab = localStorage.getItem("tim_active_tab");
-  if (_savedTab && ["receiving","inventory","products","mapping","barcodes"].includes(_savedTab)) {
+  if (_savedTab && ["receiving","inventory","products","mapping","barcodes","boxes"].includes(_savedTab)) {
     switchTab(_savedTab);
   }
   ghRenderTestingBanner();   // reflect persisted testing-mode state on load
