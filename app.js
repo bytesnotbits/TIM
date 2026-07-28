@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.34.00";
+const APP_VERSION = "v2.35.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5522,6 +5522,12 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
 // ===================================================================
 
 var BOX_STORAGE_KEY = "tim_boxes_v1";
+// Soft-deleted boxes are kept as tombstones (deleted:true) so the deletion
+// propagates through LWW sync instead of a local key just vanishing; they're
+// hard-purged locally after this many days (well beyond any device's realistic
+// offline window, so a purged box can't resurrect from a stale copy).
+var BOX_TOMBSTONE_TTL_DAYS = 90;
+function boxIsDeleted(b) { return !!(b && b.deleted); }
 
 function boxNormId(boxId) { return normKey(boxId); }
 function boxWho() { return (typeof timGetUsername === "function" ? timGetUsername() : "") || ""; }
@@ -5545,7 +5551,7 @@ function scheduleBoxPush() {
 }
 function boxLoadFromStorage() {
   return TimDB.get(BOX_STORAGE_KEY).then(function(saved) {
-    if (saved && typeof saved === "object") { appData.boxes = saved; boxMigrateDevices(); }
+    if (saved && typeof saved === "object") { appData.boxes = saved; boxMigrateDevices(); boxPurgeExpiredTombstones(); }
   }).catch(function(){});
 }
 
@@ -5711,12 +5717,25 @@ function boxCapLearnAssociation(dev) {
 }
 
 function boxGet(boxId) {
+  var b = boxGetRaw(boxId);
+  return b && !b.deleted ? b : null;   // a tombstone reads as "not found"
+}
+// Fetch a box record even if it's a tombstone (restore/purge/archive use this).
+function boxGetRaw(boxId) {
   var key = boxNormId(boxId);
   if (!key || !appData.boxes) return null;
   return appData.boxes[key] || null;
 }
 function boxAll() {
-  return Object.keys(appData.boxes || {}).map(function(k) { return appData.boxes[k]; });
+  return Object.keys(appData.boxes || {})
+    .map(function(k) { return appData.boxes[k]; })
+    .filter(function(b) { return b && !b.deleted; });
+}
+// The tombstones (deleted boxes), for the admin Deleted-boxes view.
+function boxDeletedAll() {
+  return Object.keys(appData.boxes || {})
+    .map(function(k) { return appData.boxes[k]; })
+    .filter(function(b) { return b && b.deleted; });
 }
 
 // Which box currently contains a device with this identifier (serial/cxnk/mac),
@@ -5728,7 +5747,7 @@ function boxFindByIdentifier(value) {
   var keys = Object.keys(boxes);
   for (var i = 0; i < keys.length; i++) {
     var b = boxes[keys[i]];
-    if (b && boxDeviceList(b).some(function(d) { return boxDevKeys(d).indexOf(sk) !== -1; })) return b;
+    if (b && !b.deleted && boxDeviceList(b).some(function(d) { return boxDevKeys(d).indexOf(sk) !== -1; })) return b;
   }
   return null;
 }
@@ -5748,6 +5767,9 @@ function boxUpsert(boxId, fields) {
     b = { boxId: normalize(boxId), expectedDevices: [], status: "capturing", opened: false,
           source: fields.source || "scanned", createdAt: now, createdBy: boxWho() };
     appData.boxes[key] = b;
+  } else if (b.deleted) {
+    // Re-creating a deleted box ID resurrects it (updatedAt below out-votes the tombstone in LWW).
+    delete b.deleted; delete b.deletedAt; delete b.deletedBy;
   }
   if (fields.calixProduct) b.calixProduct = normalize(fields.calixProduct);
   if (fields.expectedQty != null && fields.expectedQty !== "") b.expectedQty = Number(fields.expectedQty) || b.expectedQty;
@@ -5774,6 +5796,7 @@ function boxAddDevice(boxId, dev, fields) {
   var prior = null, priorBox = null, boxes = appData.boxes || {};
   Object.keys(boxes).some(function(k) {
     var bx = boxes[k];
+    if (!bx || bx.deleted) return false;   // a deleted box doesn't "hold" anything
     var hit = boxDeviceList(bx).filter(function(d) {
       return boxDevKeys(d).some(function(kk) { return keys.indexOf(kk) !== -1; });
     })[0];
@@ -5839,10 +5862,49 @@ function boxSetSerials(boxId, serials, fields) {
   return boxSetDevices(boxId, (serials || []).map(function(s) { return { serial: s }; }), fields);
 }
 
+// Soft-delete: leave a tombstone (contents kept for restore) with a fresh
+// updatedAt so the deletion out-votes any live copy on another device in LWW.
 function boxDelete(boxId) {
+  var key = boxNormId(boxId);
+  var b = key && appData.boxes ? appData.boxes[key] : null;
+  if (!b) return false;
+  var now = invNow();
+  b.deleted = true;
+  b.deletedAt = now;
+  b.deletedBy = boxWho();
+  b.updatedAt = now;   // must out-timestamp any live copy elsewhere
+  boxSaveToStorage();
+  return true;
+}
+// Restore a tombstone to a live box (out-timestamps the delete so it wins LWW).
+function boxRestore(boxId) {
+  var b = boxGetRaw(boxId);
+  if (!b || !b.deleted) return false;
+  delete b.deleted; delete b.deletedAt; delete b.deletedBy;
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return true;
+}
+// Hard-remove a box record entirely (manual purge + auto-purge). No going back.
+function boxPurge(boxId) {
   var key = boxNormId(boxId);
   if (key && appData.boxes && appData.boxes[key]) { delete appData.boxes[key]; boxSaveToStorage(); return true; }
   return false;
+}
+// Load-time GC: hard-remove tombstones older than the TTL. Writes SILENTLY (no
+// scheduleBoxPush) so a boot doesn't fire a push; the removal reaches the repo
+// on the next real box-change push, and other devices purge on their own load.
+function boxPurgeExpiredTombstones() {
+  var boxes = appData.boxes || {};
+  var cutoff = new Date(Date.now() - BOX_TOMBSTONE_TTL_DAYS * 86400000).toISOString();
+  var changed = false;
+  Object.keys(boxes).forEach(function(k) {
+    var b = boxes[k];
+    if (b && b.deleted && b.deletedAt && b.deletedAt < cutoff) { delete boxes[k]; changed = true; }
+  });
+  if (changed) TimDB.set(BOX_STORAGE_KEY, appData.boxes || {}).catch(function(){});
+  return changed;
 }
 
 // Cross-box invariant helpers (v2.33.01) — a device lives in exactly one box.
@@ -5863,6 +5925,7 @@ function boxStripFromOthers(keys, exceptBoxId) {
   Object.keys(appData.boxes || {}).forEach(function(bk) {
     if (bk === ex) return;
     var bx = appData.boxes[bk];
+    if (!bx || bx.deleted) return;
     var before = boxDeviceList(bx).length;
     bx.expectedDevices = boxDeviceList(bx).filter(function(d) {
       return !boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; });
@@ -6896,6 +6959,7 @@ function invBoxManagerToggleContents(boxKey) {
 function invRenderBoxManager() {
   _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));
   _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"));
+  boxRenderDeletedInto($("boxTabDeleted"));   // admin-only archive, Boxes tab
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -7201,7 +7265,7 @@ function _boxRenderRegistryInto(list, summary) {
           '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="boxAuditOpen(\'' + bjs + '\')">Audit ▸</button>' +
           '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerToggleContents(\'' + chkJsStr(key) + '\')">' +
             (expanded ? "Done" : "Edit") + '</button>' +
-          '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + bjs + '\')">Delete</button>' +
+          (timIsAdmin() ? '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + bjs + '\')">Delete</button>' : '') +
         '</span>' +
       '</div>' + editor +
       '<div class="small" style="color:#94a3b8;margin-top:4px;">updated ' + invFormatDateTime(b.updatedAt) +
@@ -7213,10 +7277,14 @@ function _boxRenderRegistryInto(list, summary) {
 function invBoxManagerDelete(boxId) {
   var b = boxGet(boxId);
   if (!b) return;
+  if (!timIsAdmin()) {
+    alert("Deleting a box is limited to an admin. Set your name in the sidebar (or ask Joe) if this box needs to be removed.");
+    return;
+  }
   var n = boxDeviceList(b).length;
   if (!confirm('Delete box "' + b.boxId + '"?\n\n' +
-      "This removes the box from the registry" +
-      (invSession ? " and voids its counts in the current session" : "") +
+      "It moves to Deleted boxes (an admin can restore it) and the deletion syncs to every device" +
+      (invSession ? "; its counts in the current session are voided" : "") +
       ". Finalized history is not affected.\n\n" + n + " device(s) are listed in this box.")) return;
 
   if (invSession) invBoxVoidSessionCounts(b.boxId, true, "box deleted");   // void ALL its counts — deleting a box deletes its contents
@@ -7225,7 +7293,48 @@ function invBoxManagerDelete(boxId) {
   delete _invBoxMgrExpanded[boxNormId(b.boxId)];
   invRenderBoxManager();
   invBoxRenderBar();
-  invSetScanFeedback("Box " + b.boxId + " deleted.", "warn", "", "box");
+  invSetScanFeedback("Box " + b.boxId + " deleted — restorable in Deleted boxes.", "warn", "", "box");
+}
+// Admin Deleted-boxes actions (Boxes tab archive view).
+function boxTabRestore(boxId) {
+  if (!timIsAdmin()) return;
+  if (boxRestore(boxId)) { invRenderBoxManager(); if (typeof invBoxRenderBar === "function") invBoxRenderBar(); }
+}
+function boxTabPurge(boxId) {
+  if (!timIsAdmin()) return;
+  var b = boxGetRaw(boxId);
+  if (!b) return;
+  if (!confirm('Permanently purge box "' + b.boxId + '"?\n\nThis cannot be undone. It is removed for good and cannot be restored on any device.')) return;
+  boxPurge(boxId);
+  invRenderBoxManager();
+}
+// Render the admin-only Deleted-boxes list into the Boxes tab. Empty (and hidden)
+// for non-admins or when there are no tombstones.
+function boxRenderDeletedInto(el) {
+  if (!el) return;
+  if (!timIsAdmin()) { el.innerHTML = ""; return; }
+  var dels = boxDeletedAll().slice().sort(function(a, b) {
+    return (b.deletedAt || "") > (a.deletedAt || "") ? 1 : -1;
+  });
+  if (!dels.length) { el.innerHTML = ""; return; }
+  el.innerHTML =
+    '<div class="card">' +
+      '<h3 style="margin:0 0 4px;">Deleted boxes (' + dels.length + ')</h3>' +
+      '<div class="small" style="color:#6b7280;margin-bottom:10px;">Admin-only. Restore brings a box back everywhere; Purge removes it for good. Tombstones auto-purge after ' + BOX_TOMBSTONE_TTL_DAYS + ' days.</div>' +
+      dels.map(function(b) {
+        var bjs = chkJsStr(b.boxId);
+        var n = boxDeviceList(b).length;
+        return '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+          '<span style="font-weight:700;font-family:monospace;">' + escapeHtml(b.boxId) + '</span>' +
+          '<span class="small">' + n + ' device(s)</span>' +
+          '<span class="small" style="color:#94a3b8;">deleted ' + invFormatDateTime(b.deletedAt) + (b.deletedBy ? " by " + escapeHtml(b.deletedBy) : "") + '</span>' +
+          '<span style="margin-left:auto;display:flex;gap:6px;">' +
+            '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="boxTabRestore(\'' + bjs + '\')">Restore</button>' +
+            '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="boxTabPurge(\'' + bjs + '\')">Purge</button>' +
+          '</span>' +
+        '</div>';
+      }).join("") +
+    '</div>';
 }
 
 // Rename a box's ID. Rekeys the registry, retargets this session's count

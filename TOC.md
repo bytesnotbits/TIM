@@ -418,7 +418,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `boxGet(boxId)` / `boxAll()` | Look up one box (normalized key) / list all boxes |
+| `boxGet(boxId)` / `boxAll()` | Look up one box (normalized key) / list all boxes — both EXCLUDE tombstones (v2.35.00) |
+| `boxGetRaw(boxId)` / `boxDeletedAll()` | Fetch a box incl. tombstones (restore/purge) / list tombstones for the admin archive (v2.35.00) |
 | `boxMigrateDevices()` | One-time on-load upgrade: legacy `expectedSerials` → `expectedDevices:[{serial}]`; drops old field. Also called after master-JSON import |
 | `boxDeviceList(b)` | A box's `expectedDevices` (migrates on read). All contents reads go through this |
 | `boxDevPrimary(dev)` / `boxDevKey(dev)` | Primary identifier (serial→fsan→mac) / its normKey — the device's identity |
@@ -438,7 +439,10 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxAuditLastLabel(b)` | One-line "last audited" label for the registry list (latest `audit[]` entry; empty if never audited) |
 | `boxOtherBoxFor(keys, exceptBoxId)` | Single-box invariant: which OTHER box currently holds any of these identifiers (drives the "ask before moving" prompt), or null (v2.33.01) |
 | `boxStripFromOthers(keys, exceptBoxId)` | Remove those identifiers from every box except one (executes an approved cross-box move); returns affected-box count (v2.33.01) |
-| `boxDelete(boxId)` | Remove a box record |
+| `boxDelete(boxId)` | **Soft-delete** — write a tombstone (`deleted`/`deletedAt`/`deletedBy` + fresh `updatedAt` so it wins LWW); contents kept for restore (v2.35.00) |
+| `boxRestore(boxId)` / `boxPurge(boxId)` | Undelete a tombstone (out-timestamps it) / hard-remove a box record for good (v2.35.00) |
+| `boxPurgeExpiredTombstones()` | Load-time GC: hard-remove tombstones older than `BOX_TOMBSTONE_TTL_DAYS` (90); silent write, no push (v2.35.00) |
+| `boxTabRestore(id)` / `boxTabPurge(id)` / `boxRenderDeletedInto(el)` | Admin-only Deleted-boxes archive actions + render (Boxes tab `#boxTabDeleted`); delete is gated by `timIsAdmin()` (v2.35.00) |
 | `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB. Save schedules a debounced GitHub push (`scheduleBoxPush`, v2.34.00) |
 | `scheduleBoxPush()` | Debounced (4s) `ghPushToGitHub({auto})` on any box change; coalesces rapid capture scans; skips/retries while a sync is in flight (v2.34.00) |
 
