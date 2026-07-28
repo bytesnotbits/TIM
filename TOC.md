@@ -236,11 +236,11 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `ghListDataDir(allowMissing)` | List `data/` folder contents (names + blob SHAs); `allowMissing` returns `[]` on 404 |
 | `ghFetchJsonFile(path)` | Fetch one file as raw JSON (`vnd.github.raw+json`) |
 | `ghSyncNow(silent)` | **Main pull = 3-way merge** (v2.06.00): list → fetch all → assemble remote → `ghMergeMasters(base, local, remote)` → `loadSourceData(merged)` → log conflicts + pull repo `conflicts.json` → save base(=remote) & SHAs → mark pending if merged has local-only changes. Atomic; no longer clobbers local. |
-| `_ghAssembleRemote(fetched)` | Assemble fetched repo files → `{ payload, conflicts, hadHistoryShards }` (shared by pull + push-rebase) |
-| `_ghPayloadDiffers(a,b)` | Cheap per-collection deep-compare; true if merged has changes not yet in the repo |
+| `_ghAssembleRemote(fetched)` | Assemble fetched repo files (incl. `boxes.json` → `payload.boxes`) → `{ payload, conflicts, hadHistoryShards }` (shared by pull + push-rebase) |
+| `_ghPayloadDiffers(a,b)` | Cheap per-collection deep-compare (incl. `boxes`); true if merged has changes not yet in the repo |
 | `ghInit()` | Startup hook (returns a promise so the boot overlay hides at the right time): load settings; if a push is pending, PUSH (not pull, which would clobber the offline edit), else auto-sync if `autoLoad` + online. Renders the restored cache on every branch that doesn't run a full sync. Runs after `timLoadMasterCache()` resolves |
 | `ghHistoryShardName(record)` | `history-<year>.json` from `imported_at`/`ship_date` |
-| `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data, incl. `conflicts.json` (shared by seed + push) |
+| `ghBuildDataFiles()` | Build `{ fileName → JSON string }` from current data, incl. `conflicts.json` + `boxes.json` (shared by seed + push) |
 | `ghDownloadSeedFiles()` | Download current local data as split repo files (staggered) |
 | `_ghUtf8Bytes(str)` / `_ghB64FromBytes(bytes)` | UTF-8 encode / chunked base64 encode |
 | `ghBlobSha(content)` | Git blob SHA-1 of a string (for change detection vs repo listing) |
@@ -266,7 +266,8 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `_gh3MergeKeyed(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed object (add/edit/delete/edit-vs-delete logic) |
 | `_ghToMap(arr,keyFn)` | Index array by key; returns `{ map, keyless }` (keyless items never dropped) |
 | `_gh3MergeArray(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed array; preserves local-then-remote order + keyless passthrough |
-| `ghMergeMasters(base,local,remote,ctx)` | **Orchestrator**: merges every collection → `{ merged, conflicts }`. `odoo_quants` not merged (newest wins) |
+| `ghMergeMasters(base,local,remote,ctx)` | **Orchestrator**: merges every collection → `{ merged, conflicts }`. `odoo_quants` not merged (newest wins); `boxes` via `_ghMergeBoxesLWW` |
+| `_ghMergeBoxesLWW(local,remote)` | Union both box maps; on a shared box ID keep the newer `updatedAt` (last-writer-wins per box). Deletions don't propagate — the LWW tradeoff (v2.34.00) |
 
 ---
 
@@ -438,7 +439,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxOtherBoxFor(keys, exceptBoxId)` | Single-box invariant: which OTHER box currently holds any of these identifiers (drives the "ask before moving" prompt), or null (v2.33.01) |
 | `boxStripFromOthers(keys, exceptBoxId)` | Remove those identifiers from every box except one (executes an approved cross-box move); returns affected-box count (v2.33.01) |
 | `boxDelete(boxId)` | Remove a box record |
-| `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB |
+| `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB. Save schedules a debounced GitHub push (`scheduleBoxPush`, v2.34.00) |
+| `scheduleBoxPush()` | Debounced (4s) `ghPushToGitHub({auto})` on any box change; coalesces rapid capture scans; skips/retries while a sync is in flight (v2.34.00) |
 
 **Capture modal (v2.32.00; symmetric resolution v2.32.01; unknown-device flow v2.32.02)** — build/edit a box's device contents as **registry work, independent of any inventory session (creates no count events)**; counting still happens when the built box is scanned during a session. Flow: scan box ID → tick which columns to record per device (`BOX_CAPTURE_COLUMNS` = serial/fsan/mac; sticky in `_boxCapLastCols`, default serial+fsan) → scan devices. **Symmetric resolution:** scanning ANY identifier into any column resolves the unit and auto-fills the other ticked columns from history, commits the row, and keeps focus on the same column (batch of serials → derive FSANs, and vice-versa). **Unknown-device flow (v2.32.02):** a scan that resolves to nothing is pattern-classified (`boxCapClassify`), RELOCATED into the correct column even if the cursor was elsewhere, and flags the whole entry for verification — amber row + "NEW — verify" badge + a distinct `verify` tone — then keeps the row open (focus walks to the next empty ticked field) instead of auto-committing. Completing the association commits it as `unverified` (amber "NEW" pill on the committed row) AND writes it back to history (`boxCapLearnAssociation`) so it resolves globally next time. A blank required field flags the device `partial`. Auto-filled rows marked ⟲. Opened from the dedicated **Boxes sidebar section** (`#tabBoxes`, `switchTab('boxes')` — the primary front door, works with NO inventory session) or the in-count box-manager modal ("＋ New Box" / per-box "Edit contents ▸"). Global `boxCapState` (+ `entryUnverified`).
 

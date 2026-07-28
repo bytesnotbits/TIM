@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.33.01";
+const APP_VERSION = "v2.34.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2859,6 +2859,7 @@ function ghBuildDataFiles() {
     "quants.json": payload.odoo_quants,
     "recounts.json": { recount_sessions: payload.recount_sessions, recount_movements: payload.recount_movements },
     "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
+    "boxes.json": payload.boxes || {},  // carton→device registry; merged last-writer-wins per box
     "conflicts.json": ghConflictLog || [],  // shared conflict log travels with the data
     "device_labels.json": ghDeviceLabelsFile()  // shared Device Label dropdown options
   };
@@ -2888,6 +2889,7 @@ function _ghAssembleRemote(fetched) {
     else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
     else if (f.name === "conflicts.json" && Array.isArray(f.json)) remoteConflicts = f.json;
     else if (f.name === "device_labels.json" && f.json && typeof f.json === "object") remoteDeviceLabels = f.json;
+    else if (f.name === "boxes.json" && f.json && typeof f.json === "object") payload.boxes = f.json;
     else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
       if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
       if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
@@ -2916,6 +2918,7 @@ function _ghPayloadDiffers(a, b) {
   if (!_ghEqual(a.product_map || {}, b.product_map || {})) return true;
   if (!_ghEqual(a.barcode_map || {}, b.barcode_map || {})) return true;
   if (!_ghEqual((a.history && a.history.records) || [], (b.history && b.history.records) || [])) return true;
+  if (!_ghEqual(a.boxes || {}, b.boxes || {})) return true;
   var arrs = ["inventory_sessions", "inventory_events", "recount_sessions", "recount_movements"];
   for (var i = 0; i < arrs.length; i++) {
     if (!_ghEqual(a[arrs[i]] || [], b[arrs[i]] || [])) return true;
@@ -3140,7 +3143,29 @@ function ghMergeMasters(base, local, remote, ctx) {
   merged.product_movements = (local.product_movements && local.product_movements.length) ? local.product_movements : (remote.product_movements || []);
   merged.nisc_capture      = (local.nisc_capture      && local.nisc_capture.length)      ? local.nisc_capture      : (remote.nisc_capture      || []);
 
+  // boxes: keyed map (box ID → box record). Last-writer-wins PER BOX by
+  // updatedAt — no field-level merge, so the box a device saved most recently
+  // wins whole. Deletions don't propagate (a box deleted on one device that
+  // still exists elsewhere reappears); delete on every device, or clear it out
+  // on the winning device before it re-syncs. This is the deliberate LWW
+  // tradeoff — simple and predictable over the rare concurrent-edit case.
+  merged.boxes = _ghMergeBoxesLWW(local.boxes, remote.boxes);
+
   return { merged: merged, conflicts: conflicts };
+}
+
+// Union the two box maps; on a shared box ID keep whichever record has the
+// newer updatedAt (createdAt as fallback, then remote). Order-independent.
+function _ghMergeBoxesLWW(local, remote) {
+  local = local || {}; remote = remote || {};
+  var merged = {};
+  var boxTs = function(b) { return (b && (b.updatedAt || b.createdAt)) || ""; };
+  Object.keys(local).forEach(function(k) { merged[k] = local[k]; });
+  Object.keys(remote).forEach(function(k) {
+    if (!(k in merged)) { merged[k] = remote[k]; return; }
+    if (boxTs(remote[k]) > boxTs(merged[k])) merged[k] = remote[k];
+  });
+  return merged;
 }
 
 // ===================================================================
@@ -5489,9 +5514,11 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
 // sealed box can count every device inside. Associations are built by
 // scanning the carton's serial manifest (the box need not be opened) and
 // overridden by re-scanning when a box is opened. Persisted locally under
-// BOX_STORAGE_KEY and included in master-JSON export/import; GitHub sync
-// of boxes is intentionally deferred. Map keys are normalized-uppercase
-// box IDs. See the Data Dictionary for the BoxEntry shape.
+// BOX_STORAGE_KEY, included in master-JSON export/import, AND synced to
+// GitHub as boxes.json — merged last-writer-wins PER BOX by updatedAt
+// (_ghMergeBoxesLWW; v2.34.00). Every mutation flows through
+// boxSaveToStorage, which schedules a debounced push. Map keys are
+// normalized-uppercase box IDs. See the Data Dictionary for the BoxEntry shape.
 // ===================================================================
 
 var BOX_STORAGE_KEY = "tim_boxes_v1";
@@ -5501,6 +5528,20 @@ function boxWho() { return (typeof timGetUsername === "function" ? timGetUsernam
 
 function boxSaveToStorage() {
   TimDB.set(BOX_STORAGE_KEY, appData.boxes || {}).catch(function(){});
+  scheduleBoxPush();
+}
+// Debounced GitHub push for box changes. Every box mutation calls
+// boxSaveToStorage; rapid capture scans coalesce into one push. Skips while a
+// sync/push is already in flight (a box change ingested BY a sync must not
+// bounce straight back out) — the push itself SHA-diffs, so a no-op is cheap.
+var _boxPushTimer = null;
+function scheduleBoxPush() {
+  if (typeof ghConfigured !== "function" || !ghConfigured()) return;
+  clearTimeout(_boxPushTimer);
+  _boxPushTimer = setTimeout(function() {
+    if (ghSyncInFlight) { scheduleBoxPush(); return; }  // busy — retry shortly
+    ghPushToGitHub({ auto: true });
+  }, 4000);
 }
 function boxLoadFromStorage() {
   return TimDB.get(BOX_STORAGE_KEY).then(function(saved) {
@@ -6864,7 +6905,6 @@ function invRenderBoxManager() {
 // optionally rescan → diff (matched/missing/extra) → record the audit and/or
 // update the box to match. If the box is unknown, drop into the capture modal
 // to build it. All state reverts to the scan field when the panel closes.
-// Local-only (boxes aren't GitHub-synced), so it's inherently testing-safe.
 // Reuses the same identity/resolution/diff primitives as capture & open-box.
 // ─────────────────────────────────────────────────────────────────────────
 
