@@ -1325,9 +1325,52 @@
       </p>
     </div>
     <div class="card">
+      <label class="small" style="font-weight:700;">Look up or audit a box
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input id="boxAuditEntry" autocomplete="off" placeholder="Scan a box / carton ID"
+                 style="flex:1;min-width:220px;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();boxAuditScan(this);}" />
+          <button class="secondary" onclick="boxAuditScan(document.getElementById('boxAuditEntry'))">Go</button>
+        </div>
+      </label>
+      <p class="small" style="margin:8px 0 0;color:#6b7280;">
+        Scan a box to see what the registry says is inside it, verify against the physical box, and (optionally) rescan its contents to reconcile. Unknown box → build it. Local-only — nothing is pushed.
+      </p>
+    </div>
+    <div class="card">
       <div id="boxTabList"></div>
     </div>
   </div><!-- /tabBoxes -->
+
+  <!-- ── Box Audit panel ── -->
+  <div id="boxAuditModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:640px;">
+      <div style="display:flex;align-items:flex-start;gap:12px;">
+        <div>
+          <h2 style="margin:0;" id="boxAuditTitle">Audit Box</h2>
+          <div class="small" id="boxAuditSubtitle" style="color:#64748b;">Verify the physical box against the registry.</div>
+        </div>
+        <button class="secondary" style="margin-left:auto;" onclick="boxAuditClose()">Close</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;margin:14px 0;">
+        <label class="small" style="flex:1;min-width:200px;font-weight:600;">Current location
+          <input id="boxAuditLocation" autocomplete="off" placeholder="Scan / type current shelf"
+                 style="width:100%;box-sizing:border-box;font-family:monospace;padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;" />
+        </label>
+        <label class="small" style="flex:1;min-width:200px;font-weight:600;">Rescan contents
+          <input id="boxAuditScanInput" autocomplete="off" placeholder="Scan each unit (serial / FSAN / MAC)"
+                 style="width:100%;box-sizing:border-box;font-family:monospace;padding:7px 9px;border:1px solid #cbd5e1;border-radius:6px;margin-top:4px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();boxAuditScanDevice(this);}" />
+        </label>
+      </div>
+      <div id="boxAuditBody"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;">
+        <button class="secondary" onclick="boxAuditClose()">Cancel</button>
+        <button id="boxAuditRecordBtn" onclick="boxAuditRecordOnly()">Record audit</button>
+        <button id="boxAuditUpdateBtn" onclick="boxAuditApplyUpdate()" disabled>Update box to match scan</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Product Mapping view ── -->
   <div id="tabMapping" class="tab-panel">

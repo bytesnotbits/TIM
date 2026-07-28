@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.32.04";
+const APP_VERSION = "v2.33.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5562,6 +5562,15 @@ function boxDevPrimary(dev) { return dev ? (dev.serial || dev.fsan || dev.mac ||
 function boxDevKey(dev) { return normKey(boxDevPrimary(dev)); }
 // All non-empty identifiers on a device, normalized (cross-field matching).
 function boxDevKeys(dev) { return dev ? [dev.serial, dev.fsan, dev.mac].map(normKey).filter(Boolean) : []; }
+// Which identifier columns are actually in use across a device list (so an
+// all-serial box doesn't render empty FSAN/MAC columns). Canonical order.
+var BOX_ID_COL_LABELS = { serial: "Serial", fsan: "FSAN", mac: "MAC" };
+function boxActiveIdCols(devs) {
+  var cols = ["serial", "fsan", "mac"].filter(function(k) {
+    return (devs || []).some(function(d) { return d && d[k]; });
+  });
+  return cols.length ? cols : ["serial"];
+}
 // Human label showing every captured identifier, e.g. "S/N ABC · FSAN … · MAC …".
 function boxDevLabel(dev) {
   if (!dev) return "";
@@ -5809,6 +5818,42 @@ function boxReopen(boxId) {
   b.updatedBy = boxWho();
   boxSaveToStorage();
   return b;
+}
+
+// Append an audit record (floor verification, v2.33.00). Append-only so the
+// history survives — the box list shows the LATEST entry as "last audited".
+// `result`: "match" (rescan == registry) | "diff" (differs, not changed) |
+// "updated" (contents replaced to match the scan) | "located" (found/located,
+// contents not rescanned). Counts are a snapshot of the diff at audit time.
+// An audit is a touch → bumps updatedAt/updatedBy too.
+function boxRecordAudit(boxId, result, counts, location) {
+  var b = boxGet(boxId);
+  if (!b) return null;
+  counts = counts || {};
+  b.audit = b.audit || [];
+  var entry = { at: invNow(), by: boxWho(), result: result,
+    matched: counts.matched || 0, missing: counts.missing || 0, extra: counts.extra || 0 };
+  if (location) entry.location = normalize(location);
+  b.audit.push(entry);
+  b.updatedAt = invNow();
+  b.updatedBy = boxWho();
+  boxSaveToStorage();
+  return entry;
+}
+// One-line "last audited" label for the registry list (empty if never audited).
+function boxAuditLastLabel(b) {
+  if (!b || !b.audit || !b.audit.length) return "";
+  var a = b.audit[b.audit.length - 1];
+  var color = a.result === "match" ? "#059669"
+            : a.result === "located" ? "#2563eb"
+            : a.result === "updated" ? "#0d9488" : "#d97706";
+  var txt = a.result === "match" ? "audited — match"
+          : a.result === "updated" ? "audited — updated to match"
+          : a.result === "located" ? "audited — located"
+          : a.result === "diff" ? ("audited — " + a.missing + " missing / " + a.extra + " extra")
+          : "audited";
+  return '<div class="small" style="color:' + color + ';margin-top:2px;">✓ ' + escapeHtml(txt) + ' ' +
+    escapeHtml(invFormatDateTime(a.at)) + (a.by ? " by " + escapeHtml(a.by) : "") + '</div>';
 }
 
 // Sealed fast-count: scan a known "ready" box → count every device in its
@@ -6201,6 +6246,7 @@ function invCloseBoxManager() {
 
 // { boxId, cols:[colKey], devices:[{serial?,cxnk?,mac?,partial?}], isEdit, origKey }
 var boxCapState = null;
+var boxAuditState = null;   // { boxId, scanned:[dev] } while the audit panel is open (v2.33.00)
 var _boxCapLastCols = ["serial", "fsan"];   // sticky column selection (scan serial → derive FSAN)
 
 function boxCapOpen(existingBoxId) {
@@ -6730,6 +6776,205 @@ function invRenderBoxManager() {
   _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));
   _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"));
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Box audit (floor verification) — v2.33.00. A deliberate scan-driven loop
+// (NOT a sticky mode): from the Boxes tab, scan a box ID → if it exists, open
+// the audit panel to eyeball the registry contents vs the physical box and
+// optionally rescan → diff (matched/missing/extra) → record the audit and/or
+// update the box to match. If the box is unknown, drop into the capture modal
+// to build it. All state reverts to the scan field when the panel closes.
+// Local-only (boxes aren't GitHub-synced), so it's inherently testing-safe.
+// Reuses the same identity/resolution/diff primitives as capture & open-box.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Boxes-tab entry: scan a box → look up (audit) or build.
+function boxAuditScan(input) {
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (!v) { if (input) input.focus(); return; }
+  if (input) input.value = "";
+  if (typeof timFeedback === "function") timFeedback("box");
+  if (boxGet(v)) { boxAuditOpen(v); return; }
+  if (confirm('Box "' + v + '" is not in the registry.\n\nBuild it now?')) boxAuditBuildNew(v);
+  else if (input) input.focus();
+}
+
+// Unknown box → open the capture modal seeded with the scanned ID.
+function boxAuditBuildNew(id) {
+  boxCapOpen();   // fresh modal (its own 60ms focus timer sets the blank ID first)
+  setTimeout(function() {
+    var idInput = $("boxCapBoxId");
+    if (idInput) { idInput.value = id; boxCapSetBoxId(idInput); }
+  }, 90);
+}
+
+function boxAuditOpen(boxId) {
+  var b = boxGet(boxId);
+  if (!b) return;
+  var modal = $("boxAuditModal");
+  if (!modal) return;
+  boxAuditState = { boxId: b.boxId, scanned: [] };
+  modal.classList.remove("hidden");
+  var loc = $("boxAuditLocation"); if (loc) loc.value = b.location || "";
+  boxAuditRender();
+  setTimeout(function() { var s = $("boxAuditScanInput"); if (s) s.focus(); }, 60);
+}
+
+function boxAuditClose() {
+  var modal = $("boxAuditModal");
+  if (modal) modal.classList.add("hidden");
+  boxAuditState = null;
+  // Revert to the Boxes-tab scan field so the next box can be scanned (loop).
+  setTimeout(function() { var f = $("boxAuditEntry"); if (f) f.focus(); }, 60);
+}
+
+// Rescan a physical unit into the audit set (resolve by any identifier; an
+// unresolved scan is pattern-classified and flagged as an extra to verify).
+function boxAuditScanDevice(input) {
+  if (!boxAuditState) return;
+  var raw = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (!raw) { if (input) input.focus(); return; }
+  if (input) input.value = "";
+  var resolved = boxResolveIdentifiers(raw), dev;
+  if (resolved) {
+    dev = boxNormDev(resolved);
+  } else {
+    dev = {}; dev[boxCapClassify(raw)] = normalize(raw);
+    dev = boxNormDev(dev); dev.unverified = true;
+  }
+  var keys = boxDevKeys(dev);
+  var hit = boxAuditState.scanned.filter(function(d) {
+    return boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; });
+  })[0];
+  if (hit) boxMergeDev(hit, dev);
+  else boxAuditState.scanned.push(dev);
+  // Feedback: known unit resolves = ok; an unresolved extra = verify tone.
+  if (typeof timFeedback === "function") timFeedback(resolved ? "ok" : "verify");
+  boxAuditRender();
+  if (input) input.focus();
+}
+
+function boxAuditRemoveScan(idx) {
+  if (!boxAuditState) return;
+  boxAuditState.scanned.splice(idx, 1);
+  boxAuditRender();
+  var s = $("boxAuditScanInput"); if (s) s.focus();
+}
+
+// Compare the scanned set against the box's stored contents, by shared
+// identifier (any field). Returns the stored list plus matched/missing/extra.
+function boxAuditComputeDiff() {
+  var b = boxGet(boxAuditState.boxId);
+  var stored = b ? boxDeviceList(b) : [];
+  var scanned = boxAuditState.scanned;
+  var scannedKeys = {}, storedKeys = {};
+  scanned.forEach(function(d) { boxDevKeys(d).forEach(function(k) { scannedKeys[k] = 1; }); });
+  stored.forEach(function(d)  { boxDevKeys(d).forEach(function(k) { storedKeys[k]  = 1; }); });
+  var matched = stored.filter(function(d) { return boxDevKeys(d).some(function(k) { return scannedKeys[k]; }); });
+  var missing = stored.filter(function(d) { return !boxDevKeys(d).some(function(k) { return scannedKeys[k]; }); });
+  var extra   = scanned.filter(function(d) { return !boxDevKeys(d).some(function(k) { return storedKeys[k]; }); });
+  return { stored: stored, matched: matched, missing: missing, extra: extra };
+}
+
+function boxAuditRender() {
+  if (!boxAuditState) return;
+  var b = boxGet(boxAuditState.boxId);
+  if (!b) return;
+  var diff = boxAuditComputeDiff();
+  var scannedAny = boxAuditState.scanned.length > 0;
+
+  var title = $("boxAuditTitle"); if (title) title.textContent = "Audit Box " + b.boxId;
+  var sub = $("boxAuditSubtitle");
+  if (sub) sub.textContent = scannedAny
+    ? (diff.matched.length + " matched · " + diff.missing.length + " missing · " + diff.extra.length + " extra")
+    : ("Registry lists " + diff.stored.length + " device(s). Rescan the units to verify contents, or just record that you located it.");
+
+  var ub = $("boxAuditUpdateBtn"); if (ub) ub.disabled = !scannedAny;
+
+  // Active identifier columns = union of fields actually present across the
+  // registry contents + the scanned set (so an all-serial box shows no empty
+  // FSAN/MAC columns). Devices render as aligned rows, one per unit.
+  var cols = boxActiveIdCols(diff.stored.concat(boxAuditState.scanned));
+  var colLabel = BOX_ID_COL_LABELS;
+
+  // Shared row/table builders so both tables line up on the same columns.
+  function idCells(d) {
+    return cols.map(function(k) {
+      var v = d[k] ? escapeHtml(d[k]) : '<span style="color:#cbd5e1;">—</span>';
+      return '<td style="padding:5px 10px;font-family:monospace;font-size:12px;white-space:nowrap;">' + v + '</td>';
+    }).join("");
+  }
+  function headerRow(statusLabel, actionCol) {
+    return '<tr style="text-align:left;color:#64748b;font-size:11px;font-weight:700;">' +
+      '<th style="padding:2px 10px;width:78px;">' + statusLabel + '</th>' +
+      cols.map(function(k) { return '<th style="padding:2px 10px;">' + escapeHtml(colLabel[k]) + '</th>'; }).join("") +
+      (actionCol ? '<th style="width:36px;"></th>' : "") + '</tr>';
+  }
+  function tableOpen() { return '<div style="overflow-x:auto;margin-bottom:12px;"><table style="border-collapse:collapse;width:100%;">'; }
+  function tableClose() { return '</table></div>'; }
+
+  var html = '<div class="small" style="font-weight:700;margin-bottom:4px;">Registry contents (' + diff.stored.length + ')</div>';
+  if (!diff.stored.length) {
+    html += '<div class="small" style="color:#94a3b8;margin-bottom:12px;">This box has no devices recorded.</div>';
+  } else {
+    html += tableOpen() + '<thead>' + headerRow("Status", false) + '</thead><tbody>';
+    diff.stored.forEach(function(d) {
+      var state = !scannedAny ? "neutral" : (diff.matched.indexOf(d) !== -1 ? "ok" : "missing");
+      var bg = state === "ok" ? "#ecfdf5" : state === "missing" ? "#fef2f2" : "transparent";
+      var status = state === "ok" ? '<span style="color:#059669;font-weight:700;">✓ found</span>'
+                 : state === "missing" ? '<span style="color:#dc2626;font-weight:700;">✗ missing</span>' : "";
+      html += '<tr style="background:' + bg + ';border-top:1px solid #eef2f7;">' +
+        '<td style="padding:5px 10px;font-size:12px;">' + status + '</td>' + idCells(d) + '</tr>';
+    });
+    html += '</tbody>' + tableClose();
+  }
+  if (diff.extra.length) {
+    html += '<div class="small" style="font-weight:700;margin-bottom:4px;color:#d97706;">Extra — scanned but not in registry (' + diff.extra.length + ')</div>';
+    html += tableOpen() + '<thead>' + headerRow("", true) + '</thead><tbody>';
+    boxAuditState.scanned.forEach(function(d, i) {
+      if (diff.extra.indexOf(d) === -1) return;
+      html += '<tr style="background:#fffbeb;border-top:1px solid #fde6b8;">' +
+        '<td style="padding:5px 10px;font-size:12px;color:#d97706;font-weight:700;">＋ extra</td>' + idCells(d) +
+        '<td style="padding:5px 6px;text-align:right;"><button class="danger" title="Remove this scan" ' +
+          'style="padding:0 6px;font-size:12px;line-height:1.4;" onclick="boxAuditRemoveScan(' + i + ')">✕</button></td></tr>';
+    });
+    html += '</tbody>' + tableClose();
+  }
+  var body = $("boxAuditBody"); if (body) body.innerHTML = html;
+}
+
+function boxAuditRecordOnly() { boxAuditCommit(false); }
+function boxAuditApplyUpdate() { boxAuditCommit(true); }
+
+// Commit the audit. `update` true → replace the box's contents with the
+// scanned set; either way, stamp an append-only audit record and, if a
+// location was entered/changed, update the box's last-known location.
+function boxAuditCommit(update) {
+  if (!boxAuditState) return;
+  var b = boxGet(boxAuditState.boxId);
+  if (!b) { boxAuditClose(); return; }
+  var diff = boxAuditComputeDiff();
+  var scannedAny = boxAuditState.scanned.length > 0;
+  var locInput = $("boxAuditLocation");
+  var newLoc = locInput ? normalize(sanitizeScannerValue(locInput.value, { uppercase: true })) : "";
+
+  var result;
+  if (update) {
+    if (!scannedAny) { alert("Scan the box's units before updating its contents."); return; }
+    boxSetDevices(b.boxId, boxAuditState.scanned, newLoc ? { location: newLoc } : {}, true);
+    result = "updated";
+  } else {
+    if (newLoc && newLoc !== normKey(b.location || "")) boxUpsert(b.boxId, { location: newLoc });
+    result = !scannedAny ? "located"
+           : (diff.missing.length === 0 && diff.extra.length === 0 ? "match" : "diff");
+  }
+  boxRecordAudit(b.boxId, result,
+    { matched: diff.matched.length, missing: diff.missing.length, extra: diff.extra.length },
+    newLoc || b.location || "");
+  if (typeof timFeedback === "function") timFeedback(result === "diff" ? "warn" : "ok");
+  invRenderBoxManager();
+  boxAuditClose();
+}
 function _boxRenderRegistryInto(list, summary) {
   if (!list) return;
   var boxes = boxAll().slice().sort(function(a, b) {
@@ -6749,15 +6994,32 @@ function _boxRenderRegistryInto(list, summary) {
     var bjs = chkJsStr(b.boxId);
     var editor = "";
     if (expanded) {
-      var deviceRows = n
-        ? boxDeviceList(b).map(function(d) {
-            var pk = boxDevPrimary(d);
-            return '<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:2px 4px 2px 8px;font-family:monospace;font-size:12px;">' +
-              escapeHtml(boxDevLabel(d)) + (d.partial ? ' <span title="Partial capture" style="color:#d97706;">⚠</span>' : '') +
-              '<button class="danger" title="Remove this device" style="padding:0 6px;font-size:12px;line-height:1.4;" ' +
-                'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(pk) + '\')">✕</button></span>';
-          }).join(" ")
-        : '<span style="color:#94a3b8">No devices in this box.</span>';
+      var deviceRows;
+      if (n) {
+        var devs = boxDeviceList(b);
+        var cols = boxActiveIdCols(devs);
+        var head = '<tr style="text-align:left;color:#64748b;font-size:11px;font-weight:700;">' +
+          cols.map(function(k) { return '<th style="padding:2px 10px;">' + escapeHtml(BOX_ID_COL_LABELS[k]) + '</th>'; }).join("") +
+          '<th style="width:36px;"></th></tr>';
+        var rows = devs.map(function(d) {
+          var pk = boxDevPrimary(d);
+          var tint = d.unverified ? "#fffbeb" : "transparent";
+          var cells = cols.map(function(k) {
+            var v = d[k] ? escapeHtml(d[k]) : '<span style="color:#cbd5e1;">—</span>';
+            return '<td style="padding:5px 10px;font-family:monospace;font-size:12px;white-space:nowrap;">' + v + '</td>';
+          }).join("");
+          var flags = (d.partial ? '<span title="Partial capture" style="color:#d97706;">⚠</span>' : '') +
+                      (d.unverified ? '<span title="Unverified — new association" style="color:#d97706;font-weight:700;font-size:10px;">NEW</span>' : '');
+          return '<tr style="background:' + tint + ';border-top:1px solid #eef2f7;">' + cells +
+            '<td style="padding:5px 6px;text-align:right;white-space:nowrap;">' + flags +
+              '<button class="danger" title="Remove this device" style="padding:0 6px;font-size:12px;line-height:1.4;margin-left:4px;" ' +
+                'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(pk) + '\')">✕</button></td></tr>';
+        }).join("");
+        deviceRows = '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">' +
+          '<thead>' + head + '</thead><tbody>' + rows + '</tbody></table></div>';
+      } else {
+        deviceRows = '<span style="color:#94a3b8">No devices in this box.</span>';
+      }
       editor =
         '<div style="margin:8px 0 4px;padding:10px;background:#f8fafc;border-radius:6px;">' +
           '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
@@ -6768,7 +7030,7 @@ function _boxRenderRegistryInto(list, summary) {
             '<button style="padding:4px 10px;font-size:12px;margin-left:auto;" onclick="boxCapOpen(\'' + bjs + '\')">Edit contents ▸</button>' +
           '</div>' +
           '<div class="small" style="font-weight:700;margin-bottom:4px;">Devices (' + n + ')</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">' + deviceRows + '</div>' +
+          '<div style="margin-bottom:8px;">' + deviceRows + '</div>' +
           '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
             '<input class="box-add-input" placeholder="Scan/type a serial to add" ' +
               'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:200px;" autocomplete="off" ' +
@@ -6784,6 +7046,7 @@ function _boxRenderRegistryInto(list, summary) {
         '<span class="small">' + qtyTxt + ' device(s)</span>' +
         (b.location ? '<span class="small">@ ' + escapeHtml(b.location) + '</span>' : "") +
         '<span style="margin-left:auto;display:flex;gap:6px;">' +
+          '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="boxAuditOpen(\'' + bjs + '\')">Audit ▸</button>' +
           '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerToggleContents(\'' + chkJsStr(key) + '\')">' +
             (expanded ? "Done" : "Edit") + '</button>' +
           '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="invBoxManagerDelete(\'' + bjs + '\')">Delete</button>' +
@@ -6791,6 +7054,7 @@ function _boxRenderRegistryInto(list, summary) {
       '</div>' + editor +
       '<div class="small" style="color:#94a3b8;margin-top:4px;">updated ' + invFormatDateTime(b.updatedAt) +
         (b.updatedBy ? " by " + escapeHtml(b.updatedBy) : "") + '</div>' +
+      boxAuditLastLabel(b) +
     '</div>';
   }).join("");
 }

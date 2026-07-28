@@ -423,6 +423,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxDevPrimary(dev)` / `boxDevKey(dev)` | Primary identifier (serial→fsan→mac) / its normKey — the device's identity |
 | `boxDevKeys(dev)` | All non-empty identifiers normalized (cross-field matching) |
 | `boxDevLabel(dev)` | Human label showing every captured id ("S/N … · FSAN … · MAC …") |
+| `boxActiveIdCols(devs)` / `BOX_ID_COL_LABELS` | Identifier columns actually in use across a device list (canonical order; serial-only box → just Serial) + their display labels. Drives the row/column device tables in the audit panel and the registry editor (v2.33.00) |
 | `boxResolveIdentifiers(value)` | Resolve a scanned id (serial/FSAN/MAC) → `{serial,fsan,mac}` of known siblings via `invBoxResolveDevice`, or null. Powers the modal's auto-fill |
 | `boxCapClassify(value)` | PATTERN-ONLY classify an unresolved scan → column key `serial\|fsan\|mac` (CXNK→fsan, formatted MAC→mac, else serial). Drives the unknown-device flow (v2.32.02) |
 | `boxCapLearnAssociation(dev)` | WRITE-BACK: a completed unknown association → `history.records` so it resolves globally next time. Fills an existing record's blank ids or creates a minimal `source_type:"box_learned"`, `status:"history_only"` row (resolves, never imports). ≥2 ids required (v2.32.02) |
@@ -432,6 +433,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxAddDevice(boxId, dev, fields)` | Add/merge a device (dedup+move by shared identifier). `boxAddSerial(boxId,serial,fields)` is a back-compat wrapper |
 | `boxSetDevices(boxId, devices, fields, markOpened)` | Replace contents; returns `{missing,extra}` diff by primary id; `markOpened` (default true) sets `opened`. `boxSetSerials` is a back-compat wrapper |
 | `boxFinalize(boxId)` / `boxReopen(boxId)` | Capture lifecycle: set `status` `ready` (fast-countable) / `capturing` (re-scan resumes) |
+| `boxRecordAudit(boxId, result, counts, location)` | Append a floor-audit record to `box.audit[]` (append-only; result `match`/`diff`/`updated`/`located`); bumps `updatedAt` (v2.33.00) |
+| `boxAuditLastLabel(b)` | One-line "last audited" label for the registry list (latest `audit[]` entry; empty if never audited) |
 | `boxDelete(boxId)` | Remove a box record |
 | `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB |
 
@@ -449,6 +452,19 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxCapCommitEntry(inputs,focusCol,resolved)` / `boxCapFocusEntry(ci)` | Read entry inputs → set `unverified` + learn if flagged → commit → clear → refresh → focus / focus a cell |
 | `boxCapCommitDevice(dev,resolved)` / `boxCapDeleteRow(idx)` | Add/merge a device into the in-modal list (tags `_auto` if resolved, clears `unverified`; else propagates it) / remove a committed row |
 | `boxCapPersist()` / `boxCapSaveNew()` / `boxCapSaveDone()` | Write devices to registry + finalize (no count events; pushes history to GitHub once if associations were learned) / save then fresh box (sticky cols) / save then close |
+
+**Box audit — floor verification (v2.33.00).** Deliberate scan-driven loop from the **Boxes tab** (`#boxAuditEntry`), NOT a sticky mode: scan a box → known box opens the audit panel (`#boxAuditModal`), unknown box → build via capture modal. Panel shows registry contents vs physical box, a rescan field + location field, and a live matched/missing/extra diff; commit as Record-audit (stamp only) or Update-to-match (replaces contents). Closing reverts focus to the tab scan field. Local-only → testing-mode-safe. Global `boxAuditState`.
+
+| Function | Purpose |
+|----------|---------|
+| `boxAuditScan(input)` | Boxes-tab entry: scan a box ID → `boxAuditOpen` if known, else offer `boxAuditBuildNew` |
+| `boxAuditBuildNew(id)` | Unknown box → open the capture modal seeded with the scanned ID |
+| `boxAuditOpen(boxId)` / `boxAuditClose()` | Open/close the audit panel (close reverts focus to the tab scan field for the next box) |
+| `boxAuditScanDevice(input)` | Rescan a physical unit into the audit set (resolve by any id; unresolved = pattern-classified extra); dual-channel feedback (`ok`/`verify`) |
+| `boxAuditRemoveScan(idx)` | Drop a mis-scanned unit from the audit set |
+| `boxAuditComputeDiff()` | Compare scanned set vs stored contents by shared identifier → `{stored, matched, missing, extra}` |
+| `boxAuditRender()` | Render registry contents (✓/✗ once scanning begins), extras, tally; enable Update only when something was scanned |
+| `boxAuditRecordOnly()` / `boxAuditApplyUpdate()` / `boxAuditCommit(update)` | Commit: stamp audit only / replace contents to match + stamp; updates `location` if changed |
 
 **Box scan mode (Phase 2)** — a 5th scan mode (`invScanMode === "box"`, mode barcode `##MBOX`). Capture a carton by scanning its ID then its device serials (relies on shipment being imported first, so a scan that doesn't resolve to a known device = a carton ID). Globals: `invActiveBox`, `invLastScannedBox`, `invBoxIsOverride`, `invBoxOverridePrior`.
 
