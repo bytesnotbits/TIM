@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.33.00";
+const APP_VERSION = "v2.33.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -3727,6 +3727,10 @@ var _timTonePatterns = {
   // the resolved-success tones (ok/serialized/box) and NOT the warn/error alarms —
   // it means "I placed this, but it's unknown; complete the association." (v2.32.02)
   verify:     [{ f: 1046, t: 0,    d: 0.07, v: 0.30 }, { f: 740, t: 0.075, d: 0.07, v: 0.30 }, { f: 1318, t: 0.15,  d: 0.13, v: 0.32 }],
+  // "Duplicate — already scanned": two soft, identical mid beeps ("again"). Clearly
+  // NOT the accepted-scan tone and NOT the warn/error alarm — a gentle "you already
+  // have this" nudge, paired with a row highlight (v2.33.01).
+  duplicate:  [{ f: 784,  t: 0,    d: 0.08, v: 0.24 }, { f: 784, t: 0.11,  d: 0.10, v: 0.22 }],
   manual:     [{ f: 523,  t: 0,    d: 0.08, v: 0.26, shape: "triangle" }, { f: 659, t: 0.09, d: 0.08, v: 0.26, shape: "triangle" },
                { f: 784,  t: 0.18, d: 0.14, v: 0.28, shape: "triangle" }],
   mode:       [{ f: 520,  t: 0,    d: 0.05, v: 0.16 }],
@@ -3881,6 +3885,7 @@ function timFeedback(type, toneVariant) {
                : "info";
   var tone = (t === "error")  ? "error"
            : (t === "verify") ? "verify"
+           : (t === "duplicate") ? "duplicate"   // distinct soft tone; no alarm flash (row highlight is the visual)
            : (severity === "warn") ? "warn"
            : (toneVariant || t);
   if (!_timTonePatterns[tone]) tone = (severity === "ok") ? "ok" : "info";
@@ -5799,6 +5804,34 @@ function boxDelete(boxId) {
   return false;
 }
 
+// Cross-box invariant helpers (v2.33.01) — a device lives in exactly one box.
+// Which OTHER box (not `exceptBoxId`) currently holds any of these identifiers.
+function boxOtherBoxFor(keys, exceptBoxId) {
+  var ex = boxNormId(exceptBoxId), found = null;
+  (keys || []).some(function(k) {
+    var bx = boxFindByIdentifier(k);
+    if (bx && boxNormId(bx.boxId) !== ex) { found = bx; return true; }
+    return false;
+  });
+  return found;
+}
+// Remove any device carrying one of `keys` from every box EXCEPT `exceptBoxId`
+// (enforces the single-box invariant for an approved move). Returns affected count.
+function boxStripFromOthers(keys, exceptBoxId) {
+  var ex = boxNormId(exceptBoxId), affected = 0;
+  Object.keys(appData.boxes || {}).forEach(function(bk) {
+    if (bk === ex) return;
+    var bx = appData.boxes[bk];
+    var before = boxDeviceList(bx).length;
+    bx.expectedDevices = boxDeviceList(bx).filter(function(d) {
+      return !boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; });
+    });
+    if (boxDeviceList(bx).length !== before) { bx.updatedAt = invNow(); bx.updatedBy = boxWho(); affected++; }
+  });
+  if (affected) boxSaveToStorage();
+  return affected;
+}
+
 // Capture lifecycle: "capturing" = open for scans (re-scan resumes);
 // "ready" = finalized, scanning it triggers a fast-count.
 function boxFinalize(boxId) {
@@ -6382,10 +6415,12 @@ function boxCapRenderRows() {
         (missing ? "color:#d97706;" : "") + '">' + (val ? escapeHtml(val) : "—") + '</div>';
     }).join("");
     var isNew = !!d.unverified;
+    var isDup = boxCapState.dupKey && boxDevKeys(d).indexOf(boxCapState.dupKey) !== -1;
     return '<div style="display:flex;gap:8px;align-items:center;padding:5px 4px;border-bottom:1px solid #f1f5f9;' +
-        (isNew ? "background:#fffbeb;" : "") + '">' +
+        (isDup ? "background:#fff7ed;outline:2px solid #f59e0b;outline-offset:-2px;border-radius:4px;" : isNew ? "background:#fffbeb;" : "") + '">' +
       cells +
       '<div style="width:96px;text-align:right;white-space:nowrap;">' +
+        (isDup ? '<span title="You just scanned this again — already in this box" style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-right:4px;">DUP</span>' : '') +
         (isNew ? '<span title="New device — verify the association" style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;margin-right:4px;">NEW</span>' : '') +
         (d._auto ? '<span title="Filled from the catalog" style="color:#0369a1;margin-right:4px;">⟲</span>' : '') +
         (d.partial ? '<span title="Partial — a required field was skipped" style="color:#d97706;margin-right:4px;">⚠</span>' : '') +
@@ -6419,6 +6454,7 @@ function boxCapEditRow(idx) {
   if (!boxCapState) return;
   var d = boxCapState.devices[idx];
   if (!d) return;
+  boxCapState.dupKey = "";
   boxCapState.devices.splice(idx, 1);
   boxCapState.entryUnverified = !!d.unverified;
   boxCapRenderAll();
@@ -6531,6 +6567,7 @@ function boxCapSaveRow() {
 // return focus to `focusCol`. `resolved` tags the row as catalog-filled (display
 // only — stripped on persist by boxNormDev).
 function boxCapCommitEntry(inputs, focusCol, resolved) {
+  boxCapState.dupKey = "";   // any new scan clears the previous duplicate highlight
   var dev = {}, any = false, partial = false;
   boxCapState.cols.forEach(function(k, i) {
     var raw = inputs[i] ? sanitizeScannerValue(inputs[i].value, { uppercase: true }) : "";
@@ -6545,26 +6582,58 @@ function boxCapCommitEntry(inputs, focusCol, resolved) {
   // was mid-flag; otherwise a flagged entry commits as an unknown to be reviewed.
   var unverified = !resolved && !!boxCapState.entryUnverified;
   if (unverified) dev.unverified = true;
-  boxCapCommitDevice(dev, resolved);
+
+  var keys = boxDevKeys(dev);
+  var alreadyHere = boxCapState.devices.some(function(d) {
+    return boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; });
+  });
+  // Cross-box invariant: only ask when this device is genuinely new to this build
+  // and currently lives in a DIFFERENT box. Never assume the move.
+  var movedNote = "";
+  if (!alreadyHere) {
+    var other = boxOtherBoxFor(keys, boxCapState.boxId);
+    if (other) {
+      var hereName = boxCapState.boxId || "this box";
+      if (!confirm('That device is currently in box "' + other.boxId + '".\n\nMove it here to box "' + hereName + '"?')) {
+        boxCapState.entryUnverified = false; boxCapSetEntryFlag(false);
+        for (var z = 0; z < inputs.length; z++) inputs[z].value = "";
+        boxCapRenderRows();
+        if (typeof invSetScanFeedback === "function")
+          invSetScanFeedback("Left in box " + other.boxId + " — not added here.", "info", "", "box");
+        boxCapFocusEntry(focusCol || 0);
+        return;
+      }
+      boxCapState.moveOut = boxCapState.moveOut || {};        // strip from the old box at save (discard-safe)
+      keys.forEach(function(k) { boxCapState.moveOut[k] = other.boxId; });
+      movedNote = "  (moving from box " + other.boxId + ")";
+    }
+  }
+
+  var res = boxCapCommitDevice(dev, resolved);
   // Write a completed new association back to history so it resolves globally.
-  var learned = unverified && boxCapLearnAssociation(dev);
+  var learned = unverified && !res.merged && boxCapLearnAssociation(dev);
   // Reset the entry-flag state for the next device.
   boxCapState.entryUnverified = false;
   boxCapSetEntryFlag(false);
   for (var j = 0; j < inputs.length; j++) inputs[j].value = "";
+  if (res.merged) boxCapState.dupKey = boxDevKey(res.dev);   // highlight the row already present
   boxCapRenderRows();
   var cnt = $("boxCapCount"); if (cnt) cnt.textContent = String(boxCapState.devices.length);
   var canSave = boxCapState.devices.length > 0;
   var nb = $("boxCapSaveNewBtn"); if (nb) nb.disabled = !canSave;
   var db = $("boxCapSaveDoneBtn"); if (db) db.disabled = !canSave;
-  if (typeof invSetScanFeedback === "function") {
+  if (res.merged) {
+    if (typeof timFeedback === "function") timFeedback("duplicate");
+    if (typeof invSetScanFeedback === "function")
+      invSetScanFeedback("Already scanned — " + boxDevLabel(boxNormDev(dev)) + " is already in this box.", "info", "", "box");
+  } else if (typeof invSetScanFeedback === "function") {
     if (unverified) {
       invSetScanFeedback("Saved NEW " + boxDevLabel(boxNormDev(dev)) +
         (learned ? " — learned for next time" : "") + (partial ? "  ⚠ partial" : "") +
         " · needs review", "verify", "", "box");
     } else {
       invSetScanFeedback((resolved ? "Resolved " : "Recorded ") + boxDevLabel(boxNormDev(dev)) +
-        (partial ? "  ⚠ partial" : ""), resolved || !partial ? "ok" : "warn", "", "box");
+        (partial ? "  ⚠ partial" : "") + movedNote, resolved || !partial ? "ok" : "warn", "", "box");
     }
   }
   boxCapFocusEntry(focusCol || 0);
@@ -6583,14 +6652,16 @@ function boxCapCommitDevice(dev, resolved) {
     boxMergeDev(existing, dev);
     if (resolved) { existing._auto = true; delete existing.unverified; }  // catalog-confirmed clears review flag
     else if (dev.unverified) existing.unverified = true;
-  } else {
-    if (resolved) dev._auto = true;
-    boxCapState.devices.push(dev);
+    return { merged: true, dev: existing };   // duplicate re-scan of a device already in this build
   }
+  if (resolved) dev._auto = true;
+  boxCapState.devices.push(dev);
+  return { merged: false, dev: dev };
 }
 
 function boxCapDeleteRow(idx) {
   if (!boxCapState) return;
+  boxCapState.dupKey = "";
   boxCapState.devices.splice(idx, 1);
   boxCapRenderAll();
   boxCapFocusEntry(0);
@@ -6602,6 +6673,13 @@ function boxCapPersist() {
   if (!boxCapState || !boxCapState.boxId) return null;
   // markOpened=false: building/editing a definition isn't an "opened box" audit event.
   boxSetDevices(boxCapState.boxId, boxCapState.devices, { source: "scanned" }, false);
+  // Enforce the single-box invariant for approved cross-box moves: strip every
+  // device now in this box out of any other box (declined moves were never added).
+  var savedKeys = [];
+  boxDeviceList(boxGet(boxCapState.boxId)).forEach(function(d) {
+    boxDevKeys(d).forEach(function(k) { if (savedKeys.indexOf(k) === -1) savedKeys.push(k); });
+  });
+  if (savedKeys.length) boxStripFromOthers(savedKeys, boxCapState.boxId);
   boxFinalize(boxCapState.boxId);
   // If this modal session learned any new associations, push history to GitHub ONCE
   // here (the natural "done with this box" boundary) rather than per device.
@@ -6764,7 +6842,9 @@ function invGateDiscardBox(boxId) {
   else invCloseOpenBoxGate();
 }
 var _invBoxMgrExpanded = {};   // boxKey -> true when its contents are shown
+var _boxEditorDup = { boxKey: "", keys: [] };   // transient duplicate highlight in the registry editor (v2.33.01)
 function invBoxManagerToggleContents(boxKey) {
+  _boxEditorDup = { boxKey: "", keys: [] };   // collapsing/opening clears any dup highlight
   _invBoxMgrExpanded[boxKey] = !_invBoxMgrExpanded[boxKey];
   invRenderBoxManager();
 }
@@ -6835,6 +6915,7 @@ function boxAuditScanDevice(input) {
   var raw = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
   if (!raw) { if (input) input.focus(); return; }
   if (input) input.value = "";
+  boxAuditState.dupKey = "";   // a new scan clears the previous duplicate highlight
   var resolved = boxResolveIdentifiers(raw), dev;
   if (resolved) {
     dev = boxNormDev(resolved);
@@ -6846,16 +6927,23 @@ function boxAuditScanDevice(input) {
   var hit = boxAuditState.scanned.filter(function(d) {
     return boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; });
   })[0];
-  if (hit) boxMergeDev(hit, dev);
-  else boxAuditState.scanned.push(dev);
-  // Feedback: known unit resolves = ok; an unresolved extra = verify tone.
-  if (typeof timFeedback === "function") timFeedback(resolved ? "ok" : "verify");
+  if (hit) {
+    // Already scanned this unit in this audit — flag it, distinct soft tone.
+    boxMergeDev(hit, dev);
+    boxAuditState.dupKey = boxDevKey(hit);
+    if (typeof timFeedback === "function") timFeedback("duplicate");
+  } else {
+    boxAuditState.scanned.push(dev);
+    // Known unit resolves = ok; an unresolved extra = verify tone.
+    if (typeof timFeedback === "function") timFeedback(resolved ? "ok" : "verify");
+  }
   boxAuditRender();
   if (input) input.focus();
 }
 
 function boxAuditRemoveScan(idx) {
   if (!boxAuditState) return;
+  boxAuditState.dupKey = "";
   boxAuditState.scanned.splice(idx, 1);
   boxAuditRender();
   var s = $("boxAuditScanInput"); if (s) s.focus();
@@ -6921,9 +7009,12 @@ function boxAuditRender() {
     diff.stored.forEach(function(d) {
       var state = !scannedAny ? "neutral" : (diff.matched.indexOf(d) !== -1 ? "ok" : "missing");
       var bg = state === "ok" ? "#ecfdf5" : state === "missing" ? "#fef2f2" : "transparent";
-      var status = state === "ok" ? '<span style="color:#059669;font-weight:700;">✓ found</span>'
+      var isDup = boxAuditState.dupKey && boxDevKeys(d).indexOf(boxAuditState.dupKey) !== -1;
+      var status = isDup ? '<span style="color:#b45309;font-weight:700;">⟳ again</span>'
+                 : state === "ok" ? '<span style="color:#059669;font-weight:700;">✓ found</span>'
                  : state === "missing" ? '<span style="color:#dc2626;font-weight:700;">✗ missing</span>' : "";
-      html += '<tr style="background:' + bg + ';border-top:1px solid #eef2f7;">' +
+      var extra = isDup ? "outline:2px solid #f59e0b;outline-offset:-2px;" : "";
+      html += '<tr style="background:' + bg + ';border-top:1px solid #eef2f7;' + extra + '">' +
         '<td style="padding:5px 10px;font-size:12px;">' + status + '</td>' + idCells(d) + '</tr>';
     });
     html += '</tbody>' + tableClose();
@@ -6933,8 +7024,10 @@ function boxAuditRender() {
     html += tableOpen() + '<thead>' + headerRow("", true) + '</thead><tbody>';
     boxAuditState.scanned.forEach(function(d, i) {
       if (diff.extra.indexOf(d) === -1) return;
-      html += '<tr style="background:#fffbeb;border-top:1px solid #fde6b8;">' +
-        '<td style="padding:5px 10px;font-size:12px;color:#d97706;font-weight:700;">＋ extra</td>' + idCells(d) +
+      var isDup = boxAuditState.dupKey && boxDevKeys(d).indexOf(boxAuditState.dupKey) !== -1;
+      var extra = isDup ? "outline:2px solid #f59e0b;outline-offset:-2px;" : "";
+      html += '<tr style="background:#fffbeb;border-top:1px solid #fde6b8;' + extra + '">' +
+        '<td style="padding:5px 10px;font-size:12px;color:#d97706;font-weight:700;">' + (isDup ? "⟳ again" : "＋ extra") + '</td>' + idCells(d) +
         '<td style="padding:5px 6px;text-align:right;"><button class="danger" title="Remove this scan" ' +
           'style="padding:0 6px;font-size:12px;line-height:1.4;" onclick="boxAuditRemoveScan(' + i + ')">✕</button></td></tr>';
     });
@@ -6961,7 +7054,22 @@ function boxAuditCommit(update) {
   var result;
   if (update) {
     if (!scannedAny) { alert("Scan the box's units before updating its contents."); return; }
+    // Cross-box invariant: if any scanned unit is registered to another box,
+    // updating moves it here — ask once before doing so.
+    var scannedKeys = [];
+    boxAuditState.scanned.forEach(function(d) {
+      boxDevKeys(d).forEach(function(k) { if (scannedKeys.indexOf(k) === -1) scannedKeys.push(k); });
+    });
+    var otherBoxes = [];
+    scannedKeys.forEach(function(k) {
+      var bx = boxFindByIdentifier(k);
+      if (bx && boxNormId(bx.boxId) !== boxNormId(b.boxId) && otherBoxes.indexOf(bx.boxId) === -1) otherBoxes.push(bx.boxId);
+    });
+    if (otherBoxes.length && !confirm(
+        "Some scanned units are currently registered to other box(es): " + otherBoxes.join(", ") + ".\n\n" +
+        'Updating will MOVE them into box "' + b.boxId + '". Continue?')) return;
     boxSetDevices(b.boxId, boxAuditState.scanned, newLoc ? { location: newLoc } : {}, true);
+    if (otherBoxes.length) boxStripFromOthers(scannedKeys, b.boxId);
     result = "updated";
   } else {
     if (newLoc && newLoc !== normKey(b.location || "")) boxUpsert(b.boxId, { location: newLoc });
@@ -7003,14 +7111,18 @@ function _boxRenderRegistryInto(list, summary) {
           '<th style="width:36px;"></th></tr>';
         var rows = devs.map(function(d) {
           var pk = boxDevPrimary(d);
-          var tint = d.unverified ? "#fffbeb" : "transparent";
+          var isDup = _boxEditorDup.boxKey === boxNormId(b.boxId) &&
+                      boxDevKeys(d).some(function(k) { return _boxEditorDup.keys.indexOf(k) !== -1; });
+          var tint = isDup ? "#fff7ed" : d.unverified ? "#fffbeb" : "transparent";
+          var outline = isDup ? "outline:2px solid #f59e0b;outline-offset:-2px;" : "";
           var cells = cols.map(function(k) {
             var v = d[k] ? escapeHtml(d[k]) : '<span style="color:#cbd5e1;">—</span>';
             return '<td style="padding:5px 10px;font-family:monospace;font-size:12px;white-space:nowrap;">' + v + '</td>';
           }).join("");
-          var flags = (d.partial ? '<span title="Partial capture" style="color:#d97706;">⚠</span>' : '') +
+          var flags = (isDup ? '<span title="You just scanned this again — already in this box" style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:8px;">DUP</span> ' : '') +
+                      (d.partial ? '<span title="Partial capture" style="color:#d97706;">⚠</span>' : '') +
                       (d.unverified ? '<span title="Unverified — new association" style="color:#d97706;font-weight:700;font-size:10px;">NEW</span>' : '');
-          return '<tr style="background:' + tint + ';border-top:1px solid #eef2f7;">' + cells +
+          return '<tr style="background:' + tint + ';border-top:1px solid #eef2f7;' + outline + '">' + cells +
             '<td style="padding:5px 6px;text-align:right;white-space:nowrap;">' + flags +
               '<button class="danger" title="Remove this device" style="padding:0 6px;font-size:12px;line-height:1.4;margin-left:4px;" ' +
                 'onclick="invBoxRemoveSerial(\'' + bjs + '\',\'' + chkJsStr(pk) + '\')">✕</button></td></tr>';
@@ -7149,6 +7261,19 @@ function invBoxRemoveSerial(boxId, serial) {
 
 // Add a device to a box (manager editor). Resolves serial/FSAN/MAC, moves it
 // out of any other box, and creates a count event for the current session.
+// Focus a box's "add device" field again after a render (both surfaces).
+function _boxAddFocus(boxId) {
+  var key = boxNormId(boxId);
+  ["invBoxManagerList", "boxTabList"].forEach(function(id) {
+    var lst = $(id); if (!lst) return;
+    var panels = lst.querySelectorAll("[data-boxkey]");
+    for (var i = 0; i < panels.length; i++) {
+      if (panels[i].getAttribute("data-boxkey") === key) {
+        var ai = panels[i].querySelector(".box-add-input"); if (ai) ai.focus(); return;
+      }
+    }
+  });
+}
 function invBoxAddSerialManual(boxId, btn) {
   var inp = btn && btn.parentElement ? btn.parentElement.querySelector(".box-add-input") : null;
   var val = sanitizeScannerValue(inp ? inp.value : "", { uppercase: true });
@@ -7158,6 +7283,32 @@ function invBoxAddSerialManual(boxId, btn) {
   var rec    = invBoxResolveDevice(val);
   var serial = rec ? normalize(rec.serial || rec.ref || val) : val;
   var fsan   = rec ? normalize(rec.fsan   || rec.name || "") : "";
+  var mac    = rec ? normalize(rec.mac_address || rec.mac || "") : "";
+  var keys = [];
+  [serial, fsan, mac].forEach(function(v) { var k = normKey(v); if (k && keys.indexOf(k) === -1) keys.push(k); });
+  if (!keys.length && normKey(val)) keys.push(normKey(val));
+
+  // Already in THIS box → duplicate: distinct tone + highlight, don't re-add.
+  var hereDup = boxDeviceList(b).some(function(d) { return boxDevKeys(d).some(function(k) { return keys.indexOf(k) !== -1; }); });
+  if (hereDup) {
+    _boxEditorDup = { boxKey: boxNormId(boxId), keys: keys };
+    if (typeof timFeedback === "function") timFeedback("duplicate");
+    if (inp) inp.value = "";
+    invRenderBoxManager(); invBoxRenderBar();
+    invSetScanFeedback("Already in box " + b.boxId + " — " + (serial || fsan || val) + " not added again.", "info", "", "box");
+    _boxAddFocus(boxId);
+    return;
+  }
+  // In a DIFFERENT box → ask before moving. Never assume.
+  var other = boxOtherBoxFor(keys, boxId);
+  if (other && !confirm('That device is currently in box "' + other.boxId + '".\n\nMove it here to box "' + b.boxId + '"?')) {
+    if (inp) inp.value = "";
+    invRenderBoxManager(); invBoxRenderBar();
+    invSetScanFeedback("Left in box " + other.boxId + " — not added here.", "info", "", "box");
+    _boxAddFocus(boxId);
+    return;
+  }
+  _boxEditorDup = { boxKey: "", keys: [] };   // a real add clears any prior dup highlight
   boxAddSerial(boxId, serial, {});   // dedup + move-from-other-box (registry)
   if (invSession) {
     // Keep the count event in sync with the registry. If this device is already
@@ -7188,16 +7339,7 @@ function invBoxAddSerialManual(boxId, btn) {
   invRenderBoxManager();
   invBoxRenderBar();
   // Restore focus to this box's add field so several devices can be added in a row.
-  var lst = $("invBoxManagerList");
-  if (lst) {
-    var panels = lst.querySelectorAll("[data-boxkey]");
-    for (var i = 0; i < panels.length; i++) {
-      if (panels[i].getAttribute("data-boxkey") === boxNormId(boxId)) {
-        var ai = panels[i].querySelector(".box-add-input"); if (ai) ai.focus();
-        break;
-      }
-    }
-  }
+  _boxAddFocus(boxId);
 }
 
 function invBoxClearActive() {

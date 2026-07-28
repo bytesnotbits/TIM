@@ -435,6 +435,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxFinalize(boxId)` / `boxReopen(boxId)` | Capture lifecycle: set `status` `ready` (fast-countable) / `capturing` (re-scan resumes) |
 | `boxRecordAudit(boxId, result, counts, location)` | Append a floor-audit record to `box.audit[]` (append-only; result `match`/`diff`/`updated`/`located`); bumps `updatedAt` (v2.33.00) |
 | `boxAuditLastLabel(b)` | One-line "last audited" label for the registry list (latest `audit[]` entry; empty if never audited) |
+| `boxOtherBoxFor(keys, exceptBoxId)` | Single-box invariant: which OTHER box currently holds any of these identifiers (drives the "ask before moving" prompt), or null (v2.33.01) |
+| `boxStripFromOthers(keys, exceptBoxId)` | Remove those identifiers from every box except one (executes an approved cross-box move); returns affected-box count (v2.33.01) |
 | `boxDelete(boxId)` | Remove a box record |
 | `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB |
 
@@ -454,6 +456,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxCapPersist()` / `boxCapSaveNew()` / `boxCapSaveDone()` | Write devices to registry + finalize (no count events; pushes history to GitHub once if associations were learned) / save then fresh box (sticky cols) / save then close |
 
 **Box audit — floor verification (v2.33.00).** Deliberate scan-driven loop from the **Boxes tab** (`#boxAuditEntry`), NOT a sticky mode: scan a box → known box opens the audit panel (`#boxAuditModal`), unknown box → build via capture modal. Panel shows registry contents vs physical box, a rescan field + location field, and a live matched/missing/extra diff; commit as Record-audit (stamp only) or Update-to-match (replaces contents). Closing reverts focus to the tab scan field. Local-only → testing-mode-safe. Global `boxAuditState`.
+
+**Duplicate feedback + single-box invariant across box workflows (v2.33.01).** In all three current-generation box-building surfaces — the **capture modal** (`boxCapCommitEntry`), the **audit rescan** (`boxAuditScanDevice`), and the **registry editor add** (`invBoxAddSerialManual`) — re-scanning a device already present is no longer silent: it plays the distinct `duplicate` tone (soft double-beep, not the accepted-scan tone and not the warn/error alarm) and highlights the existing row (amber outline + DUP/⟳ badge). The highlight clears on the next scan or on save/close/discard (transient `dupKey` on the modal/audit state; `_boxEditorDup` for the editor). A device may live in only ONE box: when a scan matches a device in a *different* box the user is **asked** whether to move it (`boxOtherBoxFor` → confirm), never assumed — decline leaves it; approve moves it (`boxStripFromOthers`). In the capture modal the move is deferred to Save so discarding the build is safe; audit "Update to match" asks once for all cross-box collisions before writing. (The legacy in-session box mode was intentionally excluded — retirement candidate.)
 
 | Function | Purpose |
 |----------|---------|
