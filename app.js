@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.36.00";
+const APP_VERSION = "v2.36.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -898,7 +898,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.product_movements)) { appData.product_movements = parsed.product_movements; rcMoveMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (Array.isArray(parsed.nisc_capture))      { appData.nisc_capture      = parsed.nisc_capture;      rcNiscMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
-  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); }
+  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); if (typeof invRenderBoxManager === "function") invRenderBoxManager(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -10434,7 +10434,18 @@ function timLoadMasterCache() {
     // cache; running it earlier would persist a half-restored payload (empty boxes/quants).
     if (parsed.recount_sessions || parsed.recount_movements) rcLoadFromAppData();
     return hadData;
-  }).catch(function() { return false; });
+  })
+  // Boxes live in their own authoritative store (tim_boxes_v1), written on every
+  // mutation. Load them from there AFTER the master-cache restore so the
+  // authoritative set — not the possibly-staler cache snapshot applied above —
+  // is in memory before the GitHub merge reads appData.boxes as its local base.
+  // This removes the boot race where the large master-cache read could resolve
+  // last and clobber freshly-loaded boxes. If tim_boxes_v1 is empty (fresh
+  // install), boxLoadFromStorage leaves the cache-provided boxes as a fallback.
+  .then(function(hadData) {
+    return boxLoadFromStorage().then(function() { return hadData; }, function() { return hadData; });
+  })
+  .catch(function() { return false; });
 }
 
 // Render the UI from already-restored (in-memory) data. Used on boot when no
@@ -13294,6 +13305,11 @@ invLoadLocationMap();
 // left mid-capture (e.g. interrupted by a reload) in the blocking open-box gate.
 Promise.all([_invRestoreP, boxLoadFromStorage()]).then(function() {
   invShowOpenBoxGate();
+  // Box data loads async from IndexedDB. If the Boxes screen was already
+  // rendered at load (restored active tab) it did so against an empty registry
+  // and showed "No boxes captured yet"; re-render now that boxes are in memory
+  // so the count is correct without the user having to leave and return.
+  if (typeof invRenderBoxManager === "function") invRenderBoxManager();
 }).catch(function() {});
 chkLoadState();
 catLoadState().then(niUpdateStatus).catch(function(){});
