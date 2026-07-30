@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.35.00";
+const APP_VERSION = "v2.36.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5433,6 +5433,27 @@ function invSetScanFeedback(message, type, activityDetail, beepType) {
 }
 
 // -- Individual scan handlers --------------------------------------
+// Phase 1 box-lifecycle (v2.36.00): a device counted LOOSE — a normal
+// individual serialized scan, NOT a box fast-count or capture — that belongs to
+// a registered box means that box has been opened and its devices are escaping
+// into the general count. Flag the box `opened` (so a later sealed fast-count
+// won't blindly trust a now-broken manifest, and so Phase 2 reconciliation can
+// act on it) and return its ID for the caller to stamp on the count event as
+// `formerBoxId`, preserving "was in box X, counted individually" as provenance.
+// Non-destructive: the manifest is left intact here — dedup still prevents
+// double-counting if the box itself is scanned later this session.
+function invBoxNoteLooseCount(serial, fsan) {
+  var b = boxFindByIdentifier(serial) || boxFindByIdentifier(fsan);
+  if (!b) return "";
+  if (!b.opened) {
+    b.opened = true;
+    b.updatedAt = invNow();
+    b.updatedBy = boxWho();
+    boxSaveToStorage();   // persists + schedules the box GitHub push
+  }
+  return b.boxId;
+}
+
 function invHandleSerializedScan(value, scanType, contextItem, notes, location) {
   var vKey = normKey(value);
   var serial = "", fsan = "", histRecord = null;
@@ -5486,7 +5507,11 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
     return false;
   }
 
-  invCreateEvent("serialized_device_scan", {
+  // If this loose-counted device belongs to a registered box, that box has been
+  // opened — flag it and record the former association on the event (Phase 1).
+  var formerBoxId = invBoxNoteLooseCount(serial || value, fsan);
+
+  var evtData = {
     scanType:     scanType,
     scannedValue: value,
     serial:       serial || (scanType === "serial" ? value : ""),
@@ -5496,13 +5521,16 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
     location:     location || "",
     qty:          1,
     notes:        notes
-  });
+  };
+  if (formerBoxId) evtData.formerBoxId = formerBoxId;
+  invCreateEvent("serialized_device_scan", evtData);
 
   var detail = description ? " (" + description + ")" : "";
   var ids = [];
   if (serial) ids.push("S/N: " + serial);
   if (fsan)   ids.push("FSAN: " + fsan);
-  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : ""), "ok", "", "serialized");
+  var boxNote = formerBoxId ? "  (was in box " + formerBoxId + " — box flagged opened)" : "";
+  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : "") + boxNote, "ok", "", "serialized");
   return true;
 }
 

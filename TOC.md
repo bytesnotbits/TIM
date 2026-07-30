@@ -510,7 +510,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 
 | Function | Purpose |
 |----------|---------|
-| `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception |
+| `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception; loose scan of a box member stamps `formerBoxId` + flags the box opened (v2.36.00) |
+| `invBoxNoteLooseCount(serial, fsan)` | Phase 1 box lifecycle: a box member counted loose → flag its box `opened`, return box ID for `formerBoxId` stamp (v2.36.00) |
 | `invHandleBoxScan(boxId, ctx, notes, loc)` | Sealed fast-count of a known box (see Box Registry section) |
 | `invHandleBulkCount(itemNum, qty, notes, loc)` | Record bulk quantity count |
 | `invHandleMacScan(mac, ctx, notes, loc)` | Process MAC scan → resolve → serial handler |
