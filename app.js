@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.36.01";
+const APP_VERSION = "v2.37.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -12277,6 +12277,284 @@ function rcRenderList() {
   }).join("");
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// BOX RECONCILIATION (Phase 2 box-lifecycle) — see [[project-box-counting]]
+// A deliberate "Reconcile boxes" step in the recount manager. Boxes get used
+// up during teardown with no "update TIM first" step, so registry drift is
+// reconciled BY THE COUNT rather than maintained at teardown. Two corroborating
+// sources: the serialized count (silence) + Odoo/NISC expected quants. Runs
+// post-finalize, off appData.inventory_events (counts survive close), so it
+// aggregates a count that spanned several sessions in one recount cycle.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Transient (not persisted): last computed reconciliation for the active session.
+var boxReconcileState = null;   // { recountId, results:[classification], meta }
+
+// Gather the two count-derived identifier sets + the Odoo-expected set.
+//  - loose:  counted individually (event lacks fromSealedBox) → the box was OPENED
+//  - sealed: counted via a sealed fast-count (fromSealedBox:true) → box counted INTACT
+//  - expected: serial/lot appears anywhere in the Odoo quants baseline (location ignored)
+// Scope: the inventory session(s) feeding this recount cycle (parentId + any inv
+// session sharing cycleId), plus the live invEvents. Falls back to ALL finalized
+// serialized events when the cycle can't be identified (disclosed in the UI).
+function boxReconcileGatherCounts(session) {
+  var sessIds = {};
+  if (session) {
+    if (session.parentId) sessIds[session.parentId] = true;
+    if (session.cycleId) {
+      (appData.inventory_sessions || []).forEach(function(s) {
+        if (s && s.cycleId && s.cycleId === session.cycleId) sessIds[s.sessionId] = true;
+      });
+    }
+  }
+  var scoped = Object.keys(sessIds).length > 0;
+
+  var loose = {}, sealed = {}, countStart = null;
+  var allEvents = (appData.inventory_events || []).concat(invEvents || []);
+  allEvents.forEach(function(e) {
+    if (!e || e.status === "voided") return;
+    if (e.eventType !== "serialized_device_scan") return;
+    if (scoped && !sessIds[e.sessionId]) return;
+    if (e.timestamp && (countStart === null || e.timestamp < countStart)) countStart = e.timestamp;
+    var bucket = e.fromSealedBox ? sealed : loose;
+    [e.serial, e.fsan, e.mac_address, e.mac, e.scannedValue].forEach(function(v) {
+      var k = normKey(v); if (k) bucket[k] = true;
+    });
+  });
+
+  var expected = {};
+  (invQuantsBaseline || []).forEach(function(q) {
+    var k = normKey(q && q.lotId);
+    if (k) expected[k] = true;
+  });
+
+  return {
+    loose: loose, sealed: sealed, expected: expected,
+    scoped: scoped, sessionIds: Object.keys(sessIds), countStart: countStart,
+    looseCount: Object.keys(loose).length, sealedCount: Object.keys(sealed).length,
+    expectedCount: Object.keys(expected).length
+  };
+}
+
+// Classify a single box against the gathered counts. Pure — no mutation.
+// Per-device buckets, then a box disposition. Precedence (Joe-confirmed 2026-07-30):
+//   1. any loose-counted  → open_trim  (box was opened; unaccounted listed as flags)
+//   2. any unaccounted    → review     (shrinkage/loss signal — NEVER auto)
+//   3. any sealed-counted → intact     (counted whole via fast-count; leave alone)
+//   4. else               → dissolve   (both sources agree gone; tombstone)
+function boxReconcileClassify(box, counts) {
+  var buckets = { looseCounted: [], sealedCounted: [], unaccounted: [], gone: [] };
+  boxDeviceList(box).forEach(function(d) {
+    var keys = boxDevKeys(d);
+    if (keys.some(function(k){ return counts.loose[k]; }))        buckets.looseCounted.push(d);
+    else if (keys.some(function(k){ return counts.sealed[k]; }))  buckets.sealedCounted.push(d);
+    else if (keys.some(function(k){ return counts.expected[k]; }))buckets.unaccounted.push(d);
+    else                                                          buckets.gone.push(d);
+  });
+
+  var disposition;
+  if (buckets.looseCounted.length)        disposition = "open_trim";
+  else if (buckets.unaccounted.length)    disposition = "review";
+  else if (buckets.sealedCounted.length)  disposition = "intact";
+  else                                    disposition = "dissolve";
+
+  return { box: box, boxKey: boxNormId(box.boxId), disposition: disposition, buckets: buckets };
+}
+
+// Compute classifications for every live box. Boxes created AFTER the count
+// started are excluded from auto-action (they weren't part of this sweep) — a
+// freshly-built, not-yet-counted box must never be auto-dissolved.
+function boxReconcileCompute(session) {
+  var counts = boxReconcileGatherCounts(session);
+  var results = [], skipped = [];
+  boxAll().forEach(function(b) {
+    if (counts.countStart && b.createdAt && b.createdAt > counts.countStart) {
+      skipped.push({ box: b, boxKey: boxNormId(b.boxId), disposition: "skipped_new", buckets: null });
+      return;
+    }
+    results.push(boxReconcileClassify(b, counts));
+  });
+  return { results: results, skipped: skipped, counts: counts };
+}
+
+function boxReconcileRun(recountId) {
+  var session = rcSessions.find(function(s){ return s.recountId === recountId; });
+  if (!session) return;
+  var computed = boxReconcileCompute(session);
+  boxReconcileState = { recountId: recountId, results: computed.results, skipped: computed.skipped, meta: computed.counts };
+  rcRenderDetail();
+}
+
+// Commit one classification. dissolve → tombstone; open_trim → mark opened and
+// drop ONLY confirmed-gone devices (keep counted + still-expected as the box's
+// persistent shrinkage record). Both persist + push via the box data layer.
+function _boxReconcileCommitOne(c) {
+  if (!c || !c.box) return false;
+  if (c.disposition === "dissolve") return boxDelete(c.box.boxId);
+  if (c.disposition === "open_trim" || c.disposition === "open") {
+    var kept = c.buckets.looseCounted.concat(c.buckets.sealedCounted, c.buckets.unaccounted);
+    boxSetDevices(c.box.boxId, kept, {}, true);   // markOpened=true
+    return true;
+  }
+  return false;
+}
+
+// Apply every auto-tier action (dissolve + open_trim) in one pass.
+function boxReconcileApplyAuto(recountId) {
+  if (!boxReconcileState || boxReconcileState.recountId !== recountId) return;
+  var auto = boxReconcileState.results.filter(function(c){
+    return c.disposition === "dissolve" || c.disposition === "open_trim";
+  });
+  if (!auto.length) return;
+  auto.forEach(function(c){ _boxReconcileCommitOne(c); });
+  boxReconcileRun(recountId);   // recompute + rerender against the new state
+}
+
+// Per-box manual action (review rows + individual overrides): "dissolve" |
+// "open" (mark opened, trim gone) | "leave" (acknowledge, no mutation).
+function boxReconcileActOne(recountId, boxKey, action) {
+  if (!boxReconcileState || boxReconcileState.recountId !== recountId) return;
+  var c = boxReconcileState.results.find(function(x){ return x.boxKey === boxKey; });
+  if (!c) return;
+  if (action === "dissolve")      boxDelete(c.box.boxId);
+  else if (action === "open")     _boxReconcileCommitOne({ box: c.box, disposition: "open", buckets: c.buckets });
+  else if (action === "leave")    { /* acknowledge only; no data change */ }
+  boxReconcileRun(recountId);
+}
+
+function _boxReconcileDevLabel(d) {
+  var s = escapeHtml(d.serial || "");
+  var f = escapeHtml(d.fsan || "");
+  if (s && f) return '<span style="font-family:monospace;">' + s + '</span> <span style="color:#94a3b8;">/ ' + f + '</span>';
+  return '<span style="font-family:monospace;">' + (s || f || escapeHtml(d.mac || "?")) + '</span>';
+}
+
+function _boxReconcileDevList(devs) {
+  if (!devs || !devs.length) return "";
+  return devs.map(_boxReconcileDevLabel).join(", ");
+}
+
+// Render the reconciliation panel into the recount detail view.
+function boxReconcileRenderPanel(session) {
+  var sid   = session.recountId.slice(-6);
+  var colId = "rcBoxRec_" + sid, hdrId = "rcBoxRecHdr_" + sid, chvId = "rcBoxRecChv_" + sid;
+  var boxCount = boxAll().length;
+
+  var body;
+  if (!boxReconcileState || boxReconcileState.recountId !== session.recountId) {
+    body = '<div style="color:#64748b;font-size:13px;padding:6px 0;">' +
+      'Cross-references the serialized count against the box registry (' + boxCount + ' box' + (boxCount === 1 ? '' : 'es') + ') and Odoo quants. ' +
+      'Finalize the count first — this reads counted serials from saved sessions.' +
+      '</div>' +
+      '<button class="secondary" onclick="boxReconcileRun(\'' + session.recountId + '\')" style="margin-top:4px;">Run box reconciliation</button>';
+  } else {
+    body = boxReconcileRenderResults(session);
+  }
+
+  return '<div style="margin-top:16px;">' +
+    '<div class="collapsible-header" id="' + hdrId + '" onclick="toggleCollapsible(\'' + colId + '\',\'' + hdrId + '\',\'' + chvId + '\')" style="padding:8px 0;border-bottom:1px solid #e2e8f0;">' +
+      '<b style="font-size:13px;">Box Reconciliation</b>' +
+      '<svg id="' + chvId + '" class="collapsible-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>' +
+    '</div>' +
+    '<div id="' + colId + '" class="collapsible-body" style="padding-top:8px;">' + body + '</div>' +
+  '</div>';
+}
+
+function boxReconcileRenderResults(session) {
+  var st   = boxReconcileState;
+  var meta = st.meta || {};
+  var results = st.results || [];
+  var recId = session.recountId;
+
+  var byDisp = { dissolve: [], open_trim: [], review: [], intact: [] };
+  results.forEach(function(c){ if (byDisp[c.disposition]) byDisp[c.disposition].push(c); });
+  var autoCount = byDisp.dissolve.length + byDisp.open_trim.length;
+
+  var html = '';
+
+  // Scope / source disclosure
+  html += '<div class="small" style="color:#64748b;margin-bottom:10px;">' +
+    (meta.scoped ? 'Counts from ' + meta.sessionIds.length + ' session(s) in this recount cycle. ' : '<b style="color:#b45309;">Cycle not identified — using ALL finalized serialized counts.</b> ') +
+    meta.looseCount + ' counted loose, ' + meta.sealedCount + ' sealed-counted, ' + meta.expectedCount + ' Odoo-expected serials considered.' +
+    (meta.countStart ? ' Count start: ' + new Date(meta.countStart).toLocaleDateString() + '.' : '') +
+    '</div>';
+
+  // ── Automatic actions ──
+  html += '<div style="margin-bottom:6px;display:flex;align-items:center;gap:10px;">' +
+    '<b style="font-size:12px;">Automatic (' + autoCount + ')</b>' +
+    (autoCount ? '<button onclick="boxReconcileApplyAuto(\'' + recId + '\')" style="font-size:12px;padding:3px 12px;">Apply all auto-actions</button>' : '') +
+    '<button class="secondary" onclick="boxReconcileRun(\'' + recId + '\')" style="font-size:12px;padding:3px 12px;">Refresh</button>' +
+    '</div>';
+  if (!autoCount) {
+    html += '<div style="color:#94a3b8;font-size:13px;padding:2px 0 10px;">Nothing to auto-reconcile.</div>';
+  } else {
+    html += '<div class="scroll"><table style="font-size:13px;margin-bottom:12px;"><thead><tr><th>Box</th><th>Action</th><th>Detail</th><th></th></tr></thead><tbody>';
+    byDisp.dissolve.forEach(function(c){
+      html += '<tr>' +
+        '<td style="font-family:monospace;">' + escapeHtml(c.box.boxId) + '</td>' +
+        '<td><span style="color:#b91c1c;font-weight:600;">Dissolve</span></td>' +
+        '<td style="max-width:280px;white-space:normal;color:#64748b;">' + c.buckets.gone.length + ' device(s) gone, none Odoo-expected. Tombstoned (restorable).</td>' +
+        '<td><button class="secondary" onclick="boxReconcileActOne(\'' + recId + '\',\'' + c.boxKey + '\',\'leave\')" style="padding:2px 8px;font-size:11px;">Skip</button></td>' +
+        '</tr>';
+    });
+    byDisp.open_trim.forEach(function(c){
+      var flags = c.buckets.unaccounted.length
+        ? '<div style="color:#b45309;margin-top:3px;">&#9888; ' + c.buckets.unaccounted.length + ' unaccounted (Odoo still expects): ' + _boxReconcileDevList(c.buckets.unaccounted) + '</div>'
+        : '';
+      html += '<tr>' +
+        '<td style="font-family:monospace;">' + escapeHtml(c.box.boxId) + '</td>' +
+        '<td><span style="color:#d97706;font-weight:600;">Open + trim</span></td>' +
+        '<td style="max-width:280px;white-space:normal;color:#64748b;">' +
+          c.buckets.looseCounted.length + ' counted loose, ' + c.buckets.gone.length + ' gone (dropped).' + flags +
+        '</td>' +
+        '<td><button class="secondary" onclick="boxReconcileActOne(\'' + recId + '\',\'' + c.boxKey + '\',\'leave\')" style="padding:2px 8px;font-size:11px;">Skip</button></td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // ── Needs review (shrinkage) ──
+  html += '<div style="margin:8px 0 6px;"><b style="font-size:12px;color:#b45309;">Needs review — possible shrinkage (' + byDisp.review.length + ')</b></div>';
+  if (!byDisp.review.length) {
+    html += '<div style="color:#94a3b8;font-size:13px;padding:2px 0 10px;">No unaccounted boxes. &#128077;</div>';
+  } else {
+    html += '<div class="scroll"><table style="font-size:13px;margin-bottom:12px;"><thead><tr><th>Box</th><th>Unaccounted (Odoo expects, not counted)</th><th>Actions</th></tr></thead><tbody>';
+    byDisp.review.forEach(function(c){
+      html += '<tr>' +
+        '<td style="font-family:monospace;">' + escapeHtml(c.box.boxId) + '</td>' +
+        '<td style="max-width:340px;white-space:normal;">' + _boxReconcileDevList(c.buckets.unaccounted) +
+          (c.buckets.gone.length ? '<div class="small" style="color:#94a3b8;margin-top:2px;">+' + c.buckets.gone.length + ' gone (not expected)</div>' : '') +
+        '</td>' +
+        '<td style="white-space:nowrap;">' +
+          '<button class="secondary" onclick="boxReconcileActOne(\'' + recId + '\',\'' + c.boxKey + '\',\'open\')" style="padding:2px 8px;font-size:11px;">Mark opened</button> ' +
+          '<button class="secondary danger" onclick="boxReconcileActOne(\'' + recId + '\',\'' + c.boxKey + '\',\'dissolve\')" style="padding:2px 8px;font-size:11px;">Dissolve</button> ' +
+          '<button class="secondary" onclick="boxReconcileActOne(\'' + recId + '\',\'' + c.boxKey + '\',\'leave\')" style="padding:2px 8px;font-size:11px;">Leave</button>' +
+        '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // ── Unchanged (transparency) ──
+  var unchanged = byDisp.intact.length + (st.skipped ? st.skipped.length : 0);
+  if (unchanged) {
+    var uid = 'rcBoxRecUn_' + session.recountId.slice(-6);
+    html += '<div class="collapsible-header" id="' + uid + 'H" onclick="toggleCollapsible(\'' + uid + '\',\'' + uid + 'H\',\'' + uid + 'C\')" style="padding:6px 0;border-top:1px solid #f1f5f9;">' +
+      '<span class="small" style="color:#64748b;">Unchanged (' + unchanged + ')</span>' +
+      '<svg id="' + uid + 'C" class="collapsible-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>' +
+    '</div><div id="' + uid + '" class="collapsible-body" style="display:none;padding-top:6px;"><div class="small" style="color:#94a3b8;">';
+    byDisp.intact.forEach(function(c){
+      html += '<div><span style="font-family:monospace;">' + escapeHtml(c.box.boxId) + '</span> — intact (counted whole via sealed fast-count)</div>';
+    });
+    (st.skipped || []).forEach(function(c){
+      html += '<div><span style="font-family:monospace;">' + escapeHtml(c.box.boxId) + '</span> — skipped (created after count start)</div>';
+    });
+    html += '</div></div>';
+  }
+
+  return html;
+}
+
 function rcRenderDetail() {
   var el = $("rcDetailContent");
   if (!el) return;
@@ -12308,6 +12586,9 @@ function rcRenderDetail() {
   html += rcRenderDiscrepancySection(session, "serialized");
   html += rcRenderDiscrepancySection(session, "bulk");
   html += rcRenderDiscrepancySection(session, "reels");
+
+  // Box reconciliation (Phase 2 box-lifecycle) — deliberate step, off saved counts
+  html += boxReconcileRenderPanel(session);
 
   // Manual add row
   html += '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;">' +

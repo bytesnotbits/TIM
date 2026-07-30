@@ -476,6 +476,20 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxAuditRender()` | Render registry contents (✓/✗ once scanning begins), extras, tally; enable Update only when something was scanned |
 | `boxAuditRecordOnly()` / `boxAuditApplyUpdate()` / `boxAuditCommit(update)` | Commit: stamp audit only / replace contents to match + stamp; updates `location` if changed |
 
+**Box reconciliation — count-as-reconciliation (v2.37.00, box-lifecycle Phase 2).** A deliberate "Reconcile boxes" step in the **recount manager** (panel in `rcRenderDetail`). Boxes get used up during teardown with no "update TIM first" step, so registry drift is reconciled *by the count* rather than at teardown. Runs post-finalize off `appData.inventory_events` (counts survive close) so it aggregates a count spanning several sessions in one recount cycle. Two corroborating sources: the serialized count (silence) + Odoo quants (`invQuantsBaseline`, any location). Per manifest device → bucket **loose-counted** (event lacks `fromSealedBox` → box was opened) / **sealed-counted** (`fromSealedBox` → counted whole) / **unaccounted** (Odoo expects, not counted → shrinkage) / **gone** (not counted, not expected). Box disposition precedence: any loose → **open_trim** (mark `opened`, drop only gone, keep counted+unaccounted as flags); else any unaccounted → **review** (never auto — shrinkage/loss signal); else any sealed → **intact**; else → **dissolve** (tombstone via `boxDelete`). Boxes created after count-start are **skipped** (a fresh, uncounted box must never auto-dissolve). Idempotent; tombstones excluded from re-runs. Transient `boxReconcileState` (not persisted). See [[project-box-counting]].
+
+| Function | Purpose |
+|----------|---------|
+| `boxReconcileGatherCounts(session)` | Build the loose/sealed counted identifier sets (from cycle's inv sessions + live `invEvents`) + the Odoo-expected set; also `countStart`, scope flags. Falls back to ALL finalized serialized counts if the cycle can't be identified (disclosed in UI) |
+| `boxReconcileClassify(box, counts)` | Pure: per-device buckets + box disposition (`open_trim`/`review`/`intact`/`dissolve`) by the precedence above |
+| `boxReconcileCompute(session)` | Classify every live box; excludes boxes created after `countStart` → `{results, skipped, counts}` |
+| `boxReconcileRun(recountId)` | Compute → store `boxReconcileState` → re-render detail |
+| `_boxReconcileCommitOne(c)` | Commit one: dissolve → `boxDelete` (tombstone); open_trim/open → `boxSetDevices(kept, markOpened=true)` keeping counted+unaccounted, dropping gone |
+| `boxReconcileApplyAuto(recountId)` | Commit all auto-tier actions (dissolve + open_trim) then recompute |
+| `boxReconcileActOne(recountId, boxKey, action)` | Per-box manual override: `dissolve` / `open` / `leave` (acknowledge, no change) |
+| `boxReconcileRenderPanel(session)` / `boxReconcileRenderResults(session)` | Collapsible panel (empty-state Run button until computed) / rendered Automatic + Needs-review + Unchanged sections |
+| `_boxReconcileDevLabel(d)` / `_boxReconcileDevList(devs)` | Format a device (serial / fsan mono) / a comma list for the panel |
+
 **Box scan mode (Phase 2)** — a 5th scan mode (`invScanMode === "box"`, mode barcode `##MBOX`). Capture a carton by scanning its ID then its device serials (relies on shipment being imported first, so a scan that doesn't resolve to a known device = a carton ID). Globals: `invActiveBox`, `invLastScannedBox`, `invBoxIsOverride`, `invBoxOverridePrior`.
 
 | Function | Purpose |
