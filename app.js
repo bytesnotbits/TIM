@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.03";
+const APP_VERSION = "v2.38.04";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8253,7 +8253,19 @@ function palletRename(oldPalletId, btn) {
   if (newKey !== oldKey) {
     if (appData.pallets[newKey]) delete appData.pallets[newKey];   // clear a stale tombstone occupying the target key
     appData.pallets[newKey] = p;
-    delete appData.pallets[oldKey];
+    // Leave a TOMBSTONE at the old key (NOT a hard delete): a hard delete doesn't
+    // propagate through LWW sync (the deletion just isn't in the pushed map), so
+    // the old-named pallet resurrects from the repo/another device and you get a
+    // duplicate. A fresh-stamped tombstone out-votes any live remote copy of the
+    // old ID and carries the removal to every device (Joe, v2.38.04).
+    var now = invNow();
+    appData.pallets[oldKey] = {
+      palletId: normalize(oldPalletId), boxKeys: [],
+      status: p.status || "capturing", source: p.source || "scanned",
+      createdAt: p.createdAt || now, createdBy: p.createdBy || boxWho(),
+      updatedAt: now, updatedBy: boxWho(),
+      deleted: true, deletedAt: now, deletedBy: boxWho()
+    };
     if (_palletMgrExpanded[oldKey]) { delete _palletMgrExpanded[oldKey]; _palletMgrExpanded[newKey] = true; }
   }
   palletSaveToStorage();
