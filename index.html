@@ -89,6 +89,10 @@
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg></span>
         <span class="sidebar-nav-label">Boxes</span>
       </button>
+      <button class="sidebar-nav-btn" id="sideNavPallets" onclick="switchTab('pallets')">
+        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        <span class="sidebar-nav-label">Pallets</span>
+      </button>
       <button class="sidebar-nav-btn" id="sideNavProducts" onclick="switchTab('products')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
         <span class="sidebar-nav-label">Products</span>
@@ -1342,6 +1346,100 @@
     </div>
     <div id="boxTabDeleted"></div><!-- admin-only Deleted-boxes archive (rendered by boxRenderDeletedInto) -->
   </div><!-- /tabBoxes -->
+
+  <!-- ══ Pallets tab ══ -->
+  <div id="tabPallets" class="tab-panel">
+    <div class="card" style="margin-top:0;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0;">Pallets</h2>
+          <div class="small" id="palletTabSummary" style="color:#64748b;">No pallets yet.</div>
+        </div>
+        <button style="margin-left:auto;" onclick="palletCapOpen()">&#65291; New Pallet</button>
+      </div>
+      <p class="small" style="margin:10px 0 0;color:#6b7280;">
+        Group boxes onto a shrink-wrapped pallet so you can move or spot-check the whole stack with one scan &mdash; no climbing the shelving to touch every box. Scan the pallet's barcode (or generate an ID for an unlabeled one), then scan each box onto it; an <b>unknown box opens the box builder and returns you here automatically</b>. A sealed pallet moves as a unit; <b>dissolving</b> it reverts every box to an individually-tracked box.
+      </p>
+    </div>
+    <div class="card">
+      <label class="small" style="font-weight:700;">Look up a pallet
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input id="palletScanInput" autocomplete="off" placeholder="Scan a pallet ID"
+                 style="flex:1;min-width:220px;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();palletScan(this);}" />
+          <button class="secondary" onclick="palletScan(document.getElementById('palletScanInput'))">Go</button>
+        </div>
+      </label>
+      <p class="small" style="margin:8px 0 0;color:#6b7280;">
+        Scan a pallet to see its boxes, move it to a new location, or dissolve it. Unknown pallet &rarr; build it.
+      </p>
+    </div>
+    <div class="card">
+      <div id="palletTabList"></div>
+    </div>
+    <div id="palletTabDeleted"></div><!-- admin-only Deleted-pallets archive (palletRenderDeletedInto) -->
+  </div><!-- /tabPallets -->
+
+  <!-- ── Pallet build modal ── -->
+  <div id="palletCapModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:640px;">
+      <div style="display:flex;align-items:flex-start;gap:12px;">
+        <div>
+          <h2 style="margin:0;" id="palletCapTitle">New pallet</h2>
+          <div class="small" id="palletCapCount" style="color:#64748b;"></div>
+        </div>
+        <button class="secondary" style="margin-left:auto;" onclick="palletCapClose()">Close</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:14px 0;">
+        <label class="small" style="flex:1;min-width:200px;font-weight:600;">Pallet ID
+          <input id="palletCapPalletId" autocomplete="off" placeholder="Scan pallet barcode"
+                 style="width:100%;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();palletCapSetPalletId(this);}" />
+        </label>
+        <button class="secondary" onclick="palletCapSetPalletId(document.getElementById('palletCapPalletId'))">Set</button>
+        <button class="secondary" onclick="palletCapGenId()">Generate ID</button>
+      </div>
+      <div id="palletCapScanRow" style="display:none;margin:10px 0;">
+        <label class="small" style="font-weight:600;">Scan a box onto this pallet
+          <input id="palletCapScanInput" autocomplete="off" placeholder="Scan a box / carton ID"
+                 style="width:100%;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;margin-top:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();palletCapScanBox(this);}" />
+        </label>
+      </div>
+      <div id="palletCapFeedback" class="small" style="color:#2563eb;min-height:18px;margin:4px 0;"></div>
+      <div id="palletCapMembers"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+        <button onclick="palletCapSaveDone()">Done</button>
+        <button class="secondary" onclick="palletCapSaveNew()">Save &amp; New</button>
+        <button class="secondary" style="margin-left:auto;" onclick="palletCapClose()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Pallet dissolve modal ── -->
+  <div id="palletDissolveModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:640px;">
+      <div style="display:flex;align-items:flex-start;gap:12px;">
+        <div>
+          <h2 style="margin:0;" id="palletDissolveTitle">Dissolve pallet</h2>
+          <div class="small" style="color:#64748b;">Each box reverts to an individually-tracked box. Set where each box is going &mdash; same place, or scattered.</div>
+        </div>
+        <button class="secondary" style="margin-left:auto;" onclick="palletDissolveClose()">Cancel</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin:14px 0;">
+        <label class="small" style="flex:1;min-width:200px;font-weight:600;">Location for all boxes
+          <input id="palletDissolveAllLoc" autocomplete="off" placeholder="Scan / type a location"
+                 style="width:100%;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;" />
+        </label>
+        <button class="secondary" onclick="palletDissolveApplyAll()">Apply to all</button>
+      </div>
+      <div id="palletDissolveRows"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;">
+        <button class="danger" onclick="palletDissolveConfirm()">Dissolve &amp; assign locations</button>
+        <button class="secondary" style="margin-left:auto;" onclick="palletDissolveClose()">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Box Audit panel ── -->
   <div id="boxAuditModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">

@@ -4,6 +4,7 @@
 > To find any function, grep its name: `function functionName` — unique in the file.
 > For variables/constants, grep the declaration: `var foo` / `const foo`.
 > Line numbers are intentionally omitted — they go stale; grep patterns don't.
+> **SESSION START:** For orientation read `CLAUDE.md` first (architecture, deploy/version rules, conventions), then use this map to locate code. Report what you're about to touch before editing.
 
 ---
 
@@ -54,6 +55,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_gh_token_v1` | GitHub fine-grained PAT (Contents: read on the data repo) |
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
 | `tim_catalog_health_v1` | Catalog Health review state `{ ignored: { extId → true } }` (dismissed alias groups) |
+| `tim_pallets_v1` | Pallet registry `normKey(palletId) → PalletEntry` (pallet→box associations; GitHub-synced whole-pallet LWW as `pallets.json`) |
 | `tim_nisc_catalog_v1` | NISC catalog master layer `{ item → {name,long_desc,group,status,class,class_source,…} }` (device-local; feeds dup-check + numbering) |
 | `tim_numbering_db_v1` | AABBCC-N numbering legend, seeded from bundled `numbering_db.json` (occupancy computed live) |
 
@@ -66,7 +68,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | Variable | Purpose |
 |----------|---------|
 | `APP_VERSION` | Version string shown in UI |
-| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, external_count, product_movements, nisc_capture, boxes }` |
+| `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, external_count, product_movements, nisc_capture, boxes, pallets }` |
 | `PRODUCT_MAP` | Alias for `appData.product_map` — item definitions keyed by item number |
 | `BARCODE_MAP` | Alias for `appData.barcode_map` — barcode→item lookup |
 | `currentBatch` | Rows being processed in current receiving batch |
@@ -519,6 +521,41 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invFindOrphanedCapturingBoxes()` | Capturing boxes counted this session that aren't the active capture (the gate's work-list) |
 | `invShowOpenBoxGate()` / `invCloseOpenBoxGate()` / `invRenderOpenBoxGate()` | Open/close (disables/re-enables `invScanInput`) / render the gate list with captured serials shown expanded for verification |
 | `invGateResumeBox(boxId)` / `invGateCloseBox(boxId)` / `invGateDiscardBox(boxId)` | Per-box actions: resume capture (terminal, drops into box mode) / finalize as-is to `ready` / void session counts + delete record |
+
+### Pallet Registry — pallet/package → box associations (`appData.pallets`, `pallet*`)
+
+One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or auto-ID'd) unit that HOLDS boxes. It references member boxes **by key** (`boxKeys[]`) — never re-nests device serials (the box stays the source of truth). Two deliberate lifecycle differences from boxes: **opening/breaking a sealed pallet invalidates it entirely** (freed only by a deliberate **dissolve**, which reverts every member box to an individually-tracked box + tombstones the pallet), and **location is NOT cascaded on a sealed move** — the pallet carries its own sticky location; box locations are assigned only **at dissolve** (same/different prompt, treated like a count). Each reverting box is stamped `formerPalletId` + a box `audit[]` entry (`result:"pallet_dissolved"`) for per-box provenance. Persisted under `PALLET_STORAGE_KEY` (`tim_pallets_v1`), in master-JSON export/import, and GitHub-synced as `pallets.json` merged whole-pallet LWW (`_ghMergePalletsLWW`, same tradeoffs as boxes). Every mutation flows through `palletSaveToStorage`→`schedulePalletPush` (4s debounce). Dedicated **Pallets sidebar tab** (`#tabPallets`, `switchTab('pallets')`). **Phase 1 (v2.38.00): registry + build (incl. inline unknown-box build) + location-move + dissolve.** Deferred to Phase 2: scan-driven contents verify, in-session fast-count (transitive sealed trust). See [[project-box-counting]] "Pallets" + Data Dictionary `PalletEntry`.
+
+| Function | Purpose |
+|----------|---------|
+| `palletGet(id)` / `palletGetRaw(id)` / `palletAll()` / `palletDeletedAll()` | Look up one pallet (excl. tombstones) / incl. tombstones / all live / all tombstones. Map key = `palletNormId(id)` = `normKey` |
+| `palletBoxKeys(p)` / `palletDeviceCount(p)` | A pallet's member box keys (all membership reads go through this) / rolled-up device count across member boxes |
+| `palletGenId()` | Generate a unique readable `PAL-YYYYMMDD-XXX` for an unlabeled pallet (ambiguous chars omitted); barcode PRINTING deferred |
+| `palletUpsert(id, fields)` | Create/merge a pallet (fields: location/source/status); resurrects a tombstone; stamps audit fields; never overwrites with empty |
+| `palletFindByBoxKey(boxKey)` / `palletStripBoxFrom(boxKey, exceptId)` | Single-pallet invariant: which live pallet holds this box / remove a box from every pallet except one (executes an approved move) |
+| `palletAddBox(id, boxKey, fields)` / `palletRemoveBox(id, boxKey)` | Add a box (ensures pallet exists; dedups; strips from other pallets) / remove a box key |
+| `palletRecordAudit(id, result, extra)` | Append-only audit entry (`result` ∈ `ready`/`moved`/`dissolved`); bumps `updatedAt` |
+| `palletFinalize(id)` / `palletReopen(id)` | Status → `ready` (sealed, fast-countable) / `capturing` (continue building reopens a sealed pallet) |
+| `palletMoveLocation(id, location)` | Sealed move — set the pallet's own sticky location; **deliberately does NOT cascade to member boxes** (Joe's ruling) |
+| `palletDelete(id)` / `palletRestore(id)` / `palletPurge(id)` / `palletPurgeExpiredTombstones()` | Soft-delete tombstone / undelete / hard-remove / load-time GC (>`PALLET_TOMBSTONE_TTL_DAYS`=90, silent no-push) |
+| `palletDissolve(id, plan)` | Revert every member box → individual box: stamp `formerPalletId` + assigned location (`plan.byBoxKey`, blank keeps prior) + `pallet_dissolved` audit; then tombstone the pallet (retains `boxKeys`) |
+| `palletSaveToStorage()` / `palletLoadFromStorage()` / `schedulePalletPush()` | Persist/restore `appData.pallets`; save schedules a debounced GitHub push (mirrors boxes) |
+
+**Pallets tab UI + build/dissolve modals.** Sidebar tab renders the registry list + admin-only deleted archive; a build modal (scan/generate pallet ID → scan boxes onto it, with the **nested unknown-box build** that opens the box capture modal and auto-returns) and a dissolve modal (same/different per-box location assignment). Local-only when GitHub isn't configured.
+
+| Function | Purpose |
+|----------|---------|
+| `palletRender()` / `_palletRenderListInto(list, summary)` / `palletRenderDeletedInto(el)` | Orchestrator (Pallets tab) / render pallet cards (status pill, box+device rollup, location, expand contents, Move/Dissolve/Delete) / admin-only tombstone archive |
+| `palletToggleContents(key)` / `palletTabSetLocation(id)` | Expand/collapse a card's contents / set a ready pallet's location from the inline field (→ `palletMoveLocation`) |
+| `palletTabDelete(id)` / `palletTabRestore(id)` / `palletTabPurge(id)` | Admin-gated (`timIsAdmin`) delete / restore / purge from the tab |
+| `palletScan(input)` | Tab lookup field: known pallet → expand it; unknown → offer to build |
+| `palletCapOpen(existingId?)` / `palletCapClose()` | Open build modal fresh or to edit (reopens a sealed pallet to `capturing`) / close (purges a hollow just-started pallet). Global `palletCapState` `{palletId, isEdit}` |
+| `palletCapGenId()` / `palletCapSetPalletId(input)` | Fill + lock an auto-generated ID / lock the scanned ID (guards duplicate → offers edit; creates the capturing pallet) |
+| `palletCapScanBox(input)` | Scan a box onto the pallet: known → add (ready-pallet collision blocked with "dissolve first"; capturing-pallet collision prompts a move); unknown → `palletCapBuildMissingBox` |
+| `palletCapBuildMissingBox(boxId)` / `palletCapResumeAfterBox(palletId, boxId)` | Nested unknown-box build (approach A): hide pallet modal → seed+open box capture modal; on box close (`boxCapClose` hook, guarded by `_palletCapResume`) reopen pallet modal + fold the box in if it was saved |
+| `palletCapRemoveBox(id, boxKey)` / `palletCapRenderAll()` / `palletCapFeedback(msg)` | Remove a member in-modal / redraw header+member table+count / set the modal's feedback line |
+| `palletCapFinalizeCurrent()` / `palletCapSaveNew()` / `palletCapSaveDone()` | Finalize→ready (purges if empty) / then reset for a fresh pallet / then close |
+| `palletBeginDissolve(id)` / `palletDissolveApplyAll()` / `palletDissolveConfirm()` / `palletDissolveClose()` | Open dissolve modal (ready pallet only; a capturing pallet just offers delete) / fill every row from the "all boxes" field / gather per-box locations → `palletDissolve` / close. Global `_palletDissolveState` |
 
 ### Inventory — Scan Handlers
 

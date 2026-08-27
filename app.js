@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.37.00";
+const APP_VERSION = "v2.38.00";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8,7 +8,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, external_count: [], product_movements: [], nisc_capture: [], nisc_catalog: {} };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, pallets: {}, external_count: [], product_movements: [], nisc_capture: [], nisc_catalog: {} };
 let PRODUCT_MAP = appData.product_map;
 // True once the UI has been rendered (by loadSourceData or timRenderRestored).
 // Lets a failed boot sync fall back to rendering the cached data instead of
@@ -899,6 +899,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.nisc_capture))      { appData.nisc_capture      = parsed.nisc_capture;      rcNiscMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
   if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); if (typeof invRenderBoxManager === "function") invRenderBoxManager(); }
+  if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; palletSaveToStorage(); if (typeof palletRender === "function") palletRender(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -2860,6 +2861,7 @@ function ghBuildDataFiles() {
     "recounts.json": { recount_sessions: payload.recount_sessions, recount_movements: payload.recount_movements },
     "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
     "boxes.json": payload.boxes || {},  // carton→device registry; merged last-writer-wins per box
+    "pallets.json": payload.pallets || {},  // pallet→box registry; merged last-writer-wins per pallet
     "conflicts.json": ghConflictLog || [],  // shared conflict log travels with the data
     "device_labels.json": ghDeviceLabelsFile()  // shared Device Label dropdown options
   };
@@ -2890,6 +2892,7 @@ function _ghAssembleRemote(fetched) {
     else if (f.name === "conflicts.json" && Array.isArray(f.json)) remoteConflicts = f.json;
     else if (f.name === "device_labels.json" && f.json && typeof f.json === "object") remoteDeviceLabels = f.json;
     else if (f.name === "boxes.json" && f.json && typeof f.json === "object") payload.boxes = f.json;
+    else if (f.name === "pallets.json" && f.json && typeof f.json === "object") payload.pallets = f.json;
     else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
       if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
       if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
@@ -2919,6 +2922,7 @@ function _ghPayloadDiffers(a, b) {
   if (!_ghEqual(a.barcode_map || {}, b.barcode_map || {})) return true;
   if (!_ghEqual((a.history && a.history.records) || [], (b.history && b.history.records) || [])) return true;
   if (!_ghEqual(a.boxes || {}, b.boxes || {})) return true;
+  if (!_ghEqual(a.pallets || {}, b.pallets || {})) return true;
   var arrs = ["inventory_sessions", "inventory_events", "recount_sessions", "recount_movements"];
   for (var i = 0; i < arrs.length; i++) {
     if (!_ghEqual(a[arrs[i]] || [], b[arrs[i]] || [])) return true;
@@ -3151,6 +3155,11 @@ function ghMergeMasters(base, local, remote, ctx) {
   // tradeoff — simple and predictable over the rare concurrent-edit case.
   merged.boxes = _ghMergeBoxesLWW(local.boxes, remote.boxes);
 
+  // pallets: same keyed-map last-writer-wins as boxes (per pallet, by updatedAt).
+  // Same deliberate tradeoff — deletions ride tombstones; concurrent audit edits
+  // to one pallet can lose. Pallets are lower-churn than boxes, so this is safe.
+  merged.pallets = _ghMergePalletsLWW(local.pallets, remote.pallets);
+
   return { merged: merged, conflicts: conflicts };
 }
 
@@ -3164,6 +3173,21 @@ function _ghMergeBoxesLWW(local, remote) {
   Object.keys(remote).forEach(function(k) {
     if (!(k in merged)) { merged[k] = remote[k]; return; }
     if (boxTs(remote[k]) > boxTs(merged[k])) merged[k] = remote[k];
+  });
+  return merged;
+}
+
+// Union the two pallet maps; on a shared pallet ID keep whichever record has the
+// newer updatedAt (createdAt as fallback, then remote). Order-independent.
+// Mirrors _ghMergeBoxesLWW exactly (see the tradeoff note at the call site).
+function _ghMergePalletsLWW(local, remote) {
+  local = local || {}; remote = remote || {};
+  var merged = {};
+  var palTs = function(p) { return (p && (p.updatedAt || p.createdAt)) || ""; };
+  Object.keys(local).forEach(function(k) { merged[k] = local[k]; });
+  Object.keys(remote).forEach(function(k) {
+    if (!(k in merged)) { merged[k] = remote[k]; return; }
+    if (palTs(remote[k]) > palTs(merged[k])) merged[k] = remote[k];
   });
   return merged;
 }
@@ -4162,7 +4186,7 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes", "boxes"].forEach(function(t) {
+  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes", "boxes", "pallets"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
@@ -4181,6 +4205,7 @@ function switchTab(name) {
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") { prodRenderList(); reelLookupRender(); }
   if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
+  if (name === "pallets") palletRender();        // dedicated Pallets section — registry front door (no session)
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   // Inventory sub-screens: show the sub-nav and apply the active sub-view.
   var invSubnav = $("invSubnav");
@@ -6446,7 +6471,15 @@ function boxCapOpen(existingBoxId) {
 function boxCapClose() {
   var modal = $("boxCapModal");
   if (modal) modal.classList.add("hidden");
+  var builtBoxId = boxCapState ? boxCapState.boxId : "";
   boxCapState = null;
+  // If this box build was launched from a pallet build (unknown box scanned onto
+  // a pallet), return to the pallet modal and fold the box in — approach A,
+  // auto-return. Guarded on _palletCapResume so ordinary box closes are unaffected.
+  if (typeof _palletCapResume !== "undefined" && _palletCapResume) {
+    var r = _palletCapResume; _palletCapResume = null;
+    palletCapResumeAfterBox(r.palletId, builtBoxId || r.boxId);
+  }
 }
 
 // Column picker — checkboxes in the canonical BOX_CAPTURE_COLUMNS order.
@@ -7759,6 +7792,710 @@ function invClearLocation() {
   invSetLocation("");
   invSetScanFeedback("Location cleared.", "info");
   setTimeout(function() { $("invScanInput").focus(); }, 50);
+}
+
+// ===================================================================
+// PALLET REGISTRY — pallet/package → box associations (appData.pallets)
+// -------------------------------------------------------------------
+// One level up from the box registry: a pallet is a shrink-wrapped,
+// barcoded (or auto-ID'd) unit that HOLDS boxes. It references its member
+// boxes BY KEY (boxKeys[]) — it never re-nests device serials; the box
+// remains the single source of truth for its own contents. A pallet is its
+// own trackable entity with its own sticky location. Two lifecycle rules
+// differ deliberately from boxes:
+//   • Opening/breaking a sealed (ready) pallet INVALIDATES it — there is no
+//     partial-pallet state. Freeing a box from a ready pallet is done by
+//     DISSOLVING it (a deliberate Pallets-tab action), which reverts every
+//     member box to an individually-tracked box and tombstones the pallet.
+//   • Location is NOT cascaded on a sealed move (the pallet carries its own
+//     location; member boxes derive it while on the pallet). Box locations
+//     are assigned only AT DISSOLVE, where the user says whether the boxes go
+//     to the same place or scatter — treated like a count (sticky until next
+//     changed). Each reverting box is stamped formerPalletId + a box audit
+//     entry for per-box provenance.
+// Persisted locally under PALLET_STORAGE_KEY, in master-JSON export/import,
+// AND synced to GitHub as pallets.json — merged last-writer-wins PER PALLET
+// by updatedAt (_ghMergePalletsLWW). Every mutation flows through
+// palletSaveToStorage, which schedules a debounced push. Map keys are
+// normalized-uppercase pallet IDs. Phase 1 (v2.38.00): registry + build
+// (incl. inline unknown-box build) + location-move + dissolve. Deferred to
+// Phase 2: scan-driven contents verify, and in-session fast-count. See
+// [[project-box-counting]] "Pallets".
+// ===================================================================
+
+var PALLET_STORAGE_KEY = "tim_pallets_v1";
+var PALLET_TOMBSTONE_TTL_DAYS = 90;   // same rationale as boxes
+function palletIsDeleted(p) { return !!(p && p.deleted); }
+function palletNormId(palletId) { return normKey(palletId); }
+
+function palletSaveToStorage() {
+  TimDB.set(PALLET_STORAGE_KEY, appData.pallets || {}).catch(function(){});
+  schedulePalletPush();
+}
+// Debounced GitHub push for pallet changes — mirrors scheduleBoxPush exactly.
+var _palletPushTimer = null;
+function schedulePalletPush() {
+  if (typeof ghConfigured !== "function" || !ghConfigured()) return;
+  clearTimeout(_palletPushTimer);
+  _palletPushTimer = setTimeout(function() {
+    if (ghSyncInFlight) { schedulePalletPush(); return; }   // busy — retry shortly
+    ghPushToGitHub({ auto: true });
+  }, 4000);
+}
+function palletLoadFromStorage() {
+  return TimDB.get(PALLET_STORAGE_KEY).then(function(saved) {
+    if (saved && typeof saved === "object") { appData.pallets = saved; palletPurgeExpiredTombstones(); }
+  }).catch(function(){});
+}
+// Load-time GC: hard-remove tombstones older than the TTL. Silent write (no
+// schedulePalletPush) so a boot doesn't fire a push — mirrors boxes.
+function palletPurgeExpiredTombstones() {
+  var pals = appData.pallets || {};
+  var cutoff = new Date(Date.now() - PALLET_TOMBSTONE_TTL_DAYS * 86400000).toISOString();
+  var changed = false;
+  Object.keys(pals).forEach(function(k) {
+    var p = pals[k];
+    if (p && p.deleted && p.deletedAt && p.deletedAt < cutoff) { delete pals[k]; changed = true; }
+  });
+  if (changed) TimDB.set(PALLET_STORAGE_KEY, appData.pallets || {}).catch(function(){});
+  return changed;
+}
+
+function palletGetRaw(palletId) {
+  var key = palletNormId(palletId);
+  if (!key || !appData.pallets) return null;
+  return appData.pallets[key] || null;
+}
+function palletGet(palletId) {
+  var p = palletGetRaw(palletId);
+  return p && !p.deleted ? p : null;   // a tombstone reads as "not found"
+}
+function palletAll() {
+  return Object.keys(appData.pallets || {})
+    .map(function(k) { return appData.pallets[k]; })
+    .filter(function(p) { return p && !p.deleted; });
+}
+function palletDeletedAll() {
+  return Object.keys(appData.pallets || {})
+    .map(function(k) { return appData.pallets[k]; })
+    .filter(function(p) { return p && p.deleted; });
+}
+// A pallet's member box keys (normalized). All membership reads go through this.
+function palletBoxKeys(p) { return (p && p.boxKeys) || []; }
+// Rolled-up device count across all member boxes (missing/deleted boxes count 0).
+function palletDeviceCount(p) {
+  return palletBoxKeys(p).reduce(function(sum, k) {
+    var b = boxGetRaw(k);
+    return sum + (b && !b.deleted ? boxDeviceList(b).length : 0);
+  }, 0);
+}
+// Generate a readable, unique pallet ID for an unlabeled pallet (the user
+// hand-labels it; barcode PRINTING is deferred, same as boxes). Ambiguous
+// characters (0/O/1/I) omitted so a handwritten ID scans back cleanly.
+function palletGenId() {
+  var d = new Date();
+  var ymd = "" + d.getFullYear() + ("0" + (d.getMonth() + 1)).slice(-2) + ("0" + d.getDate()).slice(-2);
+  var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  for (var tries = 0; tries < 50; tries++) {
+    var s = "";
+    for (var i = 0; i < 3; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+    var cand = "PAL-" + ymd + "-" + s;
+    if (!palletGetRaw(cand)) return cand;
+  }
+  return "PAL-" + ymd + "-" + Date.now();
+}
+
+// Create or merge a pallet record. `fields` may include location, source,
+// status. Never overwrites a stored value with empty; stamps audit fields.
+function palletUpsert(palletId, fields) {
+  var key = palletNormId(palletId);
+  if (!key) return null;
+  if (!appData.pallets) appData.pallets = {};
+  fields = fields || {};
+  var now = invNow();
+  var p = appData.pallets[key];
+  if (!p) {
+    p = { palletId: normalize(palletId), boxKeys: [], status: "capturing",
+          source: fields.source || "scanned", createdAt: now, createdBy: boxWho() };
+    appData.pallets[key] = p;
+  } else if (p.deleted) {
+    // Re-creating a deleted pallet ID resurrects it (updatedAt below out-votes the tombstone in LWW).
+    delete p.deleted; delete p.deletedAt; delete p.deletedBy;
+  }
+  if (fields.location) p.location = normalize(fields.location);
+  if (fields.source) p.source = fields.source;
+  if (fields.status) p.status = fields.status;
+  p.updatedAt = now;
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+  return p;
+}
+
+// Which (live) pallet currently holds this box key — single-pallet invariant.
+function palletFindByBoxKey(boxKey) {
+  var k = boxNormId(boxKey);
+  if (!k) return null;
+  var pals = appData.pallets || {}, found = null;
+  Object.keys(pals).some(function(pk) {
+    var p = pals[pk];
+    if (p && !p.deleted && palletBoxKeys(p).indexOf(k) !== -1) { found = p; return true; }
+    return false;
+  });
+  return found;
+}
+// Remove a box key from every pallet except one (executes an approved move).
+function palletStripBoxFrom(boxKey, exceptPalletId) {
+  var k = boxNormId(boxKey), ex = palletNormId(exceptPalletId), count = 0, now = invNow();
+  var pals = appData.pallets || {};
+  Object.keys(pals).forEach(function(pk) {
+    if (pk === ex) return;
+    var p = pals[pk];
+    if (!p || p.deleted) return;
+    var kb = palletBoxKeys(p), i = kb.indexOf(k);
+    if (i !== -1) { kb.splice(i, 1); p.boxKeys = kb; p.updatedAt = now; p.updatedBy = boxWho(); count++; }
+  });
+  if (count) palletSaveToStorage();
+  return count;
+}
+// Add a box (by key) to a pallet. Ensures the pallet exists (capturing). Dedups;
+// strips the box from any OTHER pallet (caller has already vetted a ready-pallet
+// collision). Returns { pallet, added, dup }.
+function palletAddBox(palletId, boxKey, fields) {
+  var p = palletUpsert(palletId, fields);
+  if (!p) return { pallet: null, added: false, dup: false };
+  var k = boxNormId(boxKey);
+  if (!k) return { pallet: p, added: false, dup: false };
+  var kb = palletBoxKeys(p);
+  if (kb.indexOf(k) !== -1) return { pallet: p, added: false, dup: true };
+  palletStripBoxFrom(k, palletId);
+  kb.push(k);
+  p.boxKeys = kb;
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+  return { pallet: p, added: true, dup: false };
+}
+function palletRemoveBox(palletId, boxKey) {
+  var p = palletGetRaw(palletId);
+  if (!p || p.deleted) return false;
+  var kb = palletBoxKeys(p), i = kb.indexOf(boxNormId(boxKey));
+  if (i === -1) return false;
+  kb.splice(i, 1);
+  p.boxKeys = kb;
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+  return true;
+}
+// Append a floor/lifecycle audit entry (append-only). result ∈ ready|moved|dissolved.
+function palletRecordAudit(palletId, result, extra) {
+  var p = palletGetRaw(palletId);
+  if (!p) return;
+  extra = extra || {};
+  p.audit = p.audit || [];
+  var entry = { at: invNow(), by: boxWho(), result: result };
+  if (extra.boxCount != null) entry.boxCount = extra.boxCount;
+  if (extra.location != null) entry.location = extra.location;
+  p.audit.push(entry);
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+}
+function palletFinalize(palletId) {
+  var p = palletGetRaw(palletId);
+  if (!p || p.deleted) return;
+  p.status = "ready";
+  palletRecordAudit(palletId, "ready", { boxCount: palletBoxKeys(p).length });   // bumps + saves
+}
+function palletReopen(palletId) {
+  var p = palletGetRaw(palletId);
+  if (!p || p.deleted) return;
+  p.status = "capturing";
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+}
+// Sealed move — set the pallet's own location (sticky). Deliberately does NOT
+// cascade to member boxes (Joe's ruling; box locations are set at dissolve).
+function palletMoveLocation(palletId, location) {
+  var p = palletGetRaw(palletId);
+  if (!p || p.deleted) return;
+  p.location = normalize(location);
+  palletRecordAudit(palletId, "moved", { location: p.location });   // bumps + saves
+}
+// Soft-delete (tombstone) — used both for a bare delete and as the tail of a
+// dissolve. Contents (boxKeys) kept for restore/provenance; fresh updatedAt so
+// the delete out-votes any live copy in LWW.
+function palletDelete(palletId) {
+  var key = palletNormId(palletId);
+  var p = key && appData.pallets ? appData.pallets[key] : null;
+  if (!p) return false;
+  var now = invNow();
+  p.deleted = true;
+  p.deletedAt = now;
+  p.deletedBy = boxWho();
+  p.updatedAt = now;
+  palletSaveToStorage();
+  return true;
+}
+function palletRestore(palletId) {
+  var p = palletGetRaw(palletId);
+  if (!p || !p.deleted) return false;
+  delete p.deleted; delete p.deletedAt; delete p.deletedBy;
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  palletSaveToStorage();
+  return true;
+}
+function palletPurge(palletId) {
+  var key = palletNormId(palletId);
+  if (key && appData.pallets && appData.pallets[key]) { delete appData.pallets[key]; palletSaveToStorage(); return true; }
+  return false;
+}
+// Dissolve a sealed pallet: every member box reverts to an individually-tracked
+// box, stamped with formerPalletId + its assigned location + a per-box audit
+// entry (Joe's per-box provenance ruling). `plan.byBoxKey` maps box key → the
+// location that box is going to (same-for-all or scattered, decided in the UI).
+// Then the pallet is tombstoned (its boxKeys retained on the tombstone as the
+// pallet-side record). Box location follows the count model: sticky until next
+// changed — so a blank assignment leaves the box's prior location intact.
+function palletDissolve(palletId, plan) {
+  var p = palletGetRaw(palletId);
+  if (!p || p.deleted) return false;
+  plan = plan || {};
+  var byBoxKey = plan.byBoxKey || {};
+  var now = invNow(), who = boxWho();
+  palletBoxKeys(p).forEach(function(k) {
+    var box = boxGetRaw(k);
+    if (!box || box.deleted) return;
+    box.formerPalletId = p.palletId;
+    var loc = byBoxKey[k];
+    if (loc == null || loc === "") loc = p.location || box.location || "";
+    if (loc) box.location = normalize(loc);
+    box.audit = box.audit || [];
+    box.audit.push({ at: now, by: who, result: "pallet_dissolved", formerPalletId: p.palletId, location: box.location || "" });
+    box.updatedAt = now;
+    box.updatedBy = who;
+  });
+  boxSaveToStorage();   // persist the box changes (+ schedule box push)
+  palletRecordAudit(palletId, "dissolved", { boxCount: palletBoxKeys(p).length, location: p.location || "" });
+  palletDelete(palletId);   // tombstone the pallet (retains boxKeys)
+  return true;
+}
+
+// ---- Pallets tab rendering -----------------------------------------
+var _palletMgrExpanded = {};   // palletKey → true (expanded contents in the list)
+
+function palletRender() {
+  _palletRenderListInto($("palletTabList"), $("palletTabSummary"));
+  palletRenderDeletedInto($("palletTabDeleted"));
+}
+
+function _palletRenderListInto(list, summary) {
+  if (!list) return;
+  var pals = palletAll().slice().sort(function(a, b) {
+    return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1;
+  });
+  if (summary) summary.textContent = pals.length + " pallet(s) in the registry";
+  if (!pals.length) {
+    list.innerHTML = '<div style="color:#94a3b8;padding:18px;text-align:center;">No pallets built yet. Tap “New Pallet” to start.</div>';
+    return;
+  }
+  list.innerHTML = pals.map(function(p) {
+    var key      = palletNormId(p.palletId);
+    var pjs      = chkJsStr(p.palletId);
+    var nBoxes   = palletBoxKeys(p).length;
+    var nDev     = palletDeviceCount(p);
+    var isReady  = p.status === "ready";
+    var pill     = isReady ? "ok" : "block";
+    var pillTxt  = isReady ? "READY" : "BUILDING";
+    var expanded = !!_palletMgrExpanded[key];
+    var admin    = (typeof timIsAdmin === "function") && timIsAdmin();
+    var body     = "";
+    if (expanded) {
+      var boxRows;
+      if (nBoxes) {
+        boxRows = palletBoxKeys(p).map(function(k) {
+          var b = boxGetRaw(k);
+          var name = b ? escapeHtml(b.boxId) : escapeHtml(k);
+          var meta = b && !b.deleted ? (boxDeviceList(b).length + " device(s)" + (b.status === "ready" ? "" : " · building"))
+                   : '<span style="color:#dc2626;">missing / removed</span>';
+          var rm = (!isReady)
+            ? '<button class="danger" title="Remove this box from the pallet" style="padding:0 6px;font-size:12px;line-height:1.4;margin-left:8px;" onclick="palletRemoveBox(\'' + pjs + '\',\'' + chkJsStr(k) + '\');palletRender();">✕</button>'
+            : "";
+          return '<tr style="border-top:1px solid #eef2f7;"><td style="padding:5px 10px;font-family:monospace;font-size:12px;">' + name + '</td>' +
+                 '<td style="padding:5px 10px;font-size:12px;color:#64748b;">' + meta + '</td>' +
+                 '<td style="padding:5px 6px;text-align:right;">' + rm + '</td></tr>';
+        }).join("");
+      } else {
+        boxRows = '<tr><td style="padding:6px 10px;color:#94a3b8;">No boxes on this pallet yet.</td></tr>';
+      }
+      var moveRow = isReady
+        ? '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
+            '<label class="small" style="font-weight:700;">Location</label>' +
+            '<input id="palletLoc_' + escapeHtml(key) + '" value="' + escapeHtml(p.location || "") + '" placeholder="Scan/type location" ' +
+              'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:180px;" autocomplete="off" ' +
+              'onkeydown="if(event.key===\'Enter\'){event.preventDefault();palletTabSetLocation(\'' + pjs + '\');}" />' +
+            '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletTabSetLocation(\'' + pjs + '\')">Set location</button>' +
+          '</div>'
+        : "";
+      body =
+        '<div style="margin:8px 0 4px;padding:10px;background:#f8fafc;border-radius:6px;">' +
+          '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;"><tbody>' + boxRows + '</tbody></table></div>' +
+          moveRow +
+        '</div>';
+    }
+    var actions =
+      '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletToggleContents(\'' + chkJsStr(key) + '\')">' + (expanded ? "Hide" : "Contents ▸") + '</button>' +
+      (isReady
+        ? '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletBeginDissolve(\'' + pjs + '\')">Dissolve</button>'
+        : '<button style="padding:4px 10px;font-size:12px;" onclick="palletCapOpen(\'' + pjs + '\')">Continue building ▸</button>') +
+      (admin ? '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="palletTabDelete(\'' + pjs + '\')">Delete</button>' : "");
+    return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+          '<span class="pill ' + pill + '" style="font-size:10px;">' + pillTxt + '</span>' +
+          '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(p.palletId) + '</span>' +
+          '<span style="color:#64748b;font-size:12px;">' + nBoxes + ' box(es) · ' + nDev + ' device(s)</span>' +
+          (p.location ? '<span style="color:#64748b;font-size:12px;">📍 ' + escapeHtml(p.location) + '</span>' : '') +
+          '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">' + actions + '</span>' +
+        '</div>' + body +
+      '</div>';
+  }).join("");
+}
+
+function palletRenderDeletedInto(el) {
+  if (!el) return;
+  if (!(typeof timIsAdmin === "function" && timIsAdmin())) { el.innerHTML = ""; return; }
+  var dels = palletDeletedAll().slice().sort(function(a, b) {
+    return (b.deletedAt || "") > (a.deletedAt || "") ? 1 : -1;
+  });
+  if (!dels.length) { el.innerHTML = ""; return; }
+  el.innerHTML =
+    '<div style="margin-top:14px;padding-top:10px;border-top:1px dashed #cbd5e1;">' +
+      '<div class="small" style="font-weight:700;color:#64748b;margin-bottom:6px;">Deleted / dissolved pallets (admin) — kept ' + PALLET_TOMBSTONE_TTL_DAYS + ' days</div>' +
+      dels.map(function(p) {
+        var pjs = chkJsStr(p.palletId);
+        return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0;">' +
+            '<span style="font-family:monospace;">' + escapeHtml(p.palletId) + '</span>' +
+            '<span style="color:#94a3b8;font-size:12px;">' + palletBoxKeys(p).length + ' box(es) · ' + escapeHtml((p.deletedAt || "").slice(0, 10)) + '</span>' +
+            '<button class="secondary" style="padding:3px 9px;font-size:12px;" onclick="palletTabRestore(\'' + pjs + '\')">Restore</button>' +
+            '<button class="danger" style="padding:3px 9px;font-size:12px;" onclick="palletTabPurge(\'' + pjs + '\')">Purge</button>' +
+          '</div>';
+      }).join("") +
+    '</div>';
+}
+
+function palletToggleContents(key) { _palletMgrExpanded[key] = !_palletMgrExpanded[key]; palletRender(); }
+function palletTabSetLocation(palletId) {
+  var p = palletGetRaw(palletId);
+  var inp = p ? $("palletLoc_" + palletNormId(palletId)) : null;
+  if (!inp) return;
+  palletMoveLocation(palletId, inp.value);
+  if (typeof timFeedback === "function") timFeedback("location");
+  palletRender();
+}
+function palletTabDelete(palletId) {
+  if (!(typeof timIsAdmin === "function" && timIsAdmin())) { alert("Deleting pallets is limited to an admin user."); return; }
+  var p = palletGet(palletId);
+  if (!p) return;
+  if (!confirm('Delete pallet "' + p.palletId + '"? Its member boxes are NOT deleted — they simply stop being on a pallet. (Restorable for ' + PALLET_TOMBSTONE_TTL_DAYS + ' days.)')) return;
+  palletDelete(palletId);
+  palletRender();
+}
+function palletTabRestore(palletId) {
+  if (!(typeof timIsAdmin === "function" && timIsAdmin())) return;
+  palletRestore(palletId);
+  palletRender();
+}
+function palletTabPurge(palletId) {
+  if (!(typeof timIsAdmin === "function" && timIsAdmin())) return;
+  if (!confirm('Permanently purge pallet "' + palletId + '"? This cannot be undone.')) return;
+  palletPurge(palletId);
+  palletRender();
+}
+
+// Pallets-tab scan/lookup field: known pallet → expand it; unknown → offer build.
+function palletScan(input) {
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (input) input.value = "";
+  if (!v) return;
+  var p = palletGet(v);
+  if (p) {
+    _palletMgrExpanded[palletNormId(p.palletId)] = true;
+    palletRender();
+    if (typeof timFeedback === "function") timFeedback("ok");
+  } else {
+    if (typeof timFeedback === "function") timFeedback("warn");
+    if (confirm('No pallet "' + v + '" yet. Build it now?')) {
+      palletCapOpen();
+      setTimeout(function() { var idn = $("palletCapPalletId"); if (idn) { idn.value = v; palletCapSetPalletId(idn); } }, 90);
+    }
+  }
+}
+
+// ---- Pallet build modal --------------------------------------------
+// State is minimal: { palletId, isEdit }. Unlike the box capture modal (which
+// buffers multi-field device rows until Save), a pallet member is a single box
+// reference, so each scanned box is committed to the registry immediately and
+// the modal re-reads the persisted pallet. That also makes the nested
+// unknown-box build trivial to resume (see palletCapBuildMissingBox).
+var palletCapState = null;
+var _palletCapResume = null;   // { palletId, boxId } while a nested box build is open
+
+function palletCapOpen(existingPalletId) {
+  var modal = $("palletCapModal");
+  if (!modal) return;
+  var p = existingPalletId ? palletGetRaw(existingPalletId) : null;
+  if (p && !p.deleted) {
+    if (p.status === "ready") palletReopen(existingPalletId);   // continue-building reopens a sealed pallet
+    palletCapState = { palletId: p.palletId, isEdit: true };
+  } else {
+    palletCapState = { palletId: "", isEdit: false, _generated: false };
+  }
+  modal.classList.remove("hidden");
+  palletCapRenderAll();
+  setTimeout(function() {
+    var idInput = $("palletCapPalletId");
+    if (idInput) idInput.value = palletCapState.palletId;
+    if (palletCapState.palletId) { var s = $("palletCapScanInput"); if (s) s.focus(); }
+    else if (idInput) idInput.focus();
+  }, 60);
+}
+function palletCapClose() {
+  // Drop a hollow just-started pallet (ID set but no boxes) rather than leaving a
+  // ghost capturing record — mirrors the box modal only persisting on Save.
+  if (palletCapState && palletCapState.palletId) {
+    var p = palletGetRaw(palletCapState.palletId);
+    if (p && !p.deleted && p.status === "capturing" && palletBoxKeys(p).length === 0) palletPurge(palletCapState.palletId);
+  }
+  var modal = $("palletCapModal");
+  if (modal) modal.classList.add("hidden");
+  palletCapState = null;
+  palletRender();
+}
+function palletCapGenId() {
+  if (!palletCapState) return;
+  var id = palletGenId();
+  palletCapState._generated = true;
+  var idIn = $("palletCapPalletId");
+  if (idIn) { idIn.value = id; palletCapSetPalletId(idIn); }
+}
+function palletCapSetPalletId(input) {
+  if (!palletCapState) return;
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (!v) { if (input) input.focus(); return; }
+  if (!palletCapState.isEdit) {
+    var clash = palletGet(v);
+    if (clash) {
+      if (!confirm('Pallet "' + v + '" already exists with ' + palletBoxKeys(clash).length +
+          ' box(es). Open it for editing instead?')) { if (input) input.value = palletCapState.palletId; return; }
+      palletCapClose();
+      palletCapOpen(v);
+      return;
+    }
+  }
+  palletCapState.palletId = normalize(v);
+  palletUpsert(v, { source: palletCapState._generated ? "generated" : "scanned" });   // create the capturing pallet now
+  if (input) input.value = palletCapState.palletId;
+  palletCapRenderAll();
+  setTimeout(function() { var s = $("palletCapScanInput"); if (s) s.focus(); }, 40);
+}
+// Scan a box onto the pallet. Known box → add (guarding the single-pallet
+// invariant); unknown box → nested build (approach A).
+function palletCapScanBox(input) {
+  if (!palletCapState || !palletCapState.palletId) {
+    palletCapFeedback("Set the pallet ID first.");
+    var idn = $("palletCapPalletId"); if (idn) idn.focus();
+    return;
+  }
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (input) input.value = "";
+  if (!v) return;
+  var key = boxNormId(v);
+  var p = palletGetRaw(palletCapState.palletId);
+  if (p && palletBoxKeys(p).indexOf(key) !== -1) {
+    palletCapFeedback('Box "' + v + '" is already on this pallet.');
+    if (typeof timFeedback === "function") timFeedback("duplicate");
+    _palletCapFocusScan();
+    return;
+  }
+  var box = boxGet(v);
+  if (!box) {
+    palletCapBuildMissingBox(v);   // unknown → build it, then auto-return
+    return;
+  }
+  var other = palletFindByBoxKey(key);
+  if (other && palletNormId(other.palletId) !== palletNormId(palletCapState.palletId)) {
+    if (other.status === "ready") {
+      alert('Box "' + box.boxId + '" is on sealed pallet "' + other.palletId + '".\n\n' +
+            'A sealed pallet can\'t give up a box piecemeal — dissolve pallet "' + other.palletId +
+            '" first (Pallets tab) to free its boxes, then add this one.');
+      if (typeof timFeedback === "function") timFeedback("warn");
+      _palletCapFocusScan();
+      return;
+    }
+    if (!confirm('Box "' + box.boxId + '" is on pallet "' + other.palletId + '" (still being built). Move it onto this pallet?')) {
+      _palletCapFocusScan();
+      return;
+    }
+  }
+  palletAddBox(palletCapState.palletId, key);
+  palletCapFeedback('Added box "' + box.boxId + '" (' + boxDeviceList(box).length + ' device(s)).');
+  if (typeof timFeedback === "function") timFeedback("ok");
+  palletCapRenderAll();
+  _palletCapFocusScan();
+}
+// Unknown box mid-pallet: hide the pallet modal, open the proven box capture
+// modal seeded with the scanned ID; palletCapResumeAfterBox restores us on close.
+function palletCapBuildMissingBox(boxId) {
+  if (!palletCapState) return;
+  _palletCapResume = { palletId: palletCapState.palletId, boxId: boxId };
+  var pm = $("palletCapModal"); if (pm) pm.classList.add("hidden");
+  boxCapOpen();
+  setTimeout(function() { var idIn = $("boxCapBoxId"); if (idIn) { idIn.value = boxId; boxCapSetBoxId(idIn); } }, 90);
+}
+// Called from boxCapClose when a nested box build finishes/cancels. Reopens the
+// pallet modal and folds the box in if it was actually saved.
+function palletCapResumeAfterBox(palletId, boxId) {
+  palletCapOpen(palletId);
+  var built = boxId && boxGet(boxId);
+  if (built) {
+    palletAddBox(palletId, boxNormId(boxId));
+    palletCapFeedback('Built and added box "' + built.boxId + '" (' + boxDeviceList(built).length + ' device(s)).');
+    if (typeof timFeedback === "function") timFeedback("ok");
+  } else {
+    palletCapFeedback("Box build cancelled — nothing added to the pallet.");
+  }
+  palletCapRenderAll();
+  _palletCapFocusScan();
+}
+function palletCapRemoveBox(palletId, boxKey) { palletRemoveBox(palletId, boxKey); palletCapRenderAll(); }
+function _palletCapFocusScan() { setTimeout(function() { var s = $("palletCapScanInput"); if (s) s.focus(); }, 60); }
+function palletCapFeedback(msg) { var el = $("palletCapFeedback"); if (el) el.textContent = msg || ""; }
+
+function palletCapRenderAll() {
+  if (!palletCapState) return;
+  var hasId = !!palletCapState.palletId;
+  var scanRow = $("palletCapScanRow");
+  if (scanRow) scanRow.style.display = hasId ? "" : "none";
+  var title = $("palletCapTitle");
+  if (title) title.textContent = hasId ? ('Pallet ' + palletCapState.palletId) : (palletCapState.isEdit ? "Edit pallet" : "New pallet");
+  var members = $("palletCapMembers");
+  if (members) {
+    var p = hasId ? palletGetRaw(palletCapState.palletId) : null;
+    var keys = p ? palletBoxKeys(p) : [];
+    if (!keys.length) {
+      members.innerHTML = hasId
+        ? '<div style="color:#94a3b8;padding:10px;">No boxes yet. Scan a box to add it — an unknown box opens the box builder, then returns here.</div>'
+        : '<div style="color:#94a3b8;padding:10px;">Scan or generate a pallet ID to begin.</div>';
+    } else {
+      var pjs = chkJsStr(palletCapState.palletId);
+      members.innerHTML =
+        '<div class="small" style="font-weight:700;margin:4px 0;">Boxes on this pallet (' + keys.length + ')</div>' +
+        '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;"><tbody>' +
+        keys.map(function(k) {
+          var b = boxGetRaw(k);
+          var name = b ? escapeHtml(b.boxId) : escapeHtml(k);
+          var meta = b && !b.deleted ? (boxDeviceList(b).length + " device(s)") : '<span style="color:#dc2626;">missing</span>';
+          return '<tr style="border-top:1px solid #eef2f7;">' +
+              '<td style="padding:5px 10px;font-family:monospace;font-size:12px;">' + name + '</td>' +
+              '<td style="padding:5px 10px;font-size:12px;color:#64748b;">' + meta + '</td>' +
+              '<td style="padding:5px 6px;text-align:right;"><button class="danger" title="Remove from pallet" style="padding:0 6px;font-size:12px;line-height:1.4;" onclick="palletCapRemoveBox(\'' + pjs + '\',\'' + chkJsStr(k) + '\')">✕</button></td>' +
+            '</tr>';
+        }).join("") +
+        '</tbody></table></div>';
+    }
+  }
+  var count = $("palletCapCount");
+  if (count && hasId) {
+    var pp = palletGetRaw(palletCapState.palletId);
+    count.textContent = pp ? (palletBoxKeys(pp).length + " box(es) · " + palletDeviceCount(pp) + " device(s)") : "";
+  } else if (count) count.textContent = "";
+}
+// Finalize the current pallet → ready; purge it if it ended up empty.
+function palletCapFinalizeCurrent() {
+  if (!palletCapState || !palletCapState.palletId) return null;
+  var p = palletGetRaw(palletCapState.palletId);
+  if (p && palletBoxKeys(p).length === 0) { palletPurge(palletCapState.palletId); return null; }
+  palletFinalize(palletCapState.palletId);
+  return palletGet(palletCapState.palletId);
+}
+function palletCapSaveNew() {
+  var p = palletCapFinalizeCurrent();
+  palletRender();
+  palletCapState = { palletId: "", isEdit: false, _generated: false };
+  var idIn = $("palletCapPalletId"); if (idIn) idIn.value = "";
+  palletCapRenderAll();
+  palletCapFeedback(p ? ('Saved pallet "' + p.palletId + '". Scan or generate the next pallet ID.') : "Ready for a new pallet.");
+  if (typeof timFeedback === "function" && p) timFeedback("ok");
+  setTimeout(function() { var idn = $("palletCapPalletId"); if (idn) idn.focus(); }, 60);
+}
+function palletCapSaveDone() {
+  palletCapFinalizeCurrent();
+  var modal = $("palletCapModal"); if (modal) modal.classList.add("hidden");
+  palletCapState = null;
+  palletRender();
+}
+
+// ---- Dissolve modal ------------------------------------------------
+var _palletDissolveState = null;   // { palletId }
+
+function palletBeginDissolve(palletId) {
+  var p = palletGet(palletId);
+  if (!p) return;
+  if (p.status !== "ready") {
+    // A still-building pallet was never sealed — no box-location assignment needed;
+    // just detach the boxes (delete the pallet). Dissolve is for sealed pallets.
+    if (confirm('Pallet "' + p.palletId + '" is still being built (not sealed). Delete it? Its boxes are untouched.')) {
+      palletDelete(palletId); palletRender();
+    }
+    return;
+  }
+  var modal = $("palletDissolveModal");
+  if (!modal) return;
+  _palletDissolveState = { palletId: p.palletId };
+  var title = $("palletDissolveTitle");
+  if (title) title.textContent = 'Dissolve pallet "' + p.palletId + '"';
+  var all = $("palletDissolveAllLoc"); if (all) all.value = p.location || "";
+  var rows = $("palletDissolveRows");
+  if (rows) {
+    rows.innerHTML = palletBoxKeys(p).map(function(k, i) {
+      var b = boxGetRaw(k);
+      var name = b ? escapeHtml(b.boxId) : escapeHtml(k);
+      var meta = b && !b.deleted ? (boxDeviceList(b).length + " device(s)") : "missing";
+      var defLoc = (b && b.location) || p.location || "";
+      return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0;border-top:1px solid #eef2f7;">' +
+          '<span style="font-family:monospace;font-size:12px;min-width:140px;">' + name + '</span>' +
+          '<span style="color:#64748b;font-size:12px;min-width:90px;">' + meta + '</span>' +
+          '<input id="palletDissLoc_' + i + '" data-key="' + escapeHtml(k) + '" value="' + escapeHtml(defLoc) + '" placeholder="Location" ' +
+            'style="font-family:monospace;padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;min-width:160px;" autocomplete="off" />' +
+        '</div>';
+    }).join("");
+  }
+  modal.classList.remove("hidden");
+}
+function palletDissolveApplyAll() {
+  var all = $("palletDissolveAllLoc");
+  if (!all) return;
+  var v = all.value;
+  var inputs = document.querySelectorAll('#palletDissolveRows input');
+  Array.prototype.forEach.call(inputs, function(r) { r.value = v; });
+}
+function palletDissolveConfirm() {
+  if (!_palletDissolveState) return;
+  var byBoxKey = {};
+  var inputs = document.querySelectorAll('#palletDissolveRows input');
+  Array.prototype.forEach.call(inputs, function(r) { byBoxKey[r.getAttribute("data-key")] = r.value; });
+  var pid = _palletDissolveState.palletId;
+  palletDissolve(pid, { byBoxKey: byBoxKey });
+  palletDissolveClose();
+  palletRender();
+  if (typeof timFeedback === "function") timFeedback("ok");
+}
+function palletDissolveClose() {
+  var modal = $("palletDissolveModal");
+  if (modal) modal.classList.add("hidden");
+  _palletDissolveState = null;
 }
 
 // ===================================================================
@@ -10424,6 +11161,7 @@ function timLoadMasterCache() {
     if (Array.isArray(parsed.recount_sessions))   appData.recount_sessions  = parsed.recount_sessions;
     if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
     if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); }
+    if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; }
     if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
     if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
       Object.assign(BARCODE_MAP, parsed.barcode_map);
@@ -10444,6 +11182,12 @@ function timLoadMasterCache() {
   // install), boxLoadFromStorage leaves the cache-provided boxes as a fallback.
   .then(function(hadData) {
     return boxLoadFromStorage().then(function() { return hadData; }, function() { return hadData; });
+  })
+  // Pallets live in their own authoritative store (tim_pallets_v1), same rationale
+  // as boxes above — load after the master-cache restore so the authoritative set
+  // is the GitHub merge's local base, not the possibly-staler cache snapshot.
+  .then(function(hadData) {
+    return palletLoadFromStorage().then(function() { return hadData; }, function() { return hadData; });
   })
   .catch(function() { return false; });
 }
@@ -10669,7 +11413,8 @@ function buildExportPayload() {
     external_count:    appData.external_count    || [],
     product_movements: appData.product_movements || [],
     nisc_capture:      appData.nisc_capture      || [],
-    boxes: appData.boxes || {}
+    boxes: appData.boxes || {},
+    pallets: appData.pallets || {}
   };
 }
 
@@ -13591,6 +14336,7 @@ Promise.all([_invRestoreP, boxLoadFromStorage()]).then(function() {
   // and showed "No boxes captured yet"; re-render now that boxes are in memory
   // so the count is correct without the user having to leave and return.
   if (typeof invRenderBoxManager === "function") invRenderBoxManager();
+  if (typeof palletRender === "function") palletRender();
 }).catch(function() {});
 chkLoadState();
 catLoadState().then(niUpdateStatus).catch(function(){});

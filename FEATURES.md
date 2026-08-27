@@ -144,6 +144,17 @@ that's the one piece worth reconsidering, e.g. falling back to an explicit Cumul
 Replace choice instead of guessing, rather than replacing the date logic wholesale.
 
 ### Pallet / package grouping — scan boxes onto a larger unit
+**STATUS: Phase 1 SHIPPED v2.38.00 (2026-08-27).** Built in TIM (not deferred to the Odoo build)
+because the warehouse need arrived first — Joe's call. Registry + build (incl. inline unknown-box
+build that opens the box builder and auto-returns) + location-move + dissolve, on a dedicated
+Pallets sidebar tab, GitHub-synced as `pallets.json`. See [[project_box_counting]] "Pallets"
+(as-built decisions + what differs from the notes below) and [[reference-data-dictionary]]
+`PalletEntry`. **Deferred to Phase 2:** scan-driven contents verify, and in-session fast-count
+(transitive sealed trust). **Not yet validated live with real warehouse data / real GitHub sync.**
+The design notes below are the original ask, kept for provenance; where they differ from the
+as-built decisions, the box-counting memory is authoritative (location is NOT cascaded on a
+sealed move — box locations are set at dissolve; dissolve provenance is per-box).
+
 **Want:** Once devices are scanned into their boxes (existing box feature), scan multiple
 boxes onto a larger "pallet" unit that's shrink-wrapped and barcoded. If the pallet isn't
 pre-labeled, TIM generates an ID for it — same idea as the box-ID generation already on
@@ -166,16 +177,14 @@ move or spot-check contents would remove a real physical/safety pain point.
   the serials it contained: dissolving lists the boxes (and their serials) moving out of
   the pallet back into the warehouse as individually-tracked units, so the pallet's history
   isn't silently lost when it stops existing as an entity.
-- **Open design question (not yet decided):** record granularity on dissolve — one record
-  per box with a pointer back to that box's own already-recorded serial manifest (avoids a
-  second source of truth for the same serials), vs. one record per box that also re-lists
-  its serials inline (self-contained/readable in a flat CSV export, at the cost of
-  duplicating data). Decide when this gets built, not before.
+- **Dissolve record granularity — DECIDED (Joe, 2026-08-27): per box.** Each reverting box is
+  stamped `formerPalletId` + a box `audit[]` entry (`result:"pallet_dissolved"`, with the
+  assigned location) that points back to that box's own manifest — no second source of truth
+  for the serials. The pallet tombstone retains its `boxKeys` as the pallet-side record.
 
-**Dependency: blocked on the box feature first.** Don't start until box-level scanning is
-solid — see [[project_box_counting]] for the box-registry issues already found/fixed this
-cycle (v2.29.09/v2.29.10) and its own still-deferred box-ID generation. A pallet layer on
-top of a shaky box layer just compounds the same bugs one level up.
+**Dependency: box feature — CLEARED.** The box layer stabilized through v2.37.00 (capture modal,
+GitHub sync, soft-delete, count-as-reconciliation) before pallets began, so the pallet layer
+reuses the proven box code rather than compounding box bugs one level up.
 
 ### GitHub Sync Phase 3 — automatic sync
 Background push on data changes (debounced), pull on app focus, offline queue, sidebar
