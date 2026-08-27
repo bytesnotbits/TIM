@@ -547,14 +547,14 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 |----------|---------|
 | `palletRender()` / `_palletRenderListInto(list, summary)` / `palletRenderDeletedInto(el)` | Orchestrator (Pallets tab) / render pallet cards (status pill, box+device rollup, location, expand contents, Move/Dissolve/Delete) / admin-only tombstone archive |
 | `palletToggleContents(key)` / `palletTabSetLocation(id)` | Expand/collapse a card's contents / set a ready pallet's location from the inline field (→ `palletMoveLocation`) |
-| `palletTabDelete(id)` / `palletTabRestore(id)` / `palletTabPurge(id)` | Admin-gated (`timIsAdmin`) delete / restore / purge from the tab |
+| `palletTabDelete(id)` / `palletTabRestore(id)` / `palletTabPurge(id)` | Delete (admin-gated only when the pallet still holds boxes; an EMPTY pallet is deletable by anyone for cleanup, v2.38.02) / restore / purge (both admin) from the tab |
 | `palletScan(input)` | Tab lookup field: known pallet → expand it; unknown → offer to build |
-| `palletCapOpen(existingId?)` / `palletCapClose()` | Open build modal fresh or to edit (reopens a sealed pallet to `capturing`) / close (purges a hollow just-started pallet). Global `palletCapState` `{palletId, isEdit}` |
+| `palletCapOpen(existingId?)` / `palletCapClose()` | Open build modal fresh or to edit (reopens a sealed pallet to `capturing`) / close — NEVER discards the pallet (once its ID is set it's real/likely-labeled; empty ones persist as `capturing`, v2.38.02). Global `palletCapState` `{palletId, isEdit}` |
 | `palletCapGenId()` / `palletCapSetPalletId(input)` | Fill + lock an auto-generated ID / lock the scanned ID (guards duplicate → offers edit; creates the capturing pallet) |
 | `palletCapScanBox(input)` | Scan a box onto the pallet: known → add (ready-pallet collision blocked with "dissolve first"; capturing-pallet collision prompts a move); unknown → `palletCapBuildMissingBox` |
 | `palletCapBuildMissingBox(boxId)` / `palletCapResumeAfterBox(palletId, boxId)` | Nested unknown-box build (approach A): hide pallet modal → seed+open box capture modal; on box close (`boxCapClose` hook, guarded by `_palletCapResume`) reopen pallet modal + fold the box in if it was saved |
 | `palletCapRemoveBox(id, boxKey)` / `palletCapRenderAll()` / `palletCapFeedback(msg)` | Remove a member in-modal / redraw header+member table+count / set the modal's feedback line |
-| `palletCapFinalizeCurrent()` / `palletCapSaveNew()` / `palletCapSaveDone()` | Finalize→ready (purges if empty) / then reset for a fresh pallet / then close |
+| `palletCapFinalizeCurrent()` / `palletCapSaveNew()` / `palletCapSaveDone()` | Seal→ready ONLY if it holds boxes; an empty pallet is kept as `capturing` (never purged, v2.38.02) / then reset for a fresh pallet / then close |
 | `palletBeginDissolve(id)` / `palletDissolveApplyAll()` / `palletDissolveConfirm()` / `palletDissolveClose()` | Open dissolve modal (ready pallet only; a capturing pallet just offers delete) / fill every row from the "all boxes" field / gather per-box locations → `palletDissolve` / close. Global `_palletDissolveState` |
 
 ### Inventory — Scan Handlers

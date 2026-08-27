@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.01";
+const APP_VERSION = "v2.38.02";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8176,7 +8176,7 @@ function _palletRenderListInto(list, summary) {
       (isReady
         ? '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletBeginDissolve(\'' + pjs + '\')">Dissolve</button>'
         : '<button style="padding:4px 10px;font-size:12px;" onclick="palletCapOpen(\'' + pjs + '\')">Continue building ▸</button>') +
-      (admin ? '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="palletTabDelete(\'' + pjs + '\')">Delete</button>' : "");
+      ((admin || nBoxes === 0) ? '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="palletTabDelete(\'' + pjs + '\')">Delete</button>' : "");
     return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
         '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
           '<span class="pill ' + pill + '" style="font-size:10px;">' + pillTxt + '</span>' +
@@ -8221,10 +8221,18 @@ function palletTabSetLocation(palletId) {
   palletRender();
 }
 function palletTabDelete(palletId) {
-  if (!(typeof timIsAdmin === "function" && timIsAdmin())) { alert("Deleting pallets is limited to an admin user."); return; }
   var p = palletGet(palletId);
   if (!p) return;
-  if (!confirm('Delete pallet "' + p.palletId + '"? Its member boxes are NOT deleted — they simply stop being on a pallet. (Restorable for ' + PALLET_TOMBSTONE_TTL_DAYS + ' days.)')) return;
+  var empty = palletBoxKeys(p).length === 0;
+  // A populated pallet is data (its box grouping) — deleting it stays admin-gated.
+  // An EMPTY pallet holds nothing, so anyone may delete it for cleanup.
+  if (!empty && !(typeof timIsAdmin === "function" && timIsAdmin())) {
+    alert("Deleting a pallet that still holds boxes is limited to an admin user.");
+    return;
+  }
+  if (!confirm('Delete pallet "' + p.palletId + '"?' +
+      (empty ? "" : " Its member boxes are NOT deleted — they simply stop being on a pallet.") +
+      ' (Restorable for ' + PALLET_TOMBSTONE_TTL_DAYS + ' days.)')) return;
   palletDelete(palletId);
   palletRender();
 }
@@ -8289,12 +8297,10 @@ function palletCapOpen(existingPalletId) {
   }, 60);
 }
 function palletCapClose() {
-  // Drop a hollow just-started pallet (ID set but no boxes) rather than leaving a
-  // ghost capturing record — mirrors the box modal only persisting on Save.
-  if (palletCapState && palletCapState.palletId) {
-    var p = palletGetRaw(palletCapState.palletId);
-    if (p && !p.deleted && p.status === "capturing" && palletBoxKeys(p).length === 0) palletPurge(palletCapState.palletId);
-  }
+  // Closing NEVER discards the pallet — once its ID is set/generated it's real
+  // (likely labeled), so it persists (empty ones stay 'capturing' and show a
+  // "Continue building" action + are deletable for cleanup). Was: purge-if-empty,
+  // which silently lost labeled pallets (Joe, v2.38.02).
   var modal = $("palletCapModal");
   if (modal) modal.classList.add("hidden");
   palletCapState = null;
@@ -8443,7 +8449,12 @@ function palletCapRenderAll() {
 function palletCapFinalizeCurrent() {
   if (!palletCapState || !palletCapState.palletId) return null;
   var p = palletGetRaw(palletCapState.palletId);
-  if (p && palletBoxKeys(p).length === 0) { palletPurge(palletCapState.palletId); return null; }
+  // An empty pallet is NOT discarded: the user set/generated its ID (and likely
+  // labeled the physical pallet), so it must persist. Keep it as 'capturing' so
+  // it stays continuable (boxes added later) — only seal it to 'ready' once it
+  // actually holds boxes. (Was: purge-if-empty, which silently lost labeled
+  // pallets — Joe, v2.38.02.)
+  if (p && palletBoxKeys(p).length === 0) return p;
   palletFinalize(palletCapState.palletId);
   return palletGet(palletCapState.palletId);
 }
