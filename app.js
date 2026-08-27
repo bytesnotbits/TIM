@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.00";
+const APP_VERSION = "v2.38.01";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -6461,6 +6461,7 @@ function boxCapOpen(existingBoxId) {
   boxCapSetEntryFlag(false);
   // Focus: box ID first for a fresh box; straight to scanning for an edit.
   setTimeout(function() {
+    if (!boxCapState) return;   // modal was closed before this focus timer fired
     var idInput = $("boxCapBoxId");
     if (idInput) idInput.value = boxCapState.boxId;
     if (boxCapState.boxId) boxCapFocusEntry(0);
@@ -6560,6 +6561,27 @@ function boxCapRenderAll() {
   var canSave = hasBox && hasCols && boxCapState.devices.length > 0;
   var nb = $("boxCapSaveNewBtn"); if (nb) nb.disabled = !canSave;
   var db = $("boxCapSaveDoneBtn"); if (db) db.disabled = !canSave;
+  _boxCapSyncPalletCtx();
+}
+
+// When the box capture modal is running NESTED inside a pallet build (an unknown
+// box scanned onto a pallet), collapse its two save buttons into one clear
+// "Save box → pallet" action and surface the pallet context — so the box is
+// always folded back into the pallet and the user can't drift off building
+// detached boxes in the box builder (the v2.38.00 "Save & New loses boxes"
+// trap). Reasserted on every render; restores the normal two-button box UI when
+// not nested. Keyed off _palletCapResume (set only during a nested build).
+function _boxCapSyncPalletCtx() {
+  var nested = (typeof _palletCapResume !== "undefined") && !!_palletCapResume;
+  var nb = $("boxCapSaveNewBtn"), db = $("boxCapSaveDoneBtn"), sub = $("boxCapSubtitle");
+  if (nested) {
+    if (nb) nb.style.display = "none";
+    if (db) db.textContent = "Save box → pallet";
+    if (sub && _palletCapResume.palletId) sub.textContent = "New box for pallet " + _palletCapResume.palletId + " — scan its contents, then Save box → pallet.";
+  } else {
+    if (nb) nb.style.display = "";
+    if (db) db.textContent = "Save & Done";
+  }
 }
 
 // Committed device rows. Read-only chips + row actions (edit, delete). A row flagged
@@ -6860,6 +6882,9 @@ function boxCapPersist() {
 }
 
 function boxCapSaveNew() {
+  // Nested in a pallet build: there is no "build another detached box in place" —
+  // always return to the pallet with this box added (guards the lost-boxes trap).
+  if ((typeof _palletCapResume !== "undefined") && _palletCapResume) { boxCapSaveDone(); return; }
   var b = boxCapPersist();
   if (!b) return;
   if (typeof invSetScanFeedback === "function")
@@ -7890,19 +7915,20 @@ function palletDeviceCount(p) {
   }, 0);
 }
 // Generate a readable, unique pallet ID for an unlabeled pallet (the user
-// hand-labels it; barcode PRINTING is deferred, same as boxes). Ambiguous
-// characters (0/O/1/I) omitted so a handwritten ID scans back cleanly.
+// hand-labels it; barcode PRINTING is deferred, same as boxes). Format
+// PAL-YY-XXXX: two-digit year only (a full YYYYMMDD run read too much like a PO
+// number — Joe, v2.38.01) + a 4-char random tail. Ambiguous characters
+// (0/O/1/I) omitted so a handwritten ID scans back cleanly.
 function palletGenId() {
-  var d = new Date();
-  var ymd = "" + d.getFullYear() + ("0" + (d.getMonth() + 1)).slice(-2) + ("0" + d.getDate()).slice(-2);
+  var yy = ("" + new Date().getFullYear()).slice(-2);
   var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  for (var tries = 0; tries < 50; tries++) {
+  for (var tries = 0; tries < 60; tries++) {
     var s = "";
-    for (var i = 0; i < 3; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
-    var cand = "PAL-" + ymd + "-" + s;
+    for (var i = 0; i < 4; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+    var cand = "PAL-" + yy + "-" + s;
     if (!palletGetRaw(cand)) return cand;
   }
-  return "PAL-" + ymd + "-" + Date.now();
+  return "PAL-" + yy + "-" + Date.now();
 }
 
 // Create or merge a pallet record. `fields` may include location, source,
@@ -8255,6 +8281,7 @@ function palletCapOpen(existingPalletId) {
   modal.classList.remove("hidden");
   palletCapRenderAll();
   setTimeout(function() {
+    if (!palletCapState) return;   // modal was closed before this focus timer fired
     var idInput = $("palletCapPalletId");
     if (idInput) idInput.value = palletCapState.palletId;
     if (palletCapState.palletId) { var s = $("palletCapScanInput"); if (s) s.focus(); }

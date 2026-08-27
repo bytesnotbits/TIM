@@ -530,7 +530,7 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 |----------|---------|
 | `palletGet(id)` / `palletGetRaw(id)` / `palletAll()` / `palletDeletedAll()` | Look up one pallet (excl. tombstones) / incl. tombstones / all live / all tombstones. Map key = `palletNormId(id)` = `normKey` |
 | `palletBoxKeys(p)` / `palletDeviceCount(p)` | A pallet's member box keys (all membership reads go through this) / rolled-up device count across member boxes |
-| `palletGenId()` | Generate a unique readable `PAL-YYYYMMDD-XXX` for an unlabeled pallet (ambiguous chars omitted); barcode PRINTING deferred |
+| `palletGenId()` | Generate a unique readable `PAL-YY-XXXX` for an unlabeled pallet (two-digit year — avoids looking like a PO number; ambiguous chars omitted); barcode PRINTING deferred |
 | `palletUpsert(id, fields)` | Create/merge a pallet (fields: location/source/status); resurrects a tombstone; stamps audit fields; never overwrites with empty |
 | `palletFindByBoxKey(boxKey)` / `palletStripBoxFrom(boxKey, exceptId)` | Single-pallet invariant: which live pallet holds this box / remove a box from every pallet except one (executes an approved move) |
 | `palletAddBox(id, boxKey, fields)` / `palletRemoveBox(id, boxKey)` | Add a box (ensures pallet exists; dedups; strips from other pallets) / remove a box key |
