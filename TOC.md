@@ -547,6 +547,7 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 |----------|---------|
 | `palletRender()` / `_palletRenderListInto(list, summary)` / `palletRenderDeletedInto(el)` | Orchestrator (Pallets tab) / render pallet cards (status pill, box+device rollup, location, expand contents, Move/Dissolve/Delete) / admin-only tombstone archive |
 | `palletToggleContents(key)` / `palletTabSetLocation(id)` | Expand/collapse a card's contents / set a ready pallet's location from the inline field (→ `palletMoveLocation`) |
+| `palletRename(oldId, btn)` | Rename a pallet's ID (expanded card) to match a mislabeled physical pallet — rekeys the map, rejects a live-pallet collision; no child retargeting (boxes don't point back). v2.38.03 |
 | `palletTabDelete(id)` / `palletTabRestore(id)` / `palletTabPurge(id)` | Delete (admin-gated only when the pallet still holds boxes; an EMPTY pallet is deletable by anyone for cleanup, v2.38.02) / restore / purge (both admin) from the tab |
 | `palletScan(input)` | Tab lookup field: known pallet → expand it; unknown → offer to build |
 | `palletCapOpen(existingId?)` / `palletCapClose()` | Open build modal fresh or to edit (reopens a sealed pallet to `capturing`) / close — NEVER discards the pallet (once its ID is set it's real/likely-labeled; empty ones persist as `capturing`, v2.38.02). Global `palletCapState` `{palletId, isEdit}` |

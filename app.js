@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.02";
+const APP_VERSION = "v2.38.03";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8165,8 +8165,19 @@ function _palletRenderListInto(list, summary) {
             '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletTabSetLocation(\'' + pjs + '\')">Set location</button>' +
           '</div>'
         : "";
+      // Rename the pallet ID to match a mislabeled physical pallet (fix a
+      // typo/transposition on a printed label without re-labeling the pallet).
+      var renameRow =
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' +
+          '<label class="small" style="font-weight:700;">Pallet ID</label>' +
+          '<input class="pallet-rename-input" value="' + escapeHtml(p.palletId) + '" ' +
+            'style="font-family:monospace;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;" autocomplete="off" ' +
+            'onkeydown="if(event.key===\'Enter\'){event.preventDefault();palletRename(\'' + pjs + '\', this);}" />' +
+          '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletRename(\'' + pjs + '\', this)">Rename</button>' +
+        '</div>';
       body =
         '<div style="margin:8px 0 4px;padding:10px;background:#f8fafc;border-radius:6px;">' +
+          renameRow +
           '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;"><tbody>' + boxRows + '</tbody></table></div>' +
           moveRow +
         '</div>';
@@ -8219,6 +8230,35 @@ function palletTabSetLocation(palletId) {
   palletMoveLocation(palletId, inp.value);
   if (typeof timFeedback === "function") timFeedback("location");
   palletRender();
+}
+// Rename a pallet's ID to match a mislabeled physical pallet. Rekeys the map;
+// rejects a collision with another live pallet. No child retargeting needed —
+// a pallet references boxes (boxKeys), boxes don't point back at the pallet.
+function palletRename(oldPalletId, btn) {
+  var inp = btn && btn.parentElement ? btn.parentElement.querySelector(".pallet-rename-input") : null;
+  var newId = sanitizeScannerValue(inp ? inp.value : "", { uppercase: true });
+  var oldKey = palletNormId(oldPalletId);
+  var p = (appData.pallets || {})[oldKey];
+  if (!p || p.deleted) return;
+  if (!newId) { alert("Enter a pallet ID."); if (inp) inp.focus(); return; }
+  var newKey = palletNormId(newId);
+  if (newKey !== oldKey && appData.pallets[newKey] && !appData.pallets[newKey].deleted) {
+    alert('A pallet with ID "' + newId + '" already exists. Choose a different ID.');
+    return;
+  }
+  var displayId = normalize(newId);
+  p.palletId = displayId;
+  p.updatedAt = invNow();
+  p.updatedBy = boxWho();
+  if (newKey !== oldKey) {
+    if (appData.pallets[newKey]) delete appData.pallets[newKey];   // clear a stale tombstone occupying the target key
+    appData.pallets[newKey] = p;
+    delete appData.pallets[oldKey];
+    if (_palletMgrExpanded[oldKey]) { delete _palletMgrExpanded[oldKey]; _palletMgrExpanded[newKey] = true; }
+  }
+  palletSaveToStorage();
+  palletRender();
+  if (typeof timFeedback === "function") timFeedback("ok");
 }
 function palletTabDelete(palletId) {
   var p = palletGet(palletId);
