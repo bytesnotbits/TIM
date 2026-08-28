@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.04";
+const APP_VERSION = "v2.38.05";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -8073,10 +8073,26 @@ function palletRestore(palletId) {
   palletSaveToStorage();
   return true;
 }
+// Manual "Purge" of a tombstone. A hard `delete` CANNOT win union/LWW sync — the
+// key just re-unions from the repo/another device, so the purged pallet keeps
+// coming back (Joe, v2.38.05). Instead EXPIRE it: backdate deletedAt beyond the
+// TTL with a fresh updatedAt, so the change propagates and every device's
+// load-time GC (palletPurgeExpiredTombstones) hard-removes it. The archive hides
+// past-cutoff tombstones immediately (see palletRenderDeletedInto), so from the
+// user's side it's gone at once and stays gone across devices. (Local hard delete
+// alone would just be undone by the next sync — that's the bug this replaces.)
 function palletPurge(palletId) {
   var key = palletNormId(palletId);
-  if (key && appData.pallets && appData.pallets[key]) { delete appData.pallets[key]; palletSaveToStorage(); return true; }
-  return false;
+  var p = key && appData.pallets ? appData.pallets[key] : null;
+  if (!p) return false;
+  var now = invNow();
+  p.deleted = true;
+  p.deletedBy = p.deletedBy || boxWho();
+  p.deletedAt = new Date(Date.now() - (PALLET_TOMBSTONE_TTL_DAYS + 1) * 86400000).toISOString();
+  p.updatedAt = now;   // fresh stamp so this expiry out-votes any stale live/tombstone copy in LWW
+  p.boxKeys = [];
+  palletSaveToStorage();
+  return true;
 }
 // Dissolve a sealed pallet: every member box reverts to an individually-tracked
 // box, stamped with formerPalletId + its assigned location + a per-box audit
@@ -8203,7 +8219,13 @@ function _palletRenderListInto(list, summary) {
 function palletRenderDeletedInto(el) {
   if (!el) return;
   if (!(typeof timIsAdmin === "function" && timIsAdmin())) { el.innerHTML = ""; return; }
-  var dels = palletDeletedAll().slice().sort(function(a, b) {
+  // Hide tombstones already past the TTL cutoff — these are purge-expired (or
+  // genuinely aged-out) and are due to be GC'd on the next load; showing them
+  // would make a "Purge" look like it did nothing. (See palletPurge.)
+  var cutoffISO = new Date(Date.now() - PALLET_TOMBSTONE_TTL_DAYS * 86400000).toISOString();
+  var dels = palletDeletedAll().filter(function(p) {
+    return !p.deletedAt || p.deletedAt >= cutoffISO;
+  }).sort(function(a, b) {
     return (b.deletedAt || "") > (a.deletedAt || "") ? 1 : -1;
   });
   if (!dels.length) { el.innerHTML = ""; return; }
