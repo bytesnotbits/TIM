@@ -364,6 +364,12 @@ th { background: #f1f5f9; position: sticky; top: 0; z-index: 1; }
 .tim-testing-banner-off { background: #1c1917; color: #fff; border: none; border-radius: 6px;
   padding: 4px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .tim-testing-banner-off:hover { background: #44403c; }
+.tim-update-banner { display: flex; align-items: center; justify-content: center; gap: 14px;
+  background: #2563eb; color: #fff; font-weight: 700; font-size: 13px;
+  padding: 8px 16px; border: 2px solid #1e40af; border-radius: 8px; margin: 8px 0 4px; }
+.tim-update-banner-btn { background: #fff; color: #1e3a8a; border: none; border-radius: 6px;
+  padding: 4px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.tim-update-banner-btn:hover { background: #dbeafe; }
 .scroll { max-height: 460px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
 textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12px; }
 

@@ -215,6 +215,10 @@
       <span>🧪 TESTING MODE — GitHub push is disabled. Changes save locally only and will <b>not</b> sync to the shared repo.</span>
       <button type="button" class="tim-testing-banner-off" onclick="ghToggleTestingMode()">Turn off</button>
     </div>
+    <div id="timUpdateBanner" class="tim-update-banner hidden" role="status" aria-live="polite">
+      <span>⬆️ A newer version of TIM is available (<span id="timUpdateVer"></span>). Update to stay in sync with the other devices.</span>
+      <button type="button" class="tim-update-banner-btn" onclick="_applyUpdate()">Update now</button>
+    </div>
     <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
 
   <!-- ── Data Import view ── -->

@@ -67,7 +67,8 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 | Variable | Purpose |
 |----------|---------|
-| `APP_VERSION` | Version string shown in UI |
+| `APP_VERSION` | Cosmetic version string shown in UI + used for the update-available check |
+| `DATA_SCHEMA_VERSION` | Compat version of the SYNCED DATA shape (stamped into `data/meta.json`); bump ONLY on a breaking data-shape/sync change — hook for a future hard-block of pushes from an incompatible-old client |
 | `appData` | Root container: `{ product_map, history, inventory_sessions, inventory_events, barcode_map, odoo_quants, recount_sessions, recount_movements, external_count, product_movements, nisc_capture, boxes, pallets }` |
 | `PRODUCT_MAP` | Alias for `appData.product_map` — item definitions keyed by item number |
 | `BARCODE_MAP` | Alias for `appData.barcode_map` — barcode→item lookup |
@@ -198,7 +199,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ### GitHub Data Sync (`gh*`)
 
-> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files) and is atomic in memory (current data is only replaced after every fetch succeeds). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit (a drop mid-push leaves the repo untouched); unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing. Conflicts (repo changed since last pull) require explicit overwrite confirmation in a **manual** push and are **blocked** in an **auto** push. The three history-commit actions (Mark as Imported / Append to History, Add Batch to History Only, Merge Existing Records) fire an auto push; offline / timed-out pushes are deferred via `GH_PENDING_KEY` and flushed on the `online` event. All fetches are timeout-bounded (`ghFetch`). The service worker bypasses `api.github.com` so responses are never cached. **Planned next:** union auto-merge of concurrent changes (keep both sides; escalate only same-record edits).
+> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `boxes.json`, `pallets.json`, `conflicts.json`, `device_labels.json`, `meta.json` (writer version-stamp `{appVersion, schemaVersion}` — byte-stable so it doesn't churn; read on pull to raise the update banner / gate a future breaking schema), `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files) and is atomic in memory (current data is only replaced after every fetch succeeds). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit (a drop mid-push leaves the repo untouched); unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing. Conflicts (repo changed since last pull) require explicit overwrite confirmation in a **manual** push and are **blocked** in an **auto** push. The three history-commit actions (Mark as Imported / Append to History, Add Batch to History Only, Merge Existing Records) fire an auto push; offline / timed-out pushes are deferred via `GH_PENDING_KEY` and flushed on the `online` event. All fetches are timeout-bounded (`ghFetch`). The service worker bypasses `api.github.com` so responses are never cached. **Planned next:** union auto-merge of concurrent changes (keep both sides; escalate only same-record edits).
 
 | Function / Variable | Purpose |
 |---------------------|---------|
@@ -976,7 +977,11 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 | `timInitUsername()` | Load + display stored username |
 | `timGetUsername()` | Read username from localStorage |
 | `timSetUsername(val)` | Save username to localStorage |
-| `checkForUpdate()` | Check GitHub Pages for newer version |
+| `checkForUpdate()` | Manual (sidebar button) check of GitHub Pages for a newer version; turns the button into "Tap to update" + also raises the header banner |
+| `_applyUpdate()` | Skip-waiting SW + wipe caches + refetch core files + reload onto the new build |
+| `timAutoUpdateCheck()` | **Headless** auto-check (fires ~3s after load + on `online`): fetch deployed `app.js`, compare, raise the banner if newer. Silent on failure — never blocks |
+| `_timVerCmp(a,b)` | Numeric dotted version compare (leading `v` ignored) → -1/0/1 |
+| `timSetUpdateAvailable(ver)` / `timRenderUpdateBanner()` | Raise (highest-wins, never downgrades) / render the non-blocking "newer version available" banner (`#timUpdateBanner`). Raised by `timAutoUpdateCheck` (Pages), `checkForUpdate` (manual), and `ghSyncNow` (Signal B: `data/meta.json` written by a newer version) |
 
 ---
 

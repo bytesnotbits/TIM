@@ -1,5 +1,13 @@
 ﻿
-const APP_VERSION = "v2.38.06";
+const APP_VERSION = "v2.38.07";
+
+// Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
+// Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
+// a change alters the shape or sync semantics of the shared data — never for a
+// UI-only release. The pull path warns when the repo was written by a newer
+// schema (see ghSyncNow); it's the hook for a future HARD block of pushes from an
+// incompatible-old client. Keep at the current value until a breaking data change.
+const DATA_SCHEMA_VERSION = 1;
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -2162,6 +2170,7 @@ async function checkForUpdate() {
       btn.textContent = "Tap to update to v" + remoteVer;
       btn.classList.add("update-ready");
       btn.onclick = _applyUpdate;
+      timSetUpdateAvailable(remoteVer);   // also surface the header banner
     } else {
       status.style.color = "#64748b";
       status.textContent = localVer ? "Up to date (v" + localVer + ")" : "Up to date.";
@@ -2172,6 +2181,57 @@ async function checkForUpdate() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// Compare two dotted version strings (leading "v" ignored). Returns -1/0/1.
+// Purely numeric per segment; missing segments treated as 0 (2.38 == 2.38.0).
+function _timVerCmp(a, b) {
+  var pa = String(a || "").replace(/^v/, "").split(".");
+  var pb = String(b || "").replace(/^v/, "").split(".");
+  var n = Math.max(pa.length, pb.length);
+  for (var i = 0; i < n; i++) {
+    var x = parseInt(pa[i] || "0", 10) || 0;
+    var y = parseInt(pb[i] || "0", 10) || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+// Non-blocking "a newer version is available" banner (#timUpdateBanner). Raised
+// by the auto-check (deployed Pages version) AND by a pull that finds the shared
+// data was written by a newer app version (data/meta.json). Purely advisory —
+// sync keeps working; this only nudges the user to update so devices converge.
+var _timUpdateAvailableVer = "";
+function timSetUpdateAvailable(ver) {
+  ver = String(ver || "").replace(/^v/, "");
+  if (!ver) return;
+  // Only raise (or raise higher) — never downgrade the shown version.
+  if (!_timUpdateAvailableVer || _timVerCmp(ver, _timUpdateAvailableVer) > 0) {
+    _timUpdateAvailableVer = ver;
+  }
+  timRenderUpdateBanner();
+}
+function timRenderUpdateBanner() {
+  var banner = $("timUpdateBanner");
+  if (!banner) return;
+  var show = !!_timUpdateAvailableVer;
+  banner.classList.toggle("hidden", !show);
+  if (show) { var v = $("timUpdateVer"); if (v) v.textContent = "v" + _timUpdateAvailableVer; }
+}
+// Auto-check the deployed version (Pages) against this build; raise the banner if
+// newer. Same fetch/parse as checkForUpdate but headless (drives the banner, not
+// the sidebar button). Silent on any failure (offline/blocked) — never blocks.
+function timAutoUpdateCheck() {
+  try {
+    fetch("./app.js?_=" + Date.now(), { cache: "no-store" })
+      .then(function(res) { return res.ok ? res.text() : ""; })
+      .then(function(text) {
+        var m = text.match(/APP_VERSION\s*=\s*"v([\d.]+)"/);
+        var localM = APP_VERSION.match(/v([\d.]+)/);
+        if (m && localM && _timVerCmp(m[1], localM[1]) > 0) timSetUpdateAvailable(m[1]);
+      })
+      .catch(function(){});
+  } catch (e) {}
 }
 
 // ===================================================================
@@ -2735,6 +2795,15 @@ function ghSyncNow(silent) {
     // history so the merge preserves it instead of dropping every record.
     if (!asm.hadHistoryShards) remote.history = history;
 
+    // Signal B (version-stamp): the shared data records the app version that last
+    // wrote it. If that's newer than this build, raise the (non-blocking) update
+    // banner — another device has already upgraded. Also the hook for a future
+    // schemaVersion HARD block (compare asm.versionMeta.schemaVersion here).
+    if (asm.versionMeta && asm.versionMeta.appVersion &&
+        _timVerCmp(asm.versionMeta.appVersion, APP_VERSION) > 0) {
+      timSetUpdateAvailable(asm.versionMeta.appVersion);
+    }
+
     timBootStep("download", "done");
     timSetBootOverlay("Merging changes…");
     timBootStep("merge", "running");
@@ -2862,6 +2931,12 @@ function ghBuildDataFiles() {
     "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
     "boxes.json": payload.boxes || {},  // carton→device registry; merged last-writer-wins per box
     "pallets.json": payload.pallets || {},  // pallet→box registry; merged last-writer-wins per pallet
+    // Writer-version stamp. Deliberately NO timestamp/device fields so it's
+    // byte-STABLE across pushes from the same version (a volatile field would make
+    // every push rewrite it → phantom commits). It changes only when a newer app
+    // version writes — exactly when a pulling device should be nudged to update.
+    // who/when is already in the commit message. schemaVersion is the compat hook.
+    "meta.json": { appVersion: APP_VERSION.replace(/^v/, ""), schemaVersion: DATA_SCHEMA_VERSION },
     "conflicts.json": ghConflictLog || [],  // shared conflict log travels with the data
     "device_labels.json": ghDeviceLabelsFile()  // shared Device Label dropdown options
   };
@@ -2884,6 +2959,7 @@ function _ghAssembleRemote(fetched) {
   var payload = {};
   var remoteConflicts = [];
   var remoteDeviceLabels = null;
+  var versionMeta = null;
   var historyShards = [];
   fetched.forEach(function(f) {
     if (f.name === "product_map.json" && f.json && typeof f.json === "object") payload.product_map = f.json;
@@ -2891,6 +2967,7 @@ function _ghAssembleRemote(fetched) {
     else if (f.name === "quants.json" && Array.isArray(f.json)) payload.odoo_quants = f.json;
     else if (f.name === "conflicts.json" && Array.isArray(f.json)) remoteConflicts = f.json;
     else if (f.name === "device_labels.json" && f.json && typeof f.json === "object") remoteDeviceLabels = f.json;
+    else if (f.name === "meta.json" && f.json && typeof f.json === "object") versionMeta = f.json;
     else if (f.name === "boxes.json" && f.json && typeof f.json === "object") payload.boxes = f.json;
     else if (f.name === "pallets.json" && f.json && typeof f.json === "object") payload.pallets = f.json;
     else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
@@ -2910,7 +2987,7 @@ function _ghAssembleRemote(fetched) {
     historyShards.sort(function(a, b) { return a.name < b.name ? -1 : 1; });
     payload.history = { records: [].concat.apply([], historyShards.map(function(s) { return s.records; })) };
   }
-  return { payload: payload, conflicts: remoteConflicts, deviceLabels: remoteDeviceLabels, hadHistoryShards: historyShards.length > 0 };
+  return { payload: payload, conflicts: remoteConflicts, deviceLabels: remoteDeviceLabels, versionMeta: versionMeta, hadHistoryShards: historyShards.length > 0 };
 }
 
 // Cheap "do these two payloads differ across merge collections?" check — used
@@ -14420,10 +14497,14 @@ try {
     if (_sb) _sb.classList.add("collapsed");
   }
   var _savedTab = localStorage.getItem("tim_active_tab");
-  if (_savedTab && ["receiving","inventory","products","mapping","barcodes","boxes"].includes(_savedTab)) {
+  if (_savedTab && ["receiving","inventory","products","mapping","barcodes","boxes","pallets"].includes(_savedTab)) {
     switchTab(_savedTab);
   }
   ghRenderTestingBanner();   // reflect persisted testing-mode state on load
+  // Non-blocking "newer version available" banner: check the deployed build a few
+  // seconds after load (don't compete with boot fetches), and again on reconnect.
+  setTimeout(timAutoUpdateCheck, 3000);
+  window.addEventListener("online", timAutoUpdateCheck);
 } catch(e) {}
 
 // Boot: show the loading overlay with a step checklist, restore the cached
