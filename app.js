@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.07";
+const APP_VERSION = "v2.38.08";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2822,7 +2822,7 @@ function ghSyncNow(silent) {
       var res = ghMergeMasters(basePayload, localPayload, remote, ctx);
 
       return _bootMarkAndSettle("merge", "done").then(function() {
-        timSetBootOverlay("Building the screen…");
+        timSetBootOverlay("Building the interface…");
         timBootStep("render", "running");
         return _nextPaint().then(function() {
           loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
@@ -14520,7 +14520,7 @@ timBootBegin([
   { id: "connect",  label: "Connect to the data store" },
   { id: "download", label: "Download data files" },
   { id: "merge",    label: "Merge changes" },
-  { id: "render",   label: "Build the screen" },
+  { id: "render",   label: "Build the interface" },
   { id: "finalize", label: "Save & finish" }
 ]);
 timBootStep("restore", "running");
