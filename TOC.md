@@ -442,7 +442,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `boxOtherBoxFor(keys, exceptBoxId)` | Single-box invariant: which OTHER box currently holds any of these identifiers (drives the "ask before moving" prompt), or null (v2.33.01) |
 | `boxStripFromOthers(keys, exceptBoxId)` | Remove those identifiers from every box except one (executes an approved cross-box move); returns affected-box count (v2.33.01) |
 | `boxDelete(boxId)` | **Soft-delete** — write a tombstone (`deleted`/`deletedAt`/`deletedBy` + fresh `updatedAt` so it wins LWW); contents kept for restore (v2.35.00) |
-| `boxRestore(boxId)` / `boxPurge(boxId)` | Undelete a tombstone (out-timestamps it) / hard-remove a box record for good (v2.35.00) |
+| `boxRestore(boxId)` / `boxPurge(boxId)` | Undelete a tombstone (out-timestamps it) / EXPIRE the tombstone: backdate `deletedAt` past the TTL + fresh `updatedAt` so LWW can't resurrect it, then `boxPurgeExpiredTombstones` GCs it on next load everywhere (v2.38.06; was hard-`delete`, which re-unioned back) |
 | `boxPurgeExpiredTombstones()` | Load-time GC: hard-remove tombstones older than `BOX_TOMBSTONE_TTL_DAYS` (90); silent write, no push (v2.35.00) |
 | `boxTabRestore(id)` / `boxTabPurge(id)` / `boxRenderDeletedInto(el)` | Admin-only Deleted-boxes archive actions + render (Boxes tab `#boxTabDeleted`); delete is gated by `timIsAdmin()` (v2.35.00) |
 | `boxSaveToStorage()` / `boxLoadFromStorage()` | Persist/restore `appData.boxes` to/from IDB. Save schedules a debounced GitHub push (`scheduleBoxPush`, v2.34.00) |

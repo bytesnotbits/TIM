@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.05";
+const APP_VERSION = "v2.38.06";
 
 // Stamp version into title bar, app header, and schema docs heading
 document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
@@ -5942,8 +5942,22 @@ function boxRestore(boxId) {
 // Hard-remove a box record entirely (manual purge + auto-purge). No going back.
 function boxPurge(boxId) {
   var key = boxNormId(boxId);
-  if (key && appData.boxes && appData.boxes[key]) { delete appData.boxes[key]; boxSaveToStorage(); return true; }
-  return false;
+  var b = key && appData.boxes ? appData.boxes[key] : null;
+  if (!b) return false;
+  // A hard `delete` cannot win the whole-box LWW union merge — the key just
+  // re-unions from the repo/another device and the purged box resurrects. So
+  // EXPIRE the tombstone instead: backdate deletedAt past the TTL cutoff and
+  // give it a fresh updatedAt so this expiry out-votes any stale live/tombstone
+  // copy in LWW; the load-time boxPurgeExpiredTombstones GC then hard-removes it
+  // on every device. (Mirrors palletPurge — see the pallet fix, v2.38.05.)
+  var now = invNow();
+  b.deleted = true;
+  b.deletedBy = b.deletedBy || boxWho();
+  b.deletedAt = new Date(Date.now() - (BOX_TOMBSTONE_TTL_DAYS + 1) * 86400000).toISOString();
+  b.updatedAt = now;   // fresh stamp so this expiry out-votes any stale live/tombstone copy in LWW
+  b.expectedDevices = [];
+  boxSaveToStorage();
+  return true;
 }
 // Load-time GC: hard-remove tombstones older than the TTL. Writes SILENTLY (no
 // scheduleBoxPush) so a boot doesn't fire a push; the removal reaches the repo
@@ -7399,7 +7413,13 @@ function boxTabPurge(boxId) {
 function boxRenderDeletedInto(el) {
   if (!el) return;
   if (!timIsAdmin()) { el.innerHTML = ""; return; }
-  var dels = boxDeletedAll().slice().sort(function(a, b) {
+  // Hide tombstones already past the TTL cutoff — these are purge-expired (or
+  // genuinely aged-out) and are due to be GC'd on the next load; showing them
+  // would make a "Purge" look like it did nothing. (See boxPurge.)
+  var cutoffISO = new Date(Date.now() - BOX_TOMBSTONE_TTL_DAYS * 86400000).toISOString();
+  var dels = boxDeletedAll().filter(function(b) {
+    return !b.deletedAt || b.deletedAt >= cutoffISO;
+  }).sort(function(a, b) {
     return (b.deletedAt || "") > (a.deletedAt || "") ? 1 : -1;
   });
   if (!dels.length) { el.innerHTML = ""; return; }
