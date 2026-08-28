@@ -1,0 +1,18 @@
+# Stale v1-era branches pruned 2026-08-28 — restore with: git branch <name> <sha> && git push origin <name>
+b0ccdf9d6151ed4350083dfc8346d2ee6fe98f32	1.07.01-Remove-appLogic.js
+9bd84e00ec4a0c90a972fb72b2396202c8f25911	1.07.02
+d7000a84e1ff3ee7009981891643b310ccb6a3c9	1.07.02-Testing
+ac154cf1210dcdc93afab964c5e1e8e130900798	1.08.00-Fix-Summary-Card-counts
+030780ea80b48be36d6ada6ec55723baa91a3bb7	Begin-database-restructure
+ac0778e23dc32188e05710356427f64ab3676294	Phase-1.2-Cycle-Count-Logic
+1d5dd05ce8e4a472a2ae89fe4974d2ad98eb25bc	Refactor-into-smaller-files
+e4648bf890a5430c015b60f7eceebe51f8a3b9a9	Version-1.0
+eb15ec5008cd447f1caa5508b9c331977fd113ad	Version-1.01-add-finalize-the-count-for-specific-item-button
+eb15ec5008cd447f1caa5508b9c331977fd113ad	Version-1.02-Clickable-dashboard-cards-(Functional)
+eb15ec5008cd447f1caa5508b9c331977fd113ad	v.1.03-modify-autosaving-(functional)
+2f23623266e2cc2350d6dcf08c6210fb8dda3e81	v.1.05-seq-calc-no-render-(functional)
+52693335bde4a227875c5f64fc48b1de44b08bf2	v.1.06-implement-recount-dashboard
+99fc3dec4ac9e08947aebb7db8f5cdceb91e9a71	v.1.06-implement-recounts-and-ui-adjust
+cb75019c6a34ddbd27c101dd79991671d807bdce	v.1.07-Updating-UI/UX-for-item-cards
+c6475f7533a5681ca2f4c0266c4d07867eb65817	v.1.07.01-Bug-fixing
+b1e5afbb030e7e7eea09246322d4481db66b63ca	v1.04-refine-reel-seqs-make-clickable
