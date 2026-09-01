@@ -708,6 +708,18 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 
 ---
 
+### Serial / Device Lookup (Products tab)
+
+> Read-only reverse lookup of a serialized device, in the Products tab — parallel to Reel Lookup, no inventory session required. Sources from `history.records`, deduped to one entry per device (primary identity serial→fsan→mac, most-recent kept). Matches on serial / FSAN / MAC (any scanner identifier); grouped by item; item links open `prodShowItemHistory`. Shows item/product identity only (Joe's scope, v2.39.00) — not location/sale-order/box.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `_SERIAL_LOOKUP_CAP` | Max device rows rendered before a "narrow your search" note (500) |
+| `serialLookupBuildList()` | Reduce `history.records` → one entry per device (dedup by serial→fsan→mac, most-recent) |
+| `serialLookupRender()` | Render the Serial / Device Lookup card: filter by `#serialLookupSearch` (serial/FSAN/MAC), group by item |
+
+---
+
 ### Reel Lookup (Products tab)
 
 > Read-only browse of last-known reel footage, in the Products tab — no inventory session required. Sources reel data straight from `cable_reel_count` events (master + active session), deduped to the latest non-voided event per item+reel. Searchable by item number or reel number; grouped by item; item links open `prodShowItemHistory`.

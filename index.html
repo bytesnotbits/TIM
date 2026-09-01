@@ -1147,6 +1147,20 @@
       </div>
     </div>
 
+    <!-- Serial / Device Lookup -->
+    <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        Serial / Device Lookup
+        <span id="serialLookupCount" class="small" style="font-weight:400;color:#64748b;"></span>
+      </h2>
+      <p class="small" style="color:#475569;margin:0 0 12px;">Find a serialized device by any identifier a scanner produces — serial, FSAN, or MAC — and see the item it's assigned to. Reads receiving history; no inventory session needed.</p>
+      <div class="prod-search-row">
+        <input type="search" id="serialLookupSearch" placeholder="Search by serial, FSAN, or MAC…" oninput="serialLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
+        <button class="secondary" onclick="serialLookupRender()">Refresh</button>
+      </div>
+      <div id="serialLookupBody" class="scroll"><p class="small" style="color:#94a3b8;margin:0;">Type a serial, FSAN, or MAC to find a device.</p></div>
+    </div>
+
     <!-- Reel Lookup -->
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">

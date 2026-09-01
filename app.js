@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.38.09";
+const APP_VERSION = "v2.39.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4280,7 +4280,7 @@ function switchTab(name) {
   }
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
-  if (name === "products") { prodRenderList(); reelLookupRender(); }
+  if (name === "products") { prodRenderList(); serialLookupRender(); reelLookupRender(); }
   if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
   if (name === "pallets") palletRender();        // dedicated Pallets section — registry front door (no session)
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
@@ -15729,6 +15729,117 @@ function reelLookupRender() {
   html += '</tbody></table>';
   if (capped) {
     html += '<p class="small" style="color:#94a3b8;margin:8px 0 0;">Showing the first ' + _REEL_LOOKUP_CAP + ' reels — narrow your search to see the rest.</p>';
+  }
+  body.innerHTML = html;
+}
+
+// ─── Serial / Device Lookup ─────────────────────────────────────────────────
+// Parallel to Reel Lookup, but for serialized devices. Type any identifier a
+// scanner produces (serial / FSAN / MAC) and find the device + the item it is.
+// Reference-only: reads history.records, no inventory session needed.
+var _SERIAL_LOOKUP_CAP = 500;  // max rows rendered before a "narrow your search" note
+
+// One entry per distinct device, deduped by primary identity (serial→fsan→mac),
+// keeping the most-recent record so a device that was received then RMA'd shows
+// its latest assignment. Item/description follow the HistoryRecord field aliases.
+function serialLookupBuildList() {
+  var byKey = {};
+  (history.records || []).forEach(function(r) {
+    if (!r) return;
+    var serial = r.serial || r.ref || "";
+    var fsan   = r.fsan   || r.name || "";
+    var mac    = r.mac_address || r.mac || "";
+    if (!serial && !fsan && !mac) return;   // nothing to look up
+    var item = r.hctc || r.calix_product || r.product || "";
+    var desc = r.odoo_name || r.calix_description || r.description || "";
+    var k = normKey(serial) || normKey(fsan) || normKey(mac);
+    var ts = r.imported_at || r.ship_date || "";
+    var cur = byKey[k];
+    if (!cur || (ts || "") > (cur._ts || "")) {
+      byKey[k] = { serial: serial, fsan: fsan, mac: mac, item: item, description: desc, _ts: ts };
+    }
+  });
+  return Object.keys(byKey).map(function(k) { return byKey[k]; });
+}
+
+function serialLookupRender() {
+  var body = $("serialLookupBody");
+  if (!body) return;
+  var q = normKey(($("serialLookupSearch") ? $("serialLookupSearch").value : "") || "");
+
+  var all = serialLookupBuildList();
+  var totalDevices = all.length;
+  var list = q
+    ? all.filter(function(e) {
+        return normKey(e.serial).indexOf(q) !== -1
+            || normKey(e.fsan).indexOf(q)   !== -1
+            || normKey(e.mac).indexOf(q)    !== -1;
+      })
+    : all;
+
+  // Group surviving devices by item number
+  var groups = {};
+  list.forEach(function(e) {
+    var item = e.item || "(no item)";
+    (groups[item] = groups[item] || []).push(e);
+  });
+  var itemKeys = Object.keys(groups).sort();
+
+  var countEl = $("serialLookupCount");
+  if (countEl) {
+    countEl.textContent = totalDevices
+      ? (q ? list.length + " of " + totalDevices + " devices"
+           : totalDevices + " devices across " + itemKeys.length + " item" + (itemKeys.length !== 1 ? "s" : ""))
+      : "no serialized devices yet";
+  }
+
+  if (!totalDevices) {
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No serialized devices in history yet. Load a master JSON or receive devices first.</p>';
+    return;
+  }
+  if (!q) {
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">Type a serial, FSAN, or MAC above to find a device. (' + totalDevices.toLocaleString() + ' devices on file.)</p>';
+    return;
+  }
+  if (!list.length) {
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No device matches “' + escapeHtml($("serialLookupSearch").value.trim()) + '”.</p>';
+    return;
+  }
+
+  var html = '<table><thead><tr>'
+    + '<th>Serial</th><th>FSAN</th><th>MAC</th>'
+    + '</tr></thead><tbody>';
+  var shown = 0, capped = false;
+
+  for (var gi = 0; gi < itemKeys.length && !capped; gi++) {
+    var item = itemKeys[gi];
+    var devices = groups[item].slice().sort(function(a, b) {
+      return normKey(a.serial || a.fsan || a.mac).localeCompare(normKey(b.serial || b.fsan || b.mac));
+    });
+    var desc = "";
+    for (var d = 0; d < devices.length; d++) { if (devices[d].description) { desc = devices[d].description; break; } }
+    if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
+
+    html += '<tr style="background:#f8fafc;"><td colspan="3" style="padding:8px 10px;">'
+      + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
+      + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
+      + ' <span style="color:#94a3b8;">(' + devices.length + ' device' + (devices.length !== 1 ? 's' : '') + ')</span>'
+      + '</td></tr>';
+
+    for (var j = 0; j < devices.length; j++) {
+      if (shown >= _SERIAL_LOOKUP_CAP) { capped = true; break; }
+      var e = devices[j];
+      html += '<tr>'
+        + '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(e.serial || '—') + '</td>'
+        + '<td style="font-family:monospace;">' + escapeHtml(e.fsan || '—') + '</td>'
+        + '<td style="font-family:monospace;">' + escapeHtml(e.mac || '—') + '</td>'
+        + '</tr>';
+      shown++;
+    }
+  }
+  html += '</tbody></table>';
+  if (capped) {
+    html += '<p class="small" style="color:#94a3b8;margin:8px 0 0;">Showing the first ' + _SERIAL_LOOKUP_CAP + ' devices — narrow your search to see the rest.</p>';
   }
   body.innerHTML = html;
 }
