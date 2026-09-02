@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.40.00";
+const APP_VERSION = "v2.40.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -7134,10 +7134,9 @@ function invBoxManagerToggleContents(boxKey) {
 // only one is on screen at a time and every edit handler re-calls this, both stay
 // in sync without knowing which surface the user is on.
 function invRenderBoxManager() {
-  _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));
-  _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"));
+  _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));        // in-count modal (not selectable)
+  _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"),        true);  // Boxes tab: export checkboxes + filter
   boxRenderDeletedInto($("boxTabDeleted"));   // admin-only archive, Boxes tab
-  if (typeof boxExportRender === "function") boxExportRender();   // contents-export picker (Boxes tab)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -7365,19 +7364,33 @@ function boxAuditCommit(update) {
   invRenderBoxManager();
   boxAuditClose();
 }
-function _boxRenderRegistryInto(list, summary) {
+// selectable=true (Boxes tab only, never the in-count modal) prepends an export
+// checkbox to each card and honours the tab's live search filter (_boxListFilter).
+function _boxRenderRegistryInto(list, summary, selectable) {
   if (!list) return;
-  var boxes = boxAll().slice().sort(function(a, b) {
+  var all = boxAll().slice().sort(function(a, b) {
     return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1;
   });
-  if (summary) summary.textContent = boxes.length + " box(es) in the registry";
+  var filt  = selectable ? (_boxListFilter || "").trim().toLowerCase() : "";
+  var boxes = filt ? all.filter(function(b) { return _boxMatchesFilter(b, filt); }) : all;
+  if (summary) summary.textContent = filt
+    ? ("showing " + boxes.length + " of " + all.length + " box(es)")
+    : (all.length + " box(es) in the registry");
+  if (selectable) boxExportUpdateBar();
   if (!boxes.length) {
-    list.innerHTML = '<div style="color:#94a3b8;padding:18px;text-align:center;">No boxes captured yet.</div>';
+    list.innerHTML = filt
+      ? '<div style="color:#94a3b8;padding:18px;text-align:center;">No boxes match &ldquo;' + escapeHtml(filt) + '&rdquo;.</div>'
+      : '<div style="color:#94a3b8;padding:18px;text-align:center;">No boxes captured yet.</div>';
     return;
   }
   list.innerHTML = boxes.map(function(b) {
     var key   = boxNormId(b.boxId);
     var n     = boxDeviceList(b).length;
+    var checkbox = selectable
+      ? '<input type="checkbox" data-k="' + escapeHtml(key) + '" ' + (boxExportSel[key] ? "checked" : "") +
+        ' title="Select for export" style="width:17px;height:17px;flex:none;" ' +
+        'onchange="boxExportToggle(\'' + chkJsStr(key) + '\')" />'
+      : "";
     var qtyTxt= b.expectedQty ? (n + " / " + b.expectedQty) : String(n);
     var statusPill = b.status === "ready" ? "ok" : "block";
     var expanded = !!_invBoxMgrExpanded[key];
@@ -7435,6 +7448,7 @@ function _boxRenderRegistryInto(list, summary) {
     }
     return '<div data-boxkey="' + escapeHtml(key) + '" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        checkbox +
         '<span style="font-weight:700;font-family:monospace;">' + escapeHtml(b.boxId) + '</span>' +
         '<span class="pill ' + statusPill + '">' + escapeHtml(b.status || "") + '</span>' +
         '<span class="small">' + qtyTxt + ' device(s)</span>' +
@@ -7511,39 +7525,65 @@ function _contentsCsv(rows) {
   })).join("\r\n");
 }
 
-// ── Boxes tab ──
+// ── Boxes tab: selection + search (single unified list) ──
+// The export checkboxes + toolbar live on the SAME rich registry cards rendered
+// by _boxRenderRegistryInto (tab surface only, selectable=true — never the
+// in-count modal). One search field does double duty: typing live-filters the
+// list (by box ID or location); scan+Enter (or a filter that narrows to one)
+// ticks the exact match. "Select all" selects everything currently matching the
+// filter, so you can filter to a location and bulk-select it. Toggling a single
+// box doesn't re-render (keeps scroll put on a long list) — it just flips state
+// and updates the toolbar; the native checkbox holds its own visual state.
+var _boxListFilter = "";
+function _boxMatchesFilter(b, f) {
+  if (!f) return true;
+  return ((b.boxId || "").toLowerCase().indexOf(f) !== -1) ||
+         ((b.location || "").toLowerCase().indexOf(f) !== -1);
+}
 function boxExportSelectedKeys() { return Object.keys(boxExportSel).filter(function(k) { return boxExportSel[k]; }); }
-function boxExportToggle(key) { key = boxNormId(key); if (boxExportSel[key]) delete boxExportSel[key]; else boxExportSel[key] = true; boxExportRender(); }
-function boxExportCheckAll() { boxAll().forEach(function(b) { boxExportSel[boxNormId(b.boxId)] = true; }); boxExportRender(); }
-function boxExportClear() { boxExportSel = {}; boxExportRender(); }
-function boxExportScan(input) {
+function boxExportToggle(key) { key = boxNormId(key); if (boxExportSel[key]) delete boxExportSel[key]; else boxExportSel[key] = true; boxExportUpdateBar(); }
+function boxExportClear() {
+  boxExportSel = {};
+  var host = $("boxTabList");
+  if (host) host.querySelectorAll('input[type="checkbox"][data-k]').forEach(function(cb) { cb.checked = false; });
+  boxExportUpdateBar();
+}
+// Select every box currently shown (i.e. matching the active filter).
+function boxExportCheckAllFiltered() {
+  var host = $("boxTabList"); if (!host) return;
+  host.querySelectorAll('input[type="checkbox"][data-k]').forEach(function(cb) {
+    boxExportSel[cb.getAttribute("data-k")] = true;
+    cb.checked = true;
+  });
+  boxExportUpdateBar();
+}
+function boxListSetFilter(v) { _boxListFilter = v || ""; _boxRenderRegistryInto($("boxTabList"), $("boxTabSummary"), true); }
+// Enter in the search/scan field: select the exact box (full barcode scan), or
+// the single box the current filter narrows to. Then clear the filter so the
+// full list returns with the new tick in place, ready for the next scan.
+function boxListSelectMatch(input) {
   var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
-  if (input) { input.value = ""; input.focus(); }
   if (!v) return;
   var b = boxGet(v);
-  if (!b) { var c = $("boxExportCount"); if (c) c.textContent = 'No box "' + v + '" in the registry.'; return; }
+  if (!b) {
+    var f = (_boxListFilter || "").trim().toLowerCase();
+    var matches = boxAll().filter(function(x) { return _boxMatchesFilter(x, f); });
+    if (matches.length === 1) b = matches[0];
+  }
+  if (!b) { var c = $("boxExportCount"); if (c) c.textContent = 'No box matches "' + v + '".'; return; }
   boxExportSel[boxNormId(b.boxId)] = true;
-  boxExportRender();
+  _boxListFilter = "";
+  if (input) input.value = "";
+  _boxRenderRegistryInto($("boxTabList"), $("boxTabSummary"), true);
+  if (input) input.focus();
 }
-function boxExportRender() {
-  var list = $("boxExportList"); if (!list) return;
-  var boxes = boxAll().slice().sort(function(a, b) { return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1; });
+// Refresh only the toolbar's count text + Export button label (no list rebuild).
+function boxExportUpdateBar() {
+  var total = boxAll().length;
   var sel = boxExportSelectedKeys().length;
   var cnt = $("boxExportCount");
-  if (cnt) cnt.textContent = !boxes.length ? "" : (sel ? sel + " selected of " + boxes.length : "none selected — Export sends all " + boxes.length);
+  if (cnt) cnt.textContent = !total ? "" : (sel ? (sel + " selected") : ("none selected — Export sends all " + total));
   var btn = $("boxExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
-  if (!boxes.length) { list.innerHTML = '<div class="small" style="color:#94a3b8;padding:10px;">No boxes to export.</div>'; return; }
-  list.innerHTML = boxes.map(function(b) {
-    var key = boxNormId(b.boxId);
-    var n = boxDeviceList(b).length;
-    return '<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f1f5f9;cursor:pointer;">' +
-      '<input type="checkbox" ' + (boxExportSel[key] ? "checked" : "") + ' onchange="boxExportToggle(\'' + chkJsStr(key) + '\')" />' +
-      '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(b.boxId) + '</span>' +
-      '<span class="small" style="color:#64748b;">' + n + ' device(s)</span>' +
-      '<span class="pill ' + (b.status === "ready" ? "ok" : "block") + '" style="margin-left:auto;">' + escapeHtml(b.status || "") + '</span>' +
-      (b.location ? '<span class="small" style="color:#64748b;">@ ' + escapeHtml(b.location) + '</span>' : "") +
-    '</label>';
-  }).join("");
 }
 function boxExportCsv() {
   var keys = boxExportSelectedKeys();
@@ -7556,38 +7596,52 @@ function boxExportCsv() {
   downloadText(name, _contentsCsv(rows), "text/csv");
 }
 
-// ── Pallets tab ──
+// ── Pallets tab: selection + search (mirror of the box set) ──
+var _palletListFilter = "";
+function _palletMatchesFilter(p, f) {
+  if (!f) return true;
+  return ((p.palletId || "").toLowerCase().indexOf(f) !== -1) ||
+         ((p.location || "").toLowerCase().indexOf(f) !== -1);
+}
 function palletExportSelectedKeys() { return Object.keys(palletExportSel).filter(function(k) { return palletExportSel[k]; }); }
-function palletExportToggle(key) { key = palletNormId(key); if (palletExportSel[key]) delete palletExportSel[key]; else palletExportSel[key] = true; palletExportRender(); }
-function palletExportCheckAll() { palletAll().forEach(function(p) { palletExportSel[palletNormId(p.palletId)] = true; }); palletExportRender(); }
-function palletExportClear() { palletExportSel = {}; palletExportRender(); }
-function palletExportScan(input) {
+function palletExportToggle(key) { key = palletNormId(key); if (palletExportSel[key]) delete palletExportSel[key]; else palletExportSel[key] = true; palletExportUpdateBar(); }
+function palletExportClear() {
+  palletExportSel = {};
+  var host = $("palletTabList");
+  if (host) host.querySelectorAll('input[type="checkbox"][data-k]').forEach(function(cb) { cb.checked = false; });
+  palletExportUpdateBar();
+}
+function palletExportCheckAllFiltered() {
+  var host = $("palletTabList"); if (!host) return;
+  host.querySelectorAll('input[type="checkbox"][data-k]').forEach(function(cb) {
+    palletExportSel[cb.getAttribute("data-k")] = true;
+    cb.checked = true;
+  });
+  palletExportUpdateBar();
+}
+function palletListSetFilter(v) { _palletListFilter = v || ""; _palletRenderListInto($("palletTabList"), $("palletTabSummary"), true); }
+function palletListSelectMatch(input) {
   var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
-  if (input) { input.value = ""; input.focus(); }
   if (!v) return;
   var p = palletGet(v);
-  if (!p) { var c = $("palletExportCount"); if (c) c.textContent = 'No pallet "' + v + '" in the registry.'; return; }
+  if (!p) {
+    var f = (_palletListFilter || "").trim().toLowerCase();
+    var matches = palletAll().filter(function(x) { return _palletMatchesFilter(x, f); });
+    if (matches.length === 1) p = matches[0];
+  }
+  if (!p) { var c = $("palletExportCount"); if (c) c.textContent = 'No pallet matches "' + v + '".'; return; }
   palletExportSel[palletNormId(p.palletId)] = true;
-  palletExportRender();
+  _palletListFilter = "";
+  if (input) input.value = "";
+  _palletRenderListInto($("palletTabList"), $("palletTabSummary"), true);
+  if (input) input.focus();
 }
-function palletExportRender() {
-  var list = $("palletExportList"); if (!list) return;
-  var pals = palletAll().slice().sort(function(a, b) { return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1; });
+function palletExportUpdateBar() {
+  var total = palletAll().length;
   var sel = palletExportSelectedKeys().length;
   var cnt = $("palletExportCount");
-  if (cnt) cnt.textContent = !pals.length ? "" : (sel ? sel + " selected of " + pals.length : "none selected — Export sends all " + pals.length);
+  if (cnt) cnt.textContent = !total ? "" : (sel ? (sel + " selected") : ("none selected — Export sends all " + total));
   var btn = $("palletExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
-  if (!pals.length) { list.innerHTML = '<div class="small" style="color:#94a3b8;padding:10px;">No pallets to export.</div>'; return; }
-  list.innerHTML = pals.map(function(p) {
-    var key = palletNormId(p.palletId);
-    return '<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f1f5f9;cursor:pointer;">' +
-      '<input type="checkbox" ' + (palletExportSel[key] ? "checked" : "") + ' onchange="palletExportToggle(\'' + chkJsStr(key) + '\')" />' +
-      '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(p.palletId) + '</span>' +
-      '<span class="small" style="color:#64748b;">' + palletBoxKeys(p).length + ' box(es) · ' + palletDeviceCount(p) + ' device(s)</span>' +
-      '<span class="pill ' + (p.status === "ready" ? "ok" : "block") + '" style="margin-left:auto;">' + escapeHtml(p.status || "") + '</span>' +
-      (p.location ? '<span class="small" style="color:#64748b;">@ ' + escapeHtml(p.location) + '</span>' : "") +
-    '</label>';
-  }).join("");
 }
 function palletExportCsv() {
   var keys = palletExportSelectedKeys();
@@ -8384,19 +8438,28 @@ function palletDissolve(palletId, plan) {
 var _palletMgrExpanded = {};   // palletKey → true (expanded contents in the list)
 
 function palletRender() {
-  _palletRenderListInto($("palletTabList"), $("palletTabSummary"));
+  _palletRenderListInto($("palletTabList"), $("palletTabSummary"), true);   // export checkboxes + filter
   palletRenderDeletedInto($("palletTabDeleted"));
-  if (typeof palletExportRender === "function") palletExportRender();   // contents-export picker (Pallets tab)
 }
 
-function _palletRenderListInto(list, summary) {
+// selectable=true prepends an export checkbox to each card and honours the tab's
+// live search filter (_palletListFilter). The pallet list has one surface, so it
+// is always selectable — the arg mirrors the box renderer for symmetry.
+function _palletRenderListInto(list, summary, selectable) {
   if (!list) return;
-  var pals = palletAll().slice().sort(function(a, b) {
+  var all = palletAll().slice().sort(function(a, b) {
     return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1;
   });
-  if (summary) summary.textContent = pals.length + " pallet(s) in the registry";
+  var filt = selectable ? (_palletListFilter || "").trim().toLowerCase() : "";
+  var pals = filt ? all.filter(function(p) { return _palletMatchesFilter(p, filt); }) : all;
+  if (summary) summary.textContent = filt
+    ? ("showing " + pals.length + " of " + all.length + " pallet(s)")
+    : (all.length + " pallet(s) in the registry");
+  if (selectable) palletExportUpdateBar();
   if (!pals.length) {
-    list.innerHTML = '<div style="color:#94a3b8;padding:18px;text-align:center;">No pallets built yet. Tap “New Pallet” to start.</div>';
+    list.innerHTML = filt
+      ? '<div style="color:#94a3b8;padding:18px;text-align:center;">No pallets match &ldquo;' + escapeHtml(filt) + '&rdquo;.</div>'
+      : '<div style="color:#94a3b8;padding:18px;text-align:center;">No pallets built yet. Tap “New Pallet” to start.</div>';
     return;
   }
   list.innerHTML = pals.map(function(p) {
@@ -8460,8 +8523,14 @@ function _palletRenderListInto(list, summary) {
         ? '<button class="secondary" style="padding:4px 10px;font-size:12px;" onclick="palletBeginDissolve(\'' + pjs + '\')">Dissolve</button>'
         : '<button style="padding:4px 10px;font-size:12px;" onclick="palletCapOpen(\'' + pjs + '\')">Continue building ▸</button>') +
       ((admin || nBoxes === 0) ? '<button class="danger" style="padding:4px 10px;font-size:12px;" onclick="palletTabDelete(\'' + pjs + '\')">Delete</button>' : "");
+    var checkbox = selectable
+      ? '<input type="checkbox" data-k="' + escapeHtml(key) + '" ' + (palletExportSel[key] ? "checked" : "") +
+        ' title="Select for export" style="width:17px;height:17px;flex:none;" ' +
+        'onchange="palletExportToggle(\'' + chkJsStr(key) + '\')" />'
+      : "";
     return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
         '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+          checkbox +
           '<span class="pill ' + pill + '" style="font-size:10px;">' + pillTxt + '</span>' +
           '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(p.palletId) + '</span>' +
           '<span style="color:#64748b;font-size:12px;">' + nBoxes + ' box(es) · ' + nDev + ' device(s)</span>' +
