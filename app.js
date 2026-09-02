@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.39.00";
+const APP_VERSION = "v2.40.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -7137,6 +7137,7 @@ function invRenderBoxManager() {
   _boxRenderRegistryInto($("invBoxManagerList"), $("invBoxManagerSummary"));
   _boxRenderRegistryInto($("boxTabList"),        $("boxTabSummary"));
   boxRenderDeletedInto($("boxTabDeleted"));   // admin-only archive, Boxes tab
+  if (typeof boxExportRender === "function") boxExportRender();   // contents-export picker (Boxes tab)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -7451,6 +7452,163 @@ function _boxRenderRegistryInto(list, summary) {
     '</div>';
   }).join("");
 }
+// ─────────────────────────────────────────────────────────────────────────
+// Contents export (v2.40.00) — select or scan box(es)/pallet(s) and export a
+// device manifest to CSV. One row per device with a unified schema shared by
+// boxes and pallets, so a box file and a pallet file line up column-for-column.
+// Reads existing registry shapes only (no data-model change); product columns
+// (item/description/Odoo external ID) are resolved per device via history
+// (invBoxResolveDevice), so the file serves as a manifest, an Odoo-import
+// starting point, and a general data dump at once. Selection lives in memory
+// (boxExportSel / palletExportSel); with nothing selected, Export sends all.
+// ─────────────────────────────────────────────────────────────────────────
+var CONTENTS_EXPORT_HEADER = ["Pallet ID","Pallet Location","Box ID","Box Status","Box Location","Serial","FSAN","MAC","Item","Description","Odoo External ID","Flags"];
+var boxExportSel = {};
+var palletExportSel = {};
+
+function _fileSafe(s) { return (String(s == null ? "" : s).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "")) || "x"; }
+
+// Resolve a device's product columns from history (blank if unknown).
+function _contentsResolveProduct(dev) {
+  var rec = null;
+  try {
+    var idv = dev && (dev.serial || dev.fsan || dev.mac);
+    if (idv && typeof invBoxResolveDevice === "function") rec = invBoxResolveDevice(idv);
+  } catch (e) {}
+  if (!rec) return { item: "", desc: "", ext: "" };
+  return {
+    item: rec.hctc || "",
+    desc: rec.calix_description || rec.odoo_name || rec.calix_product || "",
+    ext:  rec.odoo_external_id || rec.external_id || ""
+  };
+}
+
+// Device rows for one box. palletCtx = {id, location} when exporting from a
+// pallet; when null (box export) the box's own pallet is resolved for context.
+function _boxContentsRows(box, palletCtx) {
+  if (!box) return [];
+  var pid = palletCtx ? palletCtx.id : "";
+  var ploc = palletCtx ? (palletCtx.location || "") : "";
+  if (!palletCtx && typeof palletFindByBoxKey === "function") {
+    var p = palletFindByBoxKey(boxNormId(box.boxId));
+    if (p) { pid = p.palletId; ploc = p.location || ""; }
+  }
+  var bstat = box.status || "", bloc = box.location || "";
+  var devs = boxDeviceList(box);
+  if (!devs.length) return [[pid, ploc, box.boxId, bstat, bloc, "", "", "", "", "", "", "EMPTY"]];
+  return devs.map(function(d) {
+    var pr = _contentsResolveProduct(d);
+    var flags = [];
+    if (d.partial) flags.push("partial");
+    if (d.unverified) flags.push("unverified");
+    return [pid, ploc, box.boxId, bstat, bloc, d.serial || "", d.fsan || "", d.mac || "", pr.item, pr.desc, pr.ext, flags.join("|")];
+  });
+}
+
+function _contentsCsv(rows) {
+  return [CONTENTS_EXPORT_HEADER.join(",")].concat(rows.map(function(r) {
+    return r.map(csvEscape).join(",");
+  })).join("\r\n");
+}
+
+// ── Boxes tab ──
+function boxExportSelectedKeys() { return Object.keys(boxExportSel).filter(function(k) { return boxExportSel[k]; }); }
+function boxExportToggle(key) { key = boxNormId(key); if (boxExportSel[key]) delete boxExportSel[key]; else boxExportSel[key] = true; boxExportRender(); }
+function boxExportCheckAll() { boxAll().forEach(function(b) { boxExportSel[boxNormId(b.boxId)] = true; }); boxExportRender(); }
+function boxExportClear() { boxExportSel = {}; boxExportRender(); }
+function boxExportScan(input) {
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (input) { input.value = ""; input.focus(); }
+  if (!v) return;
+  var b = boxGet(v);
+  if (!b) { var c = $("boxExportCount"); if (c) c.textContent = 'No box "' + v + '" in the registry.'; return; }
+  boxExportSel[boxNormId(b.boxId)] = true;
+  boxExportRender();
+}
+function boxExportRender() {
+  var list = $("boxExportList"); if (!list) return;
+  var boxes = boxAll().slice().sort(function(a, b) { return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1; });
+  var sel = boxExportSelectedKeys().length;
+  var cnt = $("boxExportCount");
+  if (cnt) cnt.textContent = !boxes.length ? "" : (sel ? sel + " selected of " + boxes.length : "none selected — Export sends all " + boxes.length);
+  var btn = $("boxExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
+  if (!boxes.length) { list.innerHTML = '<div class="small" style="color:#94a3b8;padding:10px;">No boxes to export.</div>'; return; }
+  list.innerHTML = boxes.map(function(b) {
+    var key = boxNormId(b.boxId);
+    var n = boxDeviceList(b).length;
+    return '<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f1f5f9;cursor:pointer;">' +
+      '<input type="checkbox" ' + (boxExportSel[key] ? "checked" : "") + ' onchange="boxExportToggle(\'' + chkJsStr(key) + '\')" />' +
+      '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(b.boxId) + '</span>' +
+      '<span class="small" style="color:#64748b;">' + n + ' device(s)</span>' +
+      '<span class="pill ' + (b.status === "ready" ? "ok" : "block") + '" style="margin-left:auto;">' + escapeHtml(b.status || "") + '</span>' +
+      (b.location ? '<span class="small" style="color:#64748b;">@ ' + escapeHtml(b.location) + '</span>' : "") +
+    '</label>';
+  }).join("");
+}
+function boxExportCsv() {
+  var keys = boxExportSelectedKeys();
+  var boxes = keys.length ? keys.map(function(k) { return boxGet(k); }).filter(Boolean) : boxAll();
+  if (!boxes.length) { alert("No boxes to export."); return; }
+  var rows = [];
+  boxes.forEach(function(b) { rows = rows.concat(_boxContentsRows(b, null)); });
+  var stamp = new Date().toISOString().slice(0, 10);
+  var name = (boxes.length === 1 ? "box-" + _fileSafe(boxes[0].boxId) + "-contents" : "box-contents") + "-" + stamp + ".csv";
+  downloadText(name, _contentsCsv(rows), "text/csv");
+}
+
+// ── Pallets tab ──
+function palletExportSelectedKeys() { return Object.keys(palletExportSel).filter(function(k) { return palletExportSel[k]; }); }
+function palletExportToggle(key) { key = palletNormId(key); if (palletExportSel[key]) delete palletExportSel[key]; else palletExportSel[key] = true; palletExportRender(); }
+function palletExportCheckAll() { palletAll().forEach(function(p) { palletExportSel[palletNormId(p.palletId)] = true; }); palletExportRender(); }
+function palletExportClear() { palletExportSel = {}; palletExportRender(); }
+function palletExportScan(input) {
+  var v = sanitizeScannerValue(input ? input.value : "", { uppercase: true });
+  if (input) { input.value = ""; input.focus(); }
+  if (!v) return;
+  var p = palletGet(v);
+  if (!p) { var c = $("palletExportCount"); if (c) c.textContent = 'No pallet "' + v + '" in the registry.'; return; }
+  palletExportSel[palletNormId(p.palletId)] = true;
+  palletExportRender();
+}
+function palletExportRender() {
+  var list = $("palletExportList"); if (!list) return;
+  var pals = palletAll().slice().sort(function(a, b) { return (b.updatedAt || "") > (a.updatedAt || "") ? 1 : -1; });
+  var sel = palletExportSelectedKeys().length;
+  var cnt = $("palletExportCount");
+  if (cnt) cnt.textContent = !pals.length ? "" : (sel ? sel + " selected of " + pals.length : "none selected — Export sends all " + pals.length);
+  var btn = $("palletExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
+  if (!pals.length) { list.innerHTML = '<div class="small" style="color:#94a3b8;padding:10px;">No pallets to export.</div>'; return; }
+  list.innerHTML = pals.map(function(p) {
+    var key = palletNormId(p.palletId);
+    return '<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f1f5f9;cursor:pointer;">' +
+      '<input type="checkbox" ' + (palletExportSel[key] ? "checked" : "") + ' onchange="palletExportToggle(\'' + chkJsStr(key) + '\')" />' +
+      '<span style="font-family:monospace;font-weight:700;">' + escapeHtml(p.palletId) + '</span>' +
+      '<span class="small" style="color:#64748b;">' + palletBoxKeys(p).length + ' box(es) · ' + palletDeviceCount(p) + ' device(s)</span>' +
+      '<span class="pill ' + (p.status === "ready" ? "ok" : "block") + '" style="margin-left:auto;">' + escapeHtml(p.status || "") + '</span>' +
+      (p.location ? '<span class="small" style="color:#64748b;">@ ' + escapeHtml(p.location) + '</span>' : "") +
+    '</label>';
+  }).join("");
+}
+function palletExportCsv() {
+  var keys = palletExportSelectedKeys();
+  var pals = keys.length ? keys.map(function(k) { return palletGet(k); }).filter(Boolean) : palletAll();
+  if (!pals.length) { alert("No pallets to export."); return; }
+  var rows = [];
+  pals.forEach(function(p) {
+    var ctx = { id: p.palletId, location: p.location || "" };
+    var bkeys = palletBoxKeys(p);
+    if (!bkeys.length) { rows.push([p.palletId, ctx.location, "", "", "", "", "", "", "", "", "", "EMPTY PALLET"]); return; }
+    bkeys.forEach(function(k) {
+      var b = boxGet(k);
+      if (!b) { rows.push([p.palletId, ctx.location, k, "", "", "", "", "", "", "", "", "MISSING BOX"]); return; }
+      rows = rows.concat(_boxContentsRows(b, ctx));
+    });
+  });
+  var stamp = new Date().toISOString().slice(0, 10);
+  var name = (pals.length === 1 ? "pallet-" + _fileSafe(pals[0].palletId) + "-contents" : "pallet-contents") + "-" + stamp + ".csv";
+  downloadText(name, _contentsCsv(rows), "text/csv");
+}
+
 function invBoxManagerDelete(boxId) {
   var b = boxGet(boxId);
   if (!b) return;
@@ -8228,6 +8386,7 @@ var _palletMgrExpanded = {};   // palletKey → true (expanded contents in the l
 function palletRender() {
   _palletRenderListInto($("palletTabList"), $("palletTabSummary"));
   palletRenderDeletedInto($("palletTabDeleted"));
+  if (typeof palletExportRender === "function") palletExportRender();   // contents-export picker (Pallets tab)
 }
 
 function _palletRenderListInto(list, summary) {

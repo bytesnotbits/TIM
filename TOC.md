@@ -559,6 +559,22 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 | `palletCapFinalizeCurrent()` / `palletCapSaveNew()` / `palletCapSaveDone()` | Seal→ready ONLY if it holds boxes; an empty pallet is kept as `capturing` (never purged, v2.38.02) / then reset for a fresh pallet / then close |
 | `palletBeginDissolve(id)` / `palletDissolveApplyAll()` / `palletDissolveConfirm()` / `palletDissolveClose()` | Open dissolve modal (ready pallet only; a capturing pallet just offers delete) / fill every row from the "all boxes" field / gather per-box locations → `palletDissolve` / close. Global `_palletDissolveState` |
 
+### Contents Export — box + pallet device manifests (v2.40.00)
+
+> Select or scan box(es)/pallet(s) on the Boxes/Pallets tab and export a device manifest to CSV. One row per device with a **unified schema** shared by both (`CONTENTS_EXPORT_HEADER`: Pallet ID, Pallet Location, Box ID, Box Status, Box Location, Serial, FSAN, MAC, Item, Description, Odoo External ID, Flags) — so a box file and a pallet file line up column-for-column. Reads existing registry shapes only (**no data-model change**); product columns are resolved per device from history via `invBoxResolveDevice`, so one file serves as a manifest, an Odoo-import starting point, and a general dump. Selection is in-memory (`boxExportSel` / `palletExportSel`); with nothing selected, Export sends all. Empty box → `EMPTY` row; empty pallet → `EMPTY PALLET`; a pallet member box that's missing/tombstoned → `MISSING BOX` row. Export cards live between the lookup and list cards on each tab; `boxExportRender`/`palletExportRender` are called at the end of `invRenderBoxManager`/`palletRender`.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `CONTENTS_EXPORT_HEADER` / `boxExportSel` / `palletExportSel` | Shared column list + in-memory selection sets (normKey → true) |
+| `_fileSafe(s)` | Sanitize an ID for a filename |
+| `_contentsResolveProduct(dev)` | Resolve `{item,desc,ext}` for a device from history (blank if unknown) |
+| `_boxContentsRows(box, palletCtx)` | Device rows for one box; `palletCtx` stamps pallet id/location (box export resolves the box's own pallet via `palletFindByBoxKey`); empty box → one `EMPTY` row |
+| `_contentsCsv(rows)` | Header + `csvEscape`'d rows → CSV text |
+| `boxExportScan` / `boxExportToggle` / `boxExportCheckAll` / `boxExportClear` / `boxExportSelectedKeys` / `boxExportRender` | Boxes-tab picker: scan-to-select, checkbox toggle, select-all/clear, render checklist + button/count |
+| `boxExportCsv()` | Export selected boxes (or all if none) → `box[-<id>]-contents-<date>.csv` |
+| `palletExportScan` / `palletExportToggle` / `palletExportCheckAll` / `palletExportClear` / `palletExportSelectedKeys` / `palletExportRender` | Pallets-tab picker (mirror of the box set) |
+| `palletExportCsv()` | Export selected pallets (or all) flattened to member-box devices → `pallet[-<id>]-contents-<date>.csv`; missing member box → `MISSING BOX` row |
+
 ### Inventory — Scan Handlers
 
 | Function | Purpose |

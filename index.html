@@ -1360,6 +1360,26 @@
       </p>
     </div>
     <div class="card">
+      <label class="small" style="font-weight:700;">Export box contents
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input id="boxExportScan" autocomplete="off" placeholder="Scan a box ID to select it"
+                 style="flex:1;min-width:220px;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();boxExportScan(this);}" />
+          <button class="secondary" onclick="boxExportScan(document.getElementById('boxExportScan'))">Add</button>
+        </div>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+        <button class="secondary" style="padding:5px 12px;font-size:13px;" onclick="boxExportCheckAll()">Select all</button>
+        <button class="secondary" style="padding:5px 12px;font-size:13px;" onclick="boxExportClear()">Clear</button>
+        <button id="boxExportBtn" style="padding:5px 12px;font-size:13px;" onclick="boxExportCsv()">&#10515; Export CSV</button>
+        <span class="small" id="boxExportCount" style="color:#64748b;"></span>
+      </div>
+      <div id="boxExportList" style="margin-top:8px;max-height:320px;overflow:auto;border:1px solid #f1f5f9;border-radius:6px;"></div>
+      <p class="small" style="margin:8px 0 0;color:#6b7280;">
+        One row per device: box, serial / FSAN / MAC, item #, description, Odoo external ID, and location. Select boxes above (or scan them in); with none selected, Export sends every box.
+      </p>
+    </div>
+    <div class="card">
       <div id="boxTabList"></div>
     </div>
     <div id="boxTabDeleted"></div><!-- admin-only Deleted-boxes archive (rendered by boxRenderDeletedInto) -->
@@ -1390,6 +1410,26 @@
       </label>
       <p class="small" style="margin:8px 0 0;color:#6b7280;">
         Scan a pallet to see its boxes, move it to a new location, or dissolve it. Unknown pallet &rarr; build it.
+      </p>
+    </div>
+    <div class="card">
+      <label class="small" style="font-weight:700;">Export pallet contents
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input id="palletExportScan" autocomplete="off" placeholder="Scan a pallet ID to select it"
+                 style="flex:1;min-width:220px;font-family:monospace;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();palletExportScan(this);}" />
+          <button class="secondary" onclick="palletExportScan(document.getElementById('palletExportScan'))">Add</button>
+        </div>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+        <button class="secondary" style="padding:5px 12px;font-size:13px;" onclick="palletExportCheckAll()">Select all</button>
+        <button class="secondary" style="padding:5px 12px;font-size:13px;" onclick="palletExportClear()">Clear</button>
+        <button id="palletExportBtn" style="padding:5px 12px;font-size:13px;" onclick="palletExportCsv()">&#10515; Export CSV</button>
+        <span class="small" id="palletExportCount" style="color:#64748b;"></span>
+      </div>
+      <div id="palletExportList" style="margin-top:8px;max-height:320px;overflow:auto;border:1px solid #f1f5f9;border-radius:6px;"></div>
+      <p class="small" style="margin:8px 0 0;color:#6b7280;">
+        Flattens each pallet to one row per device across all its member boxes &mdash; pallet ID + location, box ID, serial / FSAN / MAC, item #, description, Odoo external ID. Select pallets above (or scan them in); with none selected, Export sends every pallet.
       </p>
     </div>
     <div class="card">
