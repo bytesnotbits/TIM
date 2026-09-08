@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.45.00";
+const APP_VERSION = "v2.45.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2145,8 +2145,14 @@ renderBlindQueue();
 renderAll();
 loadBatchDraft();
 
-// Warn before accidental refresh/navigation when batch data is in memory
+// Warn before accidental refresh/navigation when batch data is in memory.
+let _timUpdating = false;   // set once the user confirms an in-app update (below)
+// `_timUpdating` is set once the user has explicitly confirmed an in-app update,
+// so our own deliberate reload doesn't trigger a second (native) "unsaved
+// changes" prompt — cancelling that native prompt would strand the update
+// mid-flight (caches already wiped, button stuck on "Updating…").
 window.addEventListener("beforeunload", function(e) {
+  if (_timUpdating) return;
   if (currentBatch.length || blindQueue.length) {
     e.preventDefault();
     e.returnValue = "";
@@ -2161,6 +2167,14 @@ window.addEventListener("beforeunload", function(e) {
 // when an update is available (a big, easy tap target on a tablet).
 async function _applyUpdate() {
   const btn = $("checkUpdateBtn");
+  // Confirm BEFORE any destructive work (cache wipe, SW skip-waiting) so Cancel
+  // cleanly aborts and leaves the button in its "Tap to update…" ready state.
+  if (currentBatch.length || blindQueue.length) {
+    if (!confirm("You have a receiving batch or blind queue in progress that may not be saved. Update now and reload?")) {
+      return;  // untouched — button still says "Tap to update to v…"
+    }
+  }
+  _timUpdating = true;   // our own reload below is intentional — skip the beforeunload nag
   if (btn) { btn.disabled = true; btn.textContent = "Updating…"; }
   try {
     // Tell any waiting SW to activate immediately
