@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.44.00";
+const APP_VERSION = "v2.45.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -1530,35 +1530,58 @@ $("exportCsvBtn").addEventListener("click", () => {
     return [getRecordExternalId(r), refValue, r.fsan, getRecordMac(r), noteValue];
   });
 
-  // Accounting tabs: one worksheet per NISC item number PER RMA reference, each
-  // a headerless column of just the identifier the accountant imports into NISC
-  // — FSAN for Calix gear (original_fsan present), serial otherwise (same signal
-  // that drives the ref/name split above). A single import can bring the same
-  // item in on different RMAs, and accounting books each RMA separately, so the
-  // same item on RMA 1 vs RMA 2 must be separate tabs (e.g. "6030 RMA 1",
-  // "6030 RMA 2"). The reference is rma_number when present, else sale_order —
-  // for Calix the sale order IS the RMA number — matching the `note` column on
-  // the Devices sheet. Saves accounting from hand-building a second spreadsheet.
+  // Accounting tabs: one worksheet per NISC item number PER RMA reference. A
+  // single import can bring the same item in on different RMAs, and accounting
+  // books each RMA separately, so the same item on RMA 1 vs RMA 2 must be
+  // separate tabs (e.g. "6030 RMA 1", "6030 RMA 2"). The reference is
+  // rma_number when present, else sale_order — for Calix the sale order IS the
+  // RMA number — matching the `note` column on the Devices sheet.
+  //
+  // Calix tabs use the exact headerless shape NISC accepts on import:
+  // [FSAN][FSAN][Serial] — the CXNK FSAN twice, then the numeric Calix serial.
+  // Non-FSAN gear (Tarana etc., original_fsan absent → fsan === serial) keeps
+  // its single-column serial tab; those are small and handled manually, so we
+  // deliberately don't reshape them or emit a CSV for them.
+  //
+  // In addition to the xlsx, each Calix item/RMA combo is written as its own
+  // headerless 3-column CSV named "<item> RMA <ref>.csv" so accounting can
+  // import it straight into NISC without ever opening it.
   const byGroup = {};
   const groupOrder = [];
   rows.forEach(r => {
     const item = String(r.hctc || "").trim() || "UNKNOWN";
     const ref  = String(r.rma_number || r.sale_order || "").trim();
     const isNonFsan = !r.original_fsan && r.fsan === r.serial;
-    const acctId = isNonFsan ? (r.serial || r.fsan) : (r.fsan || r.serial);
+    const fsan   = r.fsan || r.serial;
+    const serial = r.serial || r.fsan;
+    const acctId = isNonFsan ? serial : fsan;   // non-FSAN single-col identifier
     if (!acctId) return;
     const key = item + "\x00" + ref;
-    if (!byGroup[key]) { byGroup[key] = { item, ref, ids: [] }; groupOrder.push(key); }
-    byGroup[key].ids.push([acctId]);
+    if (!byGroup[key]) { byGroup[key] = { item, ref, calix: false, units: [] }; groupOrder.push(key); }
+    const g = byGroup[key];
+    if (!isNonFsan) g.calix = true;             // any real FSAN row → Calix shape
+    g.units.push({ fsan, serial, acctId });
   });
 
+  const safeFileName = s => String(s == null ? "" : s).replace(/[\\/:*?"<>|]/g, "-").trim();
   const sheets = [{ name: "Devices", headers: header, rows: dataRows }];
-  groupOrder.sort().forEach(key => {         // NUL separator keeps item primary, ref secondary
+  const csvDownloads = [];
+  groupOrder.sort().forEach(key => {           // NUL separator keeps item primary, ref secondary
     const g = byGroup[key];
     const label = g.ref ? (g.item + " RMA " + g.ref) : g.item;
-    sheets.push({ name: label, headers: null, rows: g.ids });
+    if (g.calix) {
+      const tabRows = g.units.map(u => [u.fsan, u.fsan, u.serial]);  // [FSAN][FSAN][Serial]
+      sheets.push({ name: label, headers: null, rows: tabRows });
+      const csvText = tabRows.map(row => row.map(csvEscape).join(",")).join("\r\n");
+      csvDownloads.push({ name: safeFileName(label) + ".csv", text: csvText });
+    } else {
+      sheets.push({ name: label, headers: null, rows: g.units.map(u => [u.acctId]) });
+    }
   });
   timDownloadXlsxSheets(`odoo-device-import-${new Date().toISOString().slice(0,10)}.xlsx`, sheets);
+  // Stagger the per-item/RMA CSVs after the xlsx so the browser doesn't drop
+  // back-to-back programmatic downloads (same guard as ghDownloadSeedFiles).
+  csvDownloads.forEach((f, i) => setTimeout(() => downloadText(f.name, f.text, "text/csv"), (i + 1) * 400));
   lastExportRows = rows;
   importedPending = true;
   renderSummary();
