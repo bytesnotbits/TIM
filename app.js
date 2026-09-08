@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.41.00";
+const APP_VERSION = "v2.43.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -1523,13 +1523,34 @@ $("exportCsvBtn").addEventListener("click", () => {
     return;
   }
   const header = ["Product/External ID","ref","name","x_studio_mac_address","note"];
-  const lines = [header.join(",")].concat(rows.map(r => {
+  const dataRows = rows.map(r => {
     const isNonFsan = !r.original_fsan && r.fsan === r.serial;
     const refValue = isNonFsan ? "" : r.serial;
     const noteValue = r.rma_number || r.sale_order;
-    return [getRecordExternalId(r), refValue, r.fsan, getRecordMac(r), noteValue].map(csvEscape).join(",");
-  }));
-  downloadText(`odoo-device-import-${new Date().toISOString().slice(0,10)}.csv`, lines.join("\n"), "text/csv");
+    return [getRecordExternalId(r), refValue, r.fsan, getRecordMac(r), noteValue];
+  });
+
+  // Accounting tabs: one worksheet per NISC item number, each a headerless
+  // column of just the identifier the accountant imports into NISC — FSAN for
+  // Calix gear (original_fsan present), serial otherwise (same signal that
+  // drives the ref/name split above). Tab is labeled with the item number.
+  // Saves accounting from hand-building a second spreadsheet after each receipt.
+  const byItem = {};
+  const itemOrder = [];
+  rows.forEach(r => {
+    const item = String(r.hctc || "").trim() || "UNKNOWN";
+    const isNonFsan = !r.original_fsan && r.fsan === r.serial;
+    const acctId = isNonFsan ? (r.serial || r.fsan) : (r.fsan || r.serial);
+    if (!acctId) return;
+    if (!byItem[item]) { byItem[item] = []; itemOrder.push(item); }
+    byItem[item].push([acctId]);
+  });
+
+  const sheets = [{ name: "Devices", headers: header, rows: dataRows }];
+  itemOrder.sort().forEach(item => {
+    sheets.push({ name: item, headers: null, rows: byItem[item] });
+  });
+  timDownloadXlsxSheets(`odoo-device-import-${new Date().toISOString().slice(0,10)}.xlsx`, sheets);
   lastExportRows = rows;
   importedPending = true;
   renderSummary();
@@ -1632,8 +1653,8 @@ $("exportBlockedBtn").addEventListener("click", () => {
   const rows = currentBatch.filter(r => r.status === "blocked");
   if (!rows.length) return;
   const cols = ["row_number","messages","source_type","rma_number","sale_order","customer_po","ship_date","calix_product","calix_description","hctc","odoo_external_id","odoo_name","serial","fsan","mac_address"];
-  const lines = [cols.join(",")].concat(rows.map(r => cols.map(c => csvEscape(r[c])).join(",")));
-  downloadText("blocked-calix-rows-" + new Date().toISOString().slice(0,10) + ".csv", lines.join("\n"), "text/csv");
+  const dataRows = rows.map(r => cols.map(c => r[c]));
+  timDownloadXlsx("blocked-calix-rows-" + new Date().toISOString().slice(0,10) + ".xlsx", cols, dataRows, "Blocked");
 });
 $("excludeBlockedBtn").addEventListener("click", () => {
   const blocked = currentBatch.filter(r => r.status === "blocked").length;
@@ -7519,12 +7540,6 @@ function _boxContentsRows(box, palletCtx) {
   });
 }
 
-function _contentsCsv(rows) {
-  return [CONTENTS_EXPORT_HEADER.join(",")].concat(rows.map(function(r) {
-    return r.map(csvEscape).join(",");
-  })).join("\r\n");
-}
-
 // ── Boxes tab: selection + search (single unified list) ──
 // The export checkboxes + toolbar live on the SAME rich registry cards rendered
 // by _boxRenderRegistryInto (tab surface only, selectable=true — never the
@@ -7583,7 +7598,7 @@ function boxExportUpdateBar() {
   var sel = boxExportSelectedKeys().length;
   var cnt = $("boxExportCount");
   if (cnt) cnt.textContent = !total ? "" : (sel ? (sel + " selected") : ("none selected — Export sends all " + total));
-  var btn = $("boxExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
+  var btn = $("boxExportBtn"); if (btn) btn.innerHTML = "&#10515; Export XLSX " + (sel ? "(" + sel + ")" : "(all)");
 }
 function boxExportCsv() {
   var keys = boxExportSelectedKeys();
@@ -7592,8 +7607,8 @@ function boxExportCsv() {
   var rows = [];
   boxes.forEach(function(b) { rows = rows.concat(_boxContentsRows(b, null)); });
   var stamp = new Date().toISOString().slice(0, 10);
-  var name = (boxes.length === 1 ? "box-" + _fileSafe(boxes[0].boxId) + "-contents" : "box-contents") + "-" + stamp + ".csv";
-  downloadText(name, _contentsCsv(rows), "text/csv");
+  var name = (boxes.length === 1 ? "box-" + _fileSafe(boxes[0].boxId) + "-contents" : "box-contents") + "-" + stamp + ".xlsx";
+  timDownloadXlsx(name, CONTENTS_EXPORT_HEADER, rows, "Contents");
 }
 
 // ── Pallets tab: selection + search (mirror of the box set) ──
@@ -7641,7 +7656,7 @@ function palletExportUpdateBar() {
   var sel = palletExportSelectedKeys().length;
   var cnt = $("palletExportCount");
   if (cnt) cnt.textContent = !total ? "" : (sel ? (sel + " selected") : ("none selected — Export sends all " + total));
-  var btn = $("palletExportBtn"); if (btn) btn.innerHTML = "&#10515; Export CSV " + (sel ? "(" + sel + ")" : "(all)");
+  var btn = $("palletExportBtn"); if (btn) btn.innerHTML = "&#10515; Export XLSX " + (sel ? "(" + sel + ")" : "(all)");
 }
 function palletExportCsv() {
   var keys = palletExportSelectedKeys();
@@ -7659,8 +7674,8 @@ function palletExportCsv() {
     });
   });
   var stamp = new Date().toISOString().slice(0, 10);
-  var name = (pals.length === 1 ? "pallet-" + _fileSafe(pals[0].palletId) + "-contents" : "pallet-contents") + "-" + stamp + ".csv";
-  downloadText(name, _contentsCsv(rows), "text/csv");
+  var name = (pals.length === 1 ? "pallet-" + _fileSafe(pals[0].palletId) + "-contents" : "pallet-contents") + "-" + stamp + ".xlsx";
+  timDownloadXlsx(name, CONTENTS_EXPORT_HEADER, rows, "Contents");
 }
 
 function invBoxManagerDelete(boxId) {
@@ -10891,6 +10906,73 @@ function invMakeXlsx(headers, rows, sheetName) {
   return wb;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// GENERAL XLSX EXPORT — the single "download a spreadsheet" path so no export
+// hands the user a raw CSV anymore. Writing .xlsx (not .csv) is what stops
+// Excel from reformatting long numeric identifiers — serials, FSANs, MACs,
+// barcodes — into scientific notation like 6.6241E+11 on open, and it keeps
+// the exact digits intact for re-import into Odoo. Every DATA cell is forced
+// to text (t:"s") so a value that happens to be all-digits can't slip through
+// as a number and get mangled. rows = array of arrays (header passed separately).
+// ─────────────────────────────────────────────────────────────────────────
+// Build one force-text worksheet from rows-of-arrays. Pass a `headers` array
+// for a header row; pass null/undefined for a headerless sheet (data starts at
+// row 1 — NISC's per-item import wants a bare column of identifiers).
+function _timTextSheet(headers, rows) {
+  rows = rows || [];
+  var hasHeader = headers != null;
+  var ws = XLSX.utils.aoa_to_sheet(hasHeader ? [headers].concat(rows) : rows);
+  if (ws["!ref"]) {
+    var range = XLSX.utils.decode_range(ws["!ref"]);
+    for (var R = hasHeader ? 1 : 0; R <= range.e.r; R++) {   // skip header row when present
+      for (var C = range.s.c; C <= range.e.c; C++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+        if (!cell || cell.v == null || cell.v === "") continue;
+        cell.t = "s";
+        cell.v = String(cell.v);
+        delete cell.w; delete cell.z;
+      }
+    }
+  }
+  var widthBasis = hasHeader ? headers : (rows[0] || []);
+  ws["!cols"] = widthBasis.map(function(h, i) {
+    return { wch: Math.max(hasHeader ? String(h == null ? "" : h).length : 0,
+      rows.reduce(function(m, r) { return Math.max(m, String(r[i] == null ? "" : r[i]).length); }, 0)) + 2 };
+  });
+  return ws;
+}
+
+// Excel tab names: <=31 chars, none of : \ / ? * [ ], non-blank, unique.
+// `used` is a caller-owned map tracking names already taken (lowercased).
+function _timSafeSheetName(name, used) {
+  var nm = String(name == null ? "" : name).replace(/[:\\\/?*\[\]]/g, "-").trim().slice(0, 31);
+  if (!nm) nm = "Sheet";
+  if (used[nm.toLowerCase()]) {
+    var base = nm.slice(0, 27), n = 2, cand;
+    do { cand = base + "~" + n; n++; } while (used[cand.toLowerCase()]);
+    nm = cand;
+  }
+  used[nm.toLowerCase()] = true;
+  return nm;
+}
+
+function timDownloadXlsx(filename, headers, rows, sheetName) {
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, _timTextSheet(headers, rows), _timSafeSheetName(sheetName || "Sheet1", {}));
+  XLSX.writeFile(wb, filename);
+}
+
+// Multi-sheet variant: sheets = [{ name, headers, rows }, …]. Same force-text
+// cells; tab names are sanitized + de-duplicated in order.
+function timDownloadXlsxSheets(filename, sheets) {
+  var wb = XLSX.utils.book_new();
+  var used = {};
+  (sheets || []).forEach(function(s) {
+    XLSX.utils.book_append_sheet(wb, _timTextSheet(s.headers, s.rows), _timSafeSheetName(s.name, used));
+  });
+  XLSX.writeFile(wb, filename);
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // SPLIT EXPORT BUTTON — format picker (XLSX / CSV)
 // ═══════════════════════════════════════════════════════════════════════
@@ -12062,13 +12144,8 @@ function prodDownloadTemplate() {
     "serial", "__export__.product_product_30417_a1e9ec7d", "no", "no"];
   var reelExample = ["", "7142", "144-Strand Single-Mode Fiber", "Corning", "reel", "", "no", "no"];
   var bulkExample = ["", "8201", "CAT6 Cable 1000ft Box", "Belden", "none", "", "no", "no"];
-  var lines = [
-    header.map(csvEscape).join(","),
-    example.map(csvEscape).join(","),
-    reelExample.map(csvEscape).join(","),
-    bulkExample.map(csvEscape).join(",")
-  ];
-  downloadText("product-upload-template.csv", lines.join("\n"), "text/csv");
+  timDownloadXlsx("product-upload-template.xlsx", header,
+    [example, reelExample, bulkExample], "Template");
 }
 
 function prodBulkUpload(file, onDone) {
@@ -13133,7 +13210,7 @@ function rcRenderWorklistTable(session) {
     '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
       '<button class="secondary" onclick="rcShowWorklistHome()" style="font-size:12px;">&#8592; Worklists</button>' +
       '<button class="secondary" onclick="rcShowDetail(\'' + session.recountId + '\')" style="font-size:12px;">Table view</button>' +
-      '<button onclick="rcExportWorklistCsv(\'' + session.recountId + '\')" style="font-size:12px;">&#8595; Export CSV</button>' +
+      '<button onclick="rcExportWorklistCsv(\'' + session.recountId + '\')" style="font-size:12px;">&#8595; Export XLSX</button>' +
     '</div>' +
   '</div>';
 
@@ -13361,14 +13438,9 @@ function rcExportWorklistCsv(recountId) {
       "Counted ZERO (no shelf line) — walk to confirm truly absent"]);
   });
 
-  var csv = out.map(function(row){ return row.map(function(v){ var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; }).join(","); }).join("\r\n") + "\r\n";
   var safe = (session.recountName || "worklist").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "");
-  var blob = new Blob([csv], { type: "text/csv" });
-  var a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "recount-worklist-" + safe + "-" + new Date().toISOString().slice(0,10) + ".csv";
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+  timDownloadXlsx("recount-worklist-" + safe + "-" + new Date().toISOString().slice(0,10) + ".xlsx",
+    out[0], out.slice(1), "Worklist");
 }
 
 // ── Persistence ────────────────────────────────────────────────────
@@ -15501,24 +15573,25 @@ function bcExportAndSave() {
     grouped[k].push(r);
   });
 
-  var lines = [["id","default_code","name","template_multi_barcode_ids/name"].map(csvEscape).join(",")];
+  var header = ["id","default_code","name","template_multi_barcode_ids/name"];
+  var dataRows = [];
   itemOrder.forEach(function(k) {
     var items = grouped[k];
     var pm = findProductMapMatch(items[0].itemNumber);
     var odooId = pm && pm.entry ? (pm.entry.odoo_external_id || pm.entry.external_id || "") : "";
     var desc = items[0].description || (pm ? getMapDescription(pm.entry) : "");
     items.forEach(function(r, i) {
-      lines.push([
+      dataRows.push([
         i === 0 ? odooId : "",
         i === 0 ? r.itemNumber : "",
         i === 0 ? desc : "",
         r.barcode
-      ].map(csvEscape).join(","));
+      ]);
     });
   });
 
   var date = new Date().toISOString().slice(0, 10);
-  downloadText("TIM_Barcodes_" + date + ".csv", lines.join("\n"), "text/csv");
+  timDownloadXlsx("TIM_Barcodes_" + date + ".xlsx", header, dataRows, "Barcodes");
 
   // Commit new barcodes to persistent BARCODE_MAP (already-known entries are already there)
   var count = exportBatch.length;
@@ -16608,32 +16681,31 @@ function invCsvDownloadCorrectedSource() {
     var win = meta.picks[s.reelKey];
     s.rows.forEach(function(r, i) { if (i !== win && r.rawCols) losers.add(r.rawCols); });
   });
-  var lines = [];
-  if (meta.header && meta.header.length) lines.push(meta.header.map(csvEscape).join(","));
-  (meta.dataRows || []).forEach(function(row) {
-    if (losers.has(row)) return;
-    lines.push(row.map(csvEscape).join(","));
-  });
-  downloadText("reels_corrected_source.csv", lines.join("\r\n"), "text/csv");
+  var dataRows = (meta.dataRows || []).filter(function(row) { return !losers.has(row); });
+  var header = (meta.header && meta.header.length)
+    ? meta.header
+    : (dataRows.length ? dataRows[0].map(function(_, i) { return "Column " + (i + 1); }) : []);
+  timDownloadXlsx("reels_corrected_source.xlsx", header, dataRows, "Corrected");
 }
 
 // One row per occurrence, grouped by duplicate reel, to guide source cleanup.
 function invCsvDownloadDupReport() {
   var meta = _reelCsvImportMeta;
   if (!meta || !meta.dupSets) return;
-  var lines = [["Group","Reel No","Item (SKU)","Description","Inner Seq","Outer Seq","Quantity","Last Updated","Data Row #"].join(",")];
+  var header = ["Group","Reel No","Item (SKU)","Description","Inner Seq","Outer Seq","Quantity","Last Updated","Data Row #"];
+  var dataRows = [];
   meta.dupSets.forEach(function(s, gi) {
     s.rows.forEach(function(r) {
-      lines.push([
+      dataRows.push([
         gi + 1, r.reelNum, r.itemNum, r.desc,
         r.innerA == null ? "" : r.innerA,
         r.outerA == null ? "" : r.outerA,
         r.qty, r.dateRaw || "",
         r.dataRowIndex == null ? "" : r.dataRowIndex
-      ].map(csvEscape).join(","));
+      ]);
     });
   });
-  downloadText("reels_duplicate_report.csv", lines.join("\r\n"), "text/csv");
+  timDownloadXlsx("reels_duplicate_report.xlsx", header, dataRows, "Duplicates");
 }
 
 function invCancelCsvImport() {

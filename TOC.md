@@ -119,7 +119,11 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `looksLikeMac(v)` | Validate MAC format |
 | `escapeHtml(v)` | HTML-escape for safe innerHTML injection |
 | `csvEscape(v)` | Quote CSV fields with special chars |
-| `downloadText(filename, text, type)` | Trigger browser file download |
+| `downloadText(filename, text, type)` | Trigger browser file download (JSON payloads; the CSV escape-hatch in the inv-export picker) |
+| `timDownloadXlsx(filename, headers, rows, sheet)` | **General spreadsheet export** — write+download an .xlsx from a header array + rows-of-arrays. Every data cell forced to text (`t:"s"`) so long numeric IDs (serials/FSANs/MACs/barcodes) never become `6.6E+11` in Excel and digits survive Odoo re-import. All former CSV exports route through this |
+| `timDownloadXlsxSheets(filename, sheets)` | Multi-sheet variant — `sheets = [{name,headers,rows}]`, same force-text cells, tab names sanitized + de-duped. Used by the Odoo device export (Devices sheet + one accounting tab per item #) |
+| `_timTextSheet(headers, rows)` | Build one force-text worksheet (shared by both exporters); `headers=null` → headerless sheet (NISC per-item column) |
+| `_timSafeSheetName(name, used)` | Excel-safe tab name: ≤31 chars, strips `: \ / ? * [ ]`, non-blank, unique via `used` map |
 | `getField(row, names)` | Flexible field extraction from row object |
 | `commonValue(values)` | Most frequent value in array |
 | `alphaPrefix(v)` | Extract leading alpha chars from string |
@@ -578,9 +582,9 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 | `_contentsCsv(rows)` | Header + `csvEscape`'d rows → CSV text |
 | `boxListSetFilter(v)` / `boxListSelectMatch(input)` | Live-filter the Boxes tab list / Enter-to-select exact or single-filtered box |
 | `boxExportToggle` / `boxExportClear` / `boxExportCheckAllFiltered` / `boxExportSelectedKeys` / `boxExportUpdateBar` | Checkbox toggle (no re-render) / clear selection + uncheck DOM / select all filtered rows / selected keys / refresh toolbar count+button |
-| `boxExportCsv()` | Export selected boxes (or all if none) → `box[-<id>]-contents-<date>.csv` |
+| `boxExportCsv()` | Export selected boxes (or all if none) → `box[-<id>]-contents-<date>.xlsx` (name retains `Csv`; writes XLSX via `timDownloadXlsx`) |
 | `palletListSetFilter` / `palletListSelectMatch` / `palletExportToggle` / `palletExportClear` / `palletExportCheckAllFiltered` / `palletExportSelectedKeys` / `palletExportUpdateBar` | Pallets-tab mirror of the box set |
-| `palletExportCsv()` | Export selected pallets (or all) flattened to member-box devices → `pallet[-<id>]-contents-<date>.csv`; missing member box → `MISSING BOX` row |
+| `palletExportCsv()` | Export selected pallets (or all) flattened to member-box devices → `pallet[-<id>]-contents-<date>.xlsx` (writes XLSX via `timDownloadXlsx`); missing member box → `MISSING BOX` row |
 
 The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(list, summary, selectable)` — `true` only for the `boxTabList` call in `invRenderBoxManager` (the `invBoxManagerList` modal call omits it); `_palletRenderListInto(list, summary, selectable)` — always `true` (single surface).
 
@@ -774,8 +778,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `_showCsvImportModal(parsed)` | Preview modal; branches to dup-resolve (1–10) or dup-report (>10) when duplicates exist |
 | `_showCsvDupResolveModal(parsed, dupSets)` / `_showCsvDupReportModal(dupSets)` | Resolve modal (pick winner per reel) / report-only modal (bad data) |
 | `invCsvResolvePick(reelKey, occIdx)` | Pick which row wins a duplicate set; re-renders the resolve modal |
-| `invCsvDownloadCorrectedSource()` | Re-emit the original file minus dropped duplicate rows (faithful, source format) |
-| `invCsvDownloadDupReport()` | Download duplicate report (grouped by reel, one row per occurrence) |
+| `invCsvDownloadCorrectedSource()` | Re-emit the source rows minus dropped duplicates → `reels_corrected_source.xlsx` (XLSX via `timDownloadXlsx`; TIM reads XLSX on re-import) |
+| `invCsvDownloadDupReport()` | Duplicate report (grouped by reel, one row per occurrence) → `reels_duplicate_report.xlsx` |
 | `invConfirmCsvImport()` | Execute import: drop dup losers, create events + export master |
 | `invCancelCsvImport()` | Close modal; clear import meta |
 
@@ -790,7 +794,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `exportInvEventLogXlsx()` | Export event log to XLSX |
 | `exportInvSummaryXlsx()` | Export summary to XLSX |
 | `exportRecountXlsx()` | Export recount results to XLSX |
-| `invMakeXlsx(headers, rows, sheet)` | Build XLSX workbook |
+| `invMakeXlsx(headers, rows, sheet)` | Build XLSX workbook (returns wb; used by the inv event-log/summary/adjustment picker — cells typed by JS value, not force-text) |
 | `buildEventLogBaseRow(e)` | Build common CSV/XLSX fields for an event |
 | `buildInvSummaryMap(events)` | Aggregate events by item |
 | `buildExportPayload()` | Build full master JSON payload (10yr purge); includes `odoo_quants`, `recount_sessions`, `recount_movements` |
@@ -899,7 +903,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `rcWlSetRecount(id, itemUp, val)` | Save recount qty onto the item's `recountedQty` + status |
 | `rcRenderWorklist()` / `rcRenderWorklistHome()` / `rcRenderWorklistTable(session)` | View dispatch / build-home / worktable + absent + niscDrops |
 | `rcDataStatusRow()` / `rcClsBadge()` | Render helpers |
-| `rcExportWorklistCsv(id)` | Download location-ordered CSV (mirrors `recount_worksheet_FOCUSED_by_location.csv`) |
+| `rcExportWorklistCsv(id)` | Download location-ordered worklist → `recount-worklist-<name>-<date>.xlsx` (XLSX via `timDownloadXlsx`) |
 | `rcNum / rcCountDay / rcMoveDay / rcDayToDisplay / rcMovementDir / rcColIdx` | Parse helpers (comma-number strip, date→int, direction, header lookup) |
 
 ---
@@ -918,7 +922,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `prodShowSaveToast(msg)` | Temporary save confirmation |
 | `prodShowItemHistory(itemNum)` | Show receiving + inventory history modal |
 | `prodCloseHistoryModal()` | Close history modal |
-| `prodDownloadTemplate()` | Download bulk-upload CSV template |
+| `prodDownloadTemplate()` | Download bulk-upload template → `product-upload-template.xlsx` |
 | `prodBulkUpload(file)` | Process bulk product upload |
 | `prodShowUploadDiff(diff)` | Show upload diff preview |
 | `prodApplyUpload()` | Apply upload changes |
@@ -985,7 +989,7 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 | `bcRemoveFromBatch(idx)` | Remove from batch |
 | `bcRenderBatch()` | Render barcode batch table |
 | `bcClearBatch()` | Clear all barcode batch entries |
-| `bcExportAndSave()` | Export to Odoo CSV + save to `BARCODE_MAP` |
+| `bcExportAndSave()` | Export to Odoo XLSX (`TIM_Barcodes_<date>.xlsx`) + save to `BARCODE_MAP` |
 | `bcImportOdooCsv(file)` | Import Odoo barcode CSV |
 | `bcProcessOdooImport(text, fileName)` | Parse + merge Odoo barcode CSV |
 | `bcLoadBarcodeMap()` | Restore barcode map from IDB |

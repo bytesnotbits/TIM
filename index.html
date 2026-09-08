@@ -219,7 +219,7 @@
       <span>⬆️ A newer version of TIM is available (<span id="timUpdateVer"></span>). Update to stay in sync with the other devices.</span>
       <button type="button" class="tim-update-banner-btn" onclick="_applyUpdate()">Update now</button>
     </div>
-    <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import CSV and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
+    <p class="app-desc">Local browser tool for Calix, Tarana, and other serialized devices. Creates an Odoo import XLSX and only appends to history after you click <b>Mark as Imported</b>. Product mappings must use Odoo external IDs from the <b>Product Variant</b> view.</p>
 
   <!-- ── Data Import view ── -->
   <div id="tabDataimport" class="tab-panel">
@@ -288,7 +288,7 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;color:#2563eb;"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/></svg>
           Receiving Source File
         </h3>
-        <p class="small">Load a Calix shipment report or RMA return sheet to populate a receiving batch. Two formats are recognized automatically: <strong>Calix Customer Shipment Notification</strong> (Excel) containing serial numbers, FSANs, and MAC addresses; and <strong>RMA Return Sheets</strong> (Excel/CSV) with item and serial pair columns. After loading, go to the <strong>Receiving</strong> tab to review, fix any blocked rows, and export an Odoo import CSV.</p>
+        <p class="small">Load a Calix shipment report or RMA return sheet to populate a receiving batch. Two formats are recognized automatically: <strong>Calix Customer Shipment Notification</strong> (Excel) containing serial numbers, FSANs, and MAC addresses; and <strong>RMA Return Sheets</strong> (Excel/CSV) with item and serial pair columns. After loading, go to the <strong>Receiving</strong> tab to review, fix any blocked rows, and export an Odoo import XLSX.</p>
         <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
         <div id="sourceDropZone" class="import-status-bar">
           <span id="sourceDropStatus">Waiting for upload — use the drop zone above or browse for an <code>.xlsx</code>, <code>.xls</code>, or <code>.csv</code> file</span>
@@ -337,7 +337,7 @@
         <p class="small">Upload a CSV or Excel file to add or update products in the catalog. Existing products are matched by <strong>Vendor Part #</strong> or <strong>NISC Item #</strong> and updated in place; new products are appended. Changes live in memory until you export an updated Master JSON. Download the template to see required columns, or use a direct Odoo Product Variant export.</p>
         <div class="import-card-fmt">Formats: <code>.xlsx</code> &nbsp;·&nbsp; <code>.xls</code> &nbsp;·&nbsp; <code>.csv</code></div>
         <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <button class="secondary" onclick="prodDownloadTemplate()" style="margin:0;">Download CSV Template</button>
+          <button class="secondary" onclick="prodDownloadTemplate()" style="margin:0;">Download XLSX Template</button>
           <span class="small" style="color:#6b7280;">Then drop the file into the universal zone above.</span>
         </div>
         <p class="small" style="margin:0;color:#6b7280;">TIM columns: <code>Vendor Part # · NISC Item # · Name/Description · Vendor · Tracking Type · Odoo External ID · Requires FSAN · History Only</code><br>Odoo export columns also accepted: <code>id · default_code · name · tracking · x_studio_reel · is_storable</code></p>
@@ -384,7 +384,7 @@
       <div id="summary" class="stat-bar"></div>
       <p class="small" style="margin:8px 0 12px;">Blocked rows must be fixed before export. DNI rows are valid but excluded from Odoo import.</p>
       <div class="review-actions">
-        <button id="exportCsvBtn" disabled>Export Odoo CSV</button>
+        <button id="exportCsvBtn" disabled>Export Odoo XLSX</button>
         <button id="openBlindReceiveBtn" class="secondary">Blind Receive / Add Manually</button>
         <div class="dropdown-wrap">
           <button class="secondary" onclick="toggleMoreDropdown(event)">More ▾</button>
@@ -1322,7 +1322,7 @@
         <button class="danger" onclick="bcClearBatch()" style="margin:0;">Clear Batch</button>
         <div style="flex:1;"></div>
         <p class="small" style="margin:0;color:#6b7280;max-width:380px;text-align:right;">
-          <strong>Export &amp; Save</strong> generates an Odoo-compatible CSV <em>and</em> permanently adds these barcodes to TIM's database.
+          <strong>Export &amp; Save</strong> generates an Odoo-compatible XLSX <em>and</em> permanently adds these barcodes to TIM's database.
         </p>
         <button id="bcExportSaveBtn" onclick="bcExportAndSave()" style="margin:0;background:#166534;white-space:nowrap;">Export &amp; Save</button>
       </div>
@@ -1367,11 +1367,11 @@
                onkeydown="if(event.key==='Enter'){event.preventDefault();boxListSelectMatch(this);}" />
         <button class="secondary" style="padding:6px 12px;font-size:13px;" onclick="boxExportCheckAllFiltered()">Select all</button>
         <button class="secondary" style="padding:6px 12px;font-size:13px;" onclick="boxExportClear()">Clear</button>
-        <button id="boxExportBtn" style="padding:6px 12px;font-size:13px;" onclick="boxExportCsv()">&#10515; Export CSV (all)</button>
+        <button id="boxExportBtn" style="padding:6px 12px;font-size:13px;" onclick="boxExportCsv()">&#10515; Export XLSX (all)</button>
       </div>
       <div class="small" id="boxExportCount" style="color:#64748b;margin:6px 0 2px;"></div>
       <p class="small" style="margin:2px 0 10px;color:#6b7280;">
-        Type to filter the list (by box ID or location), or scan a box to tick it. Check the boxes you want and <b>Export CSV</b> writes one row per device (serial / FSAN / MAC, item #, description, Odoo external ID, location). With none checked, Export sends every box.
+        Type to filter the list (by box ID or location), or scan a box to tick it. Check the boxes you want and <b>Export XLSX</b> writes one row per device (serial / FSAN / MAC, item #, description, Odoo external ID, location). With none checked, Export sends every box.
       </p>
       <div id="boxTabList"></div>
     </div>
@@ -1413,11 +1413,11 @@
                onkeydown="if(event.key==='Enter'){event.preventDefault();palletListSelectMatch(this);}" />
         <button class="secondary" style="padding:6px 12px;font-size:13px;" onclick="palletExportCheckAllFiltered()">Select all</button>
         <button class="secondary" style="padding:6px 12px;font-size:13px;" onclick="palletExportClear()">Clear</button>
-        <button id="palletExportBtn" style="padding:6px 12px;font-size:13px;" onclick="palletExportCsv()">&#10515; Export CSV (all)</button>
+        <button id="palletExportBtn" style="padding:6px 12px;font-size:13px;" onclick="palletExportCsv()">&#10515; Export XLSX (all)</button>
       </div>
       <div class="small" id="palletExportCount" style="color:#64748b;margin:6px 0 2px;"></div>
       <p class="small" style="margin:2px 0 10px;color:#6b7280;">
-        Type to filter the list (by pallet ID or location), or scan a pallet to tick it. Check the pallets you want and <b>Export CSV</b> flattens each to one row per device across all its member boxes. With none checked, Export sends every pallet.
+        Type to filter the list (by pallet ID or location), or scan a pallet to tick it. Check the pallets you want and <b>Export XLSX</b> flattens each to one row per device across all its member boxes. With none checked, Export sends every pallet.
       </p>
       <div id="palletTabList"></div>
     </div>
