@@ -1,0 +1,33 @@
+# Normalize line endings so an editor on Windows can't silently flip a whole
+# file to CRLF and sweep it into the diff (see the v2.41.00 near-miss). All
+# text/source in this repo is LF; git enforces that on commit regardless of the
+# working-tree ending. Binary assets are marked so git never rewrites them.
+
+# Default: treat as text, store LF in the repo.
+* text=auto eol=lf
+
+# Source + config — explicit LF.
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.svg   text eol=lf
+*.txt   text eol=lf
+*.csv   text eol=lf
+*.webmanifest text eol=lf
+
+# Binary assets — leave bytes untouched (no eol conversion, no diffing).
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.xlsx  binary
+*.xls   binary
+*.pdf   binary
