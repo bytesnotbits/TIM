@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.43.00";
+const APP_VERSION = "v2.44.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -1530,25 +1530,33 @@ $("exportCsvBtn").addEventListener("click", () => {
     return [getRecordExternalId(r), refValue, r.fsan, getRecordMac(r), noteValue];
   });
 
-  // Accounting tabs: one worksheet per NISC item number, each a headerless
-  // column of just the identifier the accountant imports into NISC — FSAN for
-  // Calix gear (original_fsan present), serial otherwise (same signal that
-  // drives the ref/name split above). Tab is labeled with the item number.
-  // Saves accounting from hand-building a second spreadsheet after each receipt.
-  const byItem = {};
-  const itemOrder = [];
+  // Accounting tabs: one worksheet per NISC item number PER RMA reference, each
+  // a headerless column of just the identifier the accountant imports into NISC
+  // — FSAN for Calix gear (original_fsan present), serial otherwise (same signal
+  // that drives the ref/name split above). A single import can bring the same
+  // item in on different RMAs, and accounting books each RMA separately, so the
+  // same item on RMA 1 vs RMA 2 must be separate tabs (e.g. "6030 RMA 1",
+  // "6030 RMA 2"). The reference is rma_number when present, else sale_order —
+  // for Calix the sale order IS the RMA number — matching the `note` column on
+  // the Devices sheet. Saves accounting from hand-building a second spreadsheet.
+  const byGroup = {};
+  const groupOrder = [];
   rows.forEach(r => {
     const item = String(r.hctc || "").trim() || "UNKNOWN";
+    const ref  = String(r.rma_number || r.sale_order || "").trim();
     const isNonFsan = !r.original_fsan && r.fsan === r.serial;
     const acctId = isNonFsan ? (r.serial || r.fsan) : (r.fsan || r.serial);
     if (!acctId) return;
-    if (!byItem[item]) { byItem[item] = []; itemOrder.push(item); }
-    byItem[item].push([acctId]);
+    const key = item + "\x00" + ref;
+    if (!byGroup[key]) { byGroup[key] = { item, ref, ids: [] }; groupOrder.push(key); }
+    byGroup[key].ids.push([acctId]);
   });
 
   const sheets = [{ name: "Devices", headers: header, rows: dataRows }];
-  itemOrder.sort().forEach(item => {
-    sheets.push({ name: item, headers: null, rows: byItem[item] });
+  groupOrder.sort().forEach(key => {         // NUL separator keeps item primary, ref secondary
+    const g = byGroup[key];
+    const label = g.ref ? (g.item + " RMA " + g.ref) : g.item;
+    sheets.push({ name: label, headers: null, rows: g.ids });
   });
   timDownloadXlsxSheets(`odoo-device-import-${new Date().toISOString().slice(0,10)}.xlsx`, sheets);
   lastExportRows = rows;
