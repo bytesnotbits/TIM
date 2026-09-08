@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.40.01";
+const APP_VERSION = "v2.41.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -8436,6 +8436,51 @@ function palletDissolve(palletId, plan) {
 
 // ---- Pallets tab rendering -----------------------------------------
 var _palletMgrExpanded = {};   // palletKey → true (expanded contents in the list)
+var _palletDrillSeq = 0;       // per-render counter for nested drill-down element ids
+
+// Roll a box's devices up by item number (resolved via history lookup). Returns
+// [{ item, desc, count }] in first-seen order; devices that resolve to no item
+// land under a single blank-item bucket so the count still reconciles.
+function _palletBoxItems(box) {
+  var byItem = {}, order = [];
+  boxDeviceList(box).forEach(function(d) {
+    var pr = _contentsResolveProduct(d);
+    var item = pr.item || "";
+    var k = item || " ?";
+    if (!byItem[k]) { byItem[k] = { item: item, desc: pr.desc || "", count: 0 }; order.push(k); }
+    byItem[k].count++;
+    if (!byItem[k].desc && pr.desc) byItem[k].desc = pr.desc;
+  });
+  return order.map(function(k) { return byItem[k]; });
+}
+
+// Pallet-wide item rollup across all live member boxes: [{ item, desc, count, boxes }].
+function _palletItemRollup(p) {
+  var byItem = {}, order = [];
+  palletBoxKeys(p).forEach(function(k) {
+    var b = boxGetRaw(k);
+    if (!b || b.deleted) return;
+    _palletBoxItems(b).forEach(function(it) {
+      var key = it.item || " ?";
+      if (!byItem[key]) { byItem[key] = { item: it.item, desc: it.desc, count: 0, boxes: 0 }; order.push(key); }
+      byItem[key].count += it.count;
+      byItem[key].boxes++;
+      if (!byItem[key].desc && it.desc) byItem[key].desc = it.desc;
+    });
+  });
+  return order.map(function(k) { return byItem[k]; });
+}
+
+// DOM-only expand/collapse for the nested pallet drill-downs (item lists, device
+// lists). Toggling here does NOT re-render the tab, so scroll position and other
+// open drills are preserved; the caret is derived from the (now-current) state.
+function _palletDrill(btn, targetId) {
+  var el = document.getElementById(targetId);
+  if (!el) return;
+  el.hidden = !el.hidden;
+  var base = btn.getAttribute("data-base") || "";
+  btn.innerHTML = base + " " + (el.hidden ? "▸" : "▾");
+}
 
 function palletRender() {
   _palletRenderListInto($("palletTabList"), $("palletTabSummary"), true);   // export checkboxes + filter
@@ -8474,23 +8519,110 @@ function _palletRenderListInto(list, summary, selectable) {
     var admin    = (typeof timIsAdmin === "function") && timIsAdmin();
     var body     = "";
     if (expanded) {
+      // Inline "ITEM# — description" (optionally with a device count) — used by
+      // both the pallet-level rollup and the per-box multi-item drill.
+      var fmtItem = function(it, withCount) {
+        var itm = it.item
+          ? '<span style="font-family:monospace;font-weight:600;">' + escapeHtml(it.item) + '</span>'
+          : '<span style="color:#94a3b8;">(unmapped)</span>';
+        var desc = it.desc ? ' <span style="color:#64748b;">' + escapeHtml(it.desc) + '</span>' : '';
+        var cnt  = withCount ? ' <span style="color:#94a3b8;">· ' + it.count + '</span>' : '';
+        return itm + desc + cnt;
+      };
+
+      // "Items on this pallet" rollup — answers what's on the pallet without
+      // opening each box. Starts collapsed to keep the card compact on the iPad.
+      var rollup = _palletItemRollup(p);
+      var itemsSection = "";
+      if (rollup.length) {
+        var rid  = "_pri_" + (++_palletDrillSeq);
+        var open = false;   // always collapsed — keeps the card compact on the iPad
+        var rbase = rollup.length + (rollup.length === 1 ? " item" : " items") + " on this pallet";
+        var rrows = rollup.map(function(it) {
+          return '<tr style="border-top:1px solid #eef2f7;">' +
+            '<td style="padding:4px 10px;font-family:monospace;font-size:12px;">' + (it.item ? escapeHtml(it.item) : '<span style="color:#94a3b8;">(unmapped)</span>') + '</td>' +
+            '<td style="padding:4px 10px;font-size:12px;color:#64748b;">' + escapeHtml(it.desc || "") + '</td>' +
+            '<td style="padding:4px 10px;font-size:12px;text-align:right;white-space:nowrap;">' + it.count + ' device(s)</td>' +
+            '<td style="padding:4px 10px;font-size:12px;text-align:right;white-space:nowrap;color:#94a3b8;">' + it.boxes + ' box(es)</td></tr>';
+        }).join("");
+        itemsSection =
+          '<button class="secondary" style="padding:3px 10px;font-size:12px;margin-bottom:6px;" data-base="' + escapeHtml(rbase) + '" onclick="_palletDrill(this,\'' + rid + '\')">' + escapeHtml(rbase) + (open ? " ▾" : " ▸") + '</button>' +
+          '<div id="' + rid + '"' + (open ? "" : " hidden") + ' style="overflow-x:auto;margin-bottom:8px;">' +
+            '<table style="border-collapse:collapse;width:100%;"><thead><tr>' +
+              '<th style="text-align:left;padding:4px 10px;font-size:11px;color:#94a3b8;">Item #</th>' +
+              '<th style="text-align:left;padding:4px 10px;font-size:11px;color:#94a3b8;">Description</th>' +
+              '<th style="text-align:right;padding:4px 10px;font-size:11px;color:#94a3b8;">Qty</th>' +
+              '<th style="text-align:right;padding:4px 10px;font-size:11px;color:#94a3b8;">Boxes</th>' +
+            '</tr></thead><tbody>' + rrows + '</tbody></table></div>';
+      }
+
       var boxRows;
       if (nBoxes) {
         boxRows = palletBoxKeys(p).map(function(k) {
           var b = boxGetRaw(k);
-          var name = b ? escapeHtml(b.boxId) : escapeHtml(k);
-          var meta = b && !b.deleted ? (boxDeviceList(b).length + " device(s)" + (b.status === "ready" ? "" : " · building"))
-                   : '<span style="color:#dc2626;">missing / removed</span>';
           var rm = (!isReady)
-            ? '<button class="danger" title="Remove this box from the pallet" style="padding:0 6px;font-size:12px;line-height:1.4;margin-left:8px;" onclick="palletRemoveBox(\'' + pjs + '\',\'' + chkJsStr(k) + '\');palletRender();">✕</button>'
+            ? '<button class="danger" title="Remove this box from the pallet" style="padding:0 6px;font-size:12px;line-height:1.4;" onclick="palletRemoveBox(\'' + pjs + '\',\'' + chkJsStr(k) + '\');palletRender();">✕</button>'
             : "";
-          return '<tr style="border-top:1px solid #eef2f7;"><td style="padding:5px 10px;font-family:monospace;font-size:12px;">' + name + '</td>' +
-                 '<td style="padding:5px 10px;font-size:12px;color:#64748b;">' + meta + '</td>' +
-                 '<td style="padding:5px 6px;text-align:right;">' + rm + '</td></tr>';
+          if (!b || b.deleted) {
+            return '<tr style="border-top:1px solid #eef2f7;">' +
+              '<td style="padding:5px 10px;font-family:monospace;font-size:12px;">' + escapeHtml(b ? b.boxId : k) + '</td>' +
+              '<td colspan="2" style="padding:5px 10px;font-size:12px;color:#dc2626;">missing / removed</td>' +
+              '<td style="padding:5px 6px;text-align:right;">' + rm + '</td></tr>';
+          }
+          var devs  = boxDeviceList(b);
+          var items = _palletBoxItems(b);
+          var building = b.status === "ready" ? "" : " · building";
+
+          // Item(s) cell: one item shown inline; multiple → expandable list.
+          var itemCell;
+          if (!items.length) {
+            itemCell = '<span style="color:#94a3b8;">—</span>';
+          } else if (items.length === 1) {
+            itemCell = fmtItem(items[0], false);
+          } else {
+            var iid = "_pdi_" + (++_palletDrillSeq);
+            var ibase = items.length + " items";
+            itemCell =
+              '<button class="secondary" style="padding:1px 8px;font-size:11px;" data-base="' + ibase + '" onclick="_palletDrill(this,\'' + iid + '\')">' + ibase + ' ▸</button>' +
+              '<div id="' + iid + '" hidden style="margin-top:4px;">' +
+                items.map(function(it) { return '<div style="font-size:11px;padding:1px 0;">' + fmtItem(it, true) + '</div>'; }).join("") +
+              '</div>';
+          }
+
+          // Devices cell: count, expandable to the individual identifiers.
+          var devCell;
+          if (!devs.length) {
+            devCell = '<span style="color:#94a3b8;">empty</span>';
+          } else {
+            var did = "_pdd_" + (++_palletDrillSeq);
+            var dbase = devs.length + " device(s)" + building;
+            var devLines = devs.map(function(d) {
+              var it = _contentsResolveProduct(d).item;
+              return '<div style="font-family:monospace;font-size:11px;padding:1px 0;color:#475569;">' +
+                escapeHtml(boxDevLabel(d)) +
+                (it ? ' <span style="color:#94a3b8;">[' + escapeHtml(it) + ']</span>' : "") + '</div>';
+            }).join("");
+            devCell =
+              '<button class="secondary" style="padding:1px 8px;font-size:11px;" data-base="' + escapeHtml(dbase) + '" onclick="_palletDrill(this,\'' + did + '\')">' + escapeHtml(dbase) + ' ▸</button>' +
+              '<div id="' + did + '" hidden style="margin-top:4px;">' + devLines + '</div>';
+          }
+
+          return '<tr style="border-top:1px solid #eef2f7;">' +
+            '<td style="padding:5px 10px;font-family:monospace;font-size:12px;vertical-align:top;">' + escapeHtml(b.boxId) + '</td>' +
+            '<td style="padding:5px 10px;font-size:12px;vertical-align:top;">' + itemCell + '</td>' +
+            '<td style="padding:5px 10px;font-size:12px;vertical-align:top;">' + devCell + '</td>' +
+            '<td style="padding:5px 6px;text-align:right;vertical-align:top;">' + rm + '</td></tr>';
         }).join("");
       } else {
-        boxRows = '<tr><td style="padding:6px 10px;color:#94a3b8;">No boxes on this pallet yet.</td></tr>';
+        boxRows = '<tr><td colspan="4" style="padding:6px 10px;color:#94a3b8;">No boxes on this pallet yet.</td></tr>';
       }
+      var boxHead =
+        '<thead><tr>' +
+          '<th style="text-align:left;padding:4px 10px;font-size:11px;color:#94a3b8;">Box ID</th>' +
+          '<th style="text-align:left;padding:4px 10px;font-size:11px;color:#94a3b8;">Item(s)</th>' +
+          '<th style="text-align:left;padding:4px 10px;font-size:11px;color:#94a3b8;">Devices</th>' +
+          '<th></th>' +
+        '</tr></thead>';
       var moveRow = isReady
         ? '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;">' +
             '<label class="small" style="font-weight:700;">Location</label>' +
@@ -8513,7 +8645,8 @@ function _palletRenderListInto(list, summary, selectable) {
       body =
         '<div style="margin:8px 0 4px;padding:10px;background:#f8fafc;border-radius:6px;">' +
           renameRow +
-          '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;"><tbody>' + boxRows + '</tbody></table></div>' +
+          itemsSection +
+          '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;">' + boxHead + '<tbody>' + boxRows + '</tbody></table></div>' +
           moveRow +
         '</div>';
     }
