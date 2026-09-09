@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.45.01";
+const APP_VERSION = "v2.46.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -12223,11 +12223,31 @@ function prodBulkUpload(file, onDone) {
       var colFsan         = col([/fsan/i]);
       var colHistOnly     = col([/history.?only/i]);
       var colIsReel       = col([/^x_studio_reel$/i, /^is.?reel$/i]);
-      var colReelIds      = col([/^reel_ids$/i]);
+      var colReelIds      = col([/^reel_ids$/i, /^reels?$/i]);
       var colIsStorable   = col([/^is_storable$/i]);
 
       if (colNisc === -1 && colVendorPart === -1) {
         throw new Error("Could not find 'Vendor Part #', 'NISC Item #', or 'default_code' column. Download the template to see the expected format.");
+      }
+
+      // Reel/lot numbers arrive one-per-row in the Odoo "Reels" export: a product row
+      // carries its first reel, and any additional reels follow on continuation rows
+      // with a blank key. Walk the rows once, attributing each reel to the most recent
+      // product key, so the full list is captured — the flat diff loop below skips the
+      // blank-key continuation rows, so aggregating here is the only place it can happen.
+      var reelsByKey = {};
+      if (colReelIds >= 0) {
+        var reelCurKey = "";
+        rawRows.slice(1).forEach(function(row) {
+          var vp = colVendorPart >= 0 ? normalize(String(row[colVendorPart])) : "";
+          var ni = colNisc >= 0       ? normalize(String(row[colNisc]))       : "";
+          var k  = vp || ni;
+          if (k) reelCurKey = k;
+          if (!reelCurKey) return;
+          var reel = normalize(String(row[colReelIds]));
+          if (!reel) return;
+          (reelsByKey[reelCurKey] || (reelsByKey[reelCurKey] = [])).push(reel);
+        });
       }
 
       var diff = { added: [], updated: [], unchanged: 0, skipped: 0 };
@@ -12265,7 +12285,7 @@ function prodBulkUpload(file, onDone) {
         var historyOnly  = colHistOnly >= 0 ? /yes|true|1/i.test(String(row[colHistOnly])) : false;
         var nameVal      = colName >= 0     ? normalize(String(row[colName]))     : "";
         var vendorVal    = colVendor >= 0   ? normalize(String(row[colVendor]))   : "";
-        var reelIdsRaw   = colReelIds >= 0  ? normalize(String(row[colReelIds]))  : "";
+        var reelIdsRaw   = (reelsByKey[mapKey] || []).join(", ");
 
         var existing = PRODUCT_MAP[mapKey] || {};
         var isNew = !PRODUCT_MAP[mapKey];
@@ -15919,7 +15939,8 @@ var _PROD_DIFF_FIELDS = [
   { key: "odoo_external_id", label: "Odoo External ID" },
   { key: "hctc",             label: "NISC Item #" },
   { key: "requires_fsan",    label: "Requires FSAN" },
-  { key: "history_only",     label: "History Only" }
+  { key: "history_only",     label: "History Only" },
+  { key: "reel_ids",         label: "Reel IDs" }
 ];
 
 function prodShowUploadDiff(diff) {
