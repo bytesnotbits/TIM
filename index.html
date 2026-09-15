@@ -1141,7 +1141,7 @@
         </select>
         <button class="secondary" onclick="prodRenderList()">Refresh</button>
       </div>
-      <div class="scroll">
+      <div class="flow-table">
         <table>
           <thead>
             <tr><th>Vendor Part #</th><th>NISC Item #</th><th>Name / Description</th><th>Vendor</th><th>Tracking</th><th>Odoo External ID</th><th>Req. FSAN</th><th>History Only</th><th>Actions</th></tr>
@@ -1164,7 +1164,7 @@
         <input type="search" id="serialLookupSearch" placeholder="Search by serial, FSAN, or MAC…" oninput="serialLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
         <button class="secondary" onclick="serialLookupRender()">Refresh</button>
       </div>
-      <div id="serialLookupBody" class="scroll"><p class="small" style="color:#94a3b8;margin:0;">Type a serial, FSAN, or MAC to find a device.</p></div>
+      <div id="serialLookupBody"><p class="small" style="color:#94a3b8;margin:0;">Type a serial, FSAN, or MAC to find a device.</p></div>
     </div>
 
     <!-- Reel Lookup -->
@@ -1178,7 +1178,7 @@
         <input type="search" id="reelLookupSearch" placeholder="Search by item number or reel number…" oninput="reelLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
         <button class="secondary" onclick="reelLookupRender()">Refresh</button>
       </div>
-      <div id="reelLookupBody" class="scroll"><p class="small" style="color:#94a3b8;margin:0;">Open this tab to load reels, or import a reel CSV first.</p></div>
+      <div id="reelLookupBody"><p class="small" style="color:#94a3b8;margin:0;">Open this tab to load reels, or import a reel CSV first.</p></div>
     </div>
 
     <!-- Catalog Health -->

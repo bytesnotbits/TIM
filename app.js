@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.48.00";
+const APP_VERSION = "v2.49.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4351,9 +4351,10 @@ function switchTab(name) {
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") {
-    prodRenderList(); serialLookupRender(); reelLookupRender(); renderUnknownProducts();
+    renderUnknownProducts();   // Mapping sub-tab's Unknown-Products table
     var savedProdSub = "catalog";
     try { savedProdSub = localStorage.getItem("tim_prod_subview") || "catalog"; } catch(e) {}
+    // prodShowSubview renders whichever lazy table (catalog/serial/reel) is shown.
     prodShowSubview(_forceProdSub || savedProdSub);
   }
   if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
@@ -4435,6 +4436,12 @@ function prodShowSubview(name) {
     var b = $("prodSub_" + PROD_SUBVIEWS[j]);
     if (b) b.classList.toggle("active", PROD_SUBVIEWS[j] === name);
   }
+  // Render the lazy-loading tables only once their sub-tab is visible, so the
+  // fill-to-viewport measurement in timLazyRender sees real layout (a hidden
+  // card has no height and would stop after the first chunk).
+  if (name === "catalog") prodRenderList();
+  else if (name === "serial") serialLookupRender();
+  else if (name === "reel") reelLookupRender();
   try { localStorage.setItem("tim_prod_subview", name); } catch(e) {}
 }
 
@@ -12162,7 +12169,51 @@ function getTrackingType(map) {
 }
 
 var _prodRenderTimer = null;
-var PROD_ROW_LIMIT = 300;
+
+// ── Lazy table rendering (Products tables) ──────────────────────────────────
+// The Products tables flow with the page (no inset scroll box). To keep a long
+// catalog / lookup cheap, rows render in chunks: an initial batch, then more
+// each time the page scrolls near the bottom — so there's no hard row cap.
+// `appendTo` receives the row HTML (a <tbody>); `unitHtmls` is one HTML string
+// per row (group-header rows included, for the grouped lookups). We use a scroll
+// listener on the `.main-content` scroller (not IntersectionObserver — a
+// zero-height sentinel isn't reliably observed). The listener is stored on the
+// target element so each table detaches only its own, and self-removes once the
+// list is fully rendered. Callers render only the visible sub-tab, so the
+// fill-to-viewport loop below measures real layout.
+function timLazyRender(appendTo, unitHtmls, chunk) {
+  chunk = chunk || 150;
+  if (!appendTo) return;
+  var scroller = document.querySelector(".main-content") || document.scrollingElement || document.documentElement;
+  if (appendTo._timLazyOnScroll) {
+    scroller.removeEventListener("scroll", appendTo._timLazyOnScroll);
+    appendTo._timLazyOnScroll = null;
+  }
+  var idx = 0;
+  function more() {
+    if (idx >= unitHtmls.length) return;
+    var end = Math.min(idx + chunk, unitHtmls.length);
+    appendTo.insertAdjacentHTML("beforeend", unitHtmls.slice(idx, end).join(""));
+    idx = end;
+    if (idx >= unitHtmls.length && appendTo._timLazyOnScroll) {
+      scroller.removeEventListener("scroll", appendTo._timLazyOnScroll);
+      appendTo._timLazyOnScroll = null;
+    }
+  }
+  more();  // first chunk paints immediately
+  if (idx >= unitHtmls.length) return;
+  function onScroll() {
+    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 800) more();
+  }
+  appendTo._timLazyOnScroll = onScroll;
+  scroller.addEventListener("scroll", onScroll, { passive: true });
+  // If the first chunk doesn't fill the viewport there's no scrollbar to drive
+  // onScroll — keep appending (next frame, so layout settles) until it does.
+  (function fill() {
+    if (idx >= unitHtmls.length) return;
+    if (scroller.scrollHeight <= scroller.clientHeight + 40) { more(); requestAnimationFrame(fill); }
+  })();
+}
 
 function prodDebouncedRender() {
   clearTimeout(_prodRenderTimer);
@@ -12191,12 +12242,8 @@ function prodRenderList() {
     return true;
   });
 
-  var capped = filtered.length > PROD_ROW_LIMIT;
-  var toRender = capped ? filtered.slice(0, PROD_ROW_LIMIT) : filtered;
-
   if (countEl) countEl.textContent = allKeys.length + " product" + (allKeys.length !== 1 ? "s" : "") +
-    (filtered.length !== allKeys.length ? " (" + filtered.length + " shown)" : "") +
-    (capped ? " — showing first " + PROD_ROW_LIMIT + ", refine search to see more" : "");
+    (filtered.length !== allKeys.length ? " (" + filtered.length + " shown)" : "");
 
   if (!filtered.length) {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">' +
@@ -12206,9 +12253,11 @@ function prodRenderList() {
     return;
   }
 
-  tbody.innerHTML = toRender.map(function(key) {
+  var units = filtered.map(function(key) {
     return '<tr data-prodkey="' + escapeHtml(key) + '">' + buildCatalogRowCells(key, PRODUCT_MAP[key] || {}) + "</tr>";
-  }).join("");
+  });
+  tbody.innerHTML = "";
+  timLazyRender(tbody, units);
   updateClearBtns();
 }
 
@@ -16156,8 +16205,6 @@ var _csvImportPending = null;
 // No inventory session required. Sources reel data straight from the events.
 // ═══════════════════════════════════════════════════════════════════════
 
-var _REEL_LOOKUP_CAP = 500;  // max rows rendered before a "narrow your search" note
-
 // Aggregate every counted reel to its most-recent non-voided event. Includes
 // master events + the active session so an in-progress count shows immediately.
 // Returns an array of latest events, deduped by item number + reel number.
@@ -16214,13 +16261,9 @@ function reelLookupRender() {
     return;
   }
 
-  var html = '<table><thead><tr>'
-    + '<th>Reel #</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
-    + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th>'
-    + '</tr></thead><tbody>';
-  var shown = 0, capped = false;
+  var units = [];
 
-  for (var gi = 0; gi < itemKeys.length && !capped; gi++) {
+  for (var gi = 0; gi < itemKeys.length; gi++) {
     var item = itemKeys[gi];
     var reels = groups[item].slice().sort(function(a, b) {
       return (a.reelNumber || "").localeCompare(b.reelNumber || "");
@@ -16229,20 +16272,19 @@ function reelLookupRender() {
     for (var d = 0; d < reels.length; d++) { if (reels[d].description) { desc = reels[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    html += '<tr style="background:#f8fafc;"><td colspan="9" style="padding:8px 10px;">'
+    units.push('<tr style="background:#f8fafc;"><td colspan="9" style="padding:8px 10px;">'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + reels.length + ' reel' + (reels.length !== 1 ? 's' : '') + ')</span>'
-      + '</td></tr>';
+      + '</td></tr>');
 
     for (var j = 0; j < reels.length; j++) {
-      if (shown >= _REEL_LOOKUP_CAP) { capped = true; break; }
       var e = reels[j];
       var two = e.spanType === "two_way";
       var ft = (e.totalAvailableFt != null ? e.totalAvailableFt : (e.qty != null ? e.qty : null));
       var loc = e.location ? (invLocationBarcodeToCompleteName(e.location) || e.location) : "";
       var num = function(v) { return v != null && v !== "" ? Number(v).toLocaleString() : "—"; };
-      html += '<tr>'
+      units.push('<tr>'
         + '<td style="font-weight:600;">' + escapeHtml(e.reelNumber || "") + '</td>'
         + '<td style="font-weight:700;">' + (ft != null ? Number(ft).toLocaleString() + ' ft' : '—') + '</td>'
         + '<td>' + num(e.innerSeqA) + '</td>'
@@ -16252,22 +16294,21 @@ function reelLookupRender() {
         + '<td>' + escapeHtml(loc) + '</td>'
         + '<td style="white-space:nowrap;">' + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : '') + '</td>'
         + '<td>' + escapeHtml(e.notes || "") + '</td>'
-        + '</tr>';
-      shown++;
+        + '</tr>');
     }
   }
-  html += '</tbody></table>';
-  if (capped) {
-    html += '<p class="small" style="color:#94a3b8;margin:8px 0 0;">Showing the first ' + _REEL_LOOKUP_CAP + ' reels — narrow your search to see the rest.</p>';
-  }
-  body.innerHTML = html;
+
+  body.innerHTML = '<div class="flow-table"><table><thead><tr>'
+    + '<th>Reel #</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
+    + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th>'
+    + '</tr></thead><tbody id="reelLookupTbody"></tbody></table></div>';
+  timLazyRender($("reelLookupTbody"), units);
 }
 
 // ─── Serial / Device Lookup ─────────────────────────────────────────────────
 // Parallel to Reel Lookup, but for serialized devices. Type any identifier a
 // scanner produces (serial / FSAN / MAC) and find the device + the item it is.
 // Reference-only: reads history.records, no inventory session needed.
-var _SERIAL_LOOKUP_CAP = 500;  // max rows rendered before a "narrow your search" note
 
 // One entry per distinct device, deduped by primary identity (serial→fsan→mac),
 // keeping the most-recent record so a device that was received then RMA'd shows
@@ -16367,14 +16408,11 @@ function serialLookupRender() {
     return;
   }
 
-  var html = '<table><thead><tr>'
-    + '<th>Serial</th><th>FSAN</th><th>MAC</th><th>Box / Pallet</th>'
-    + '</tr></thead><tbody>';
-  var shown = 0, capped = false;
   var boxIndex = serialLookupBuildBoxIndex();
   var palletCache = {};
+  var units = [];
 
-  for (var gi = 0; gi < itemKeys.length && !capped; gi++) {
+  for (var gi = 0; gi < itemKeys.length; gi++) {
     var item = itemKeys[gi];
     var devices = groups[item].slice().sort(function(a, b) {
       return normKey(a.serial || a.fsan || a.mac).localeCompare(normKey(b.serial || b.fsan || b.mac));
@@ -16383,29 +16421,27 @@ function serialLookupRender() {
     for (var d = 0; d < devices.length; d++) { if (devices[d].description) { desc = devices[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    html += '<tr style="background:#f8fafc;"><td colspan="4" style="padding:8px 10px;">'
+    units.push('<tr style="background:#f8fafc;"><td colspan="4" style="padding:8px 10px;">'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + devices.length + ' device' + (devices.length !== 1 ? 's' : '') + ')</span>'
-      + '</td></tr>';
+      + '</td></tr>');
 
     for (var j = 0; j < devices.length; j++) {
-      if (shown >= _SERIAL_LOOKUP_CAP) { capped = true; break; }
       var e = devices[j];
-      html += '<tr>'
+      units.push('<tr>'
         + '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(e.serial || '—') + '</td>'
         + '<td style="font-family:monospace;">' + escapeHtml(e.fsan || '—') + '</td>'
         + '<td style="font-family:monospace;">' + escapeHtml(e.mac || '—') + '</td>'
         + '<td style="font-size:12px;line-height:1.5;">' + serialLookupPlacementHtml(e, boxIndex, palletCache) + '</td>'
-        + '</tr>';
-      shown++;
+        + '</tr>');
     }
   }
-  html += '</tbody></table>';
-  if (capped) {
-    html += '<p class="small" style="color:#94a3b8;margin:8px 0 0;">Showing the first ' + _SERIAL_LOOKUP_CAP + ' devices — narrow your search to see the rest.</p>';
-  }
-  body.innerHTML = html;
+
+  body.innerHTML = '<div class="flow-table"><table><thead><tr>'
+    + '<th>Serial</th><th>FSAN</th><th>MAC</th><th>Box / Pallet</th>'
+    + '</tr></thead><tbody id="serialLookupTbody"></tbody></table></div>';
+  timLazyRender($("serialLookupTbody"), units);
 }
 
 function invImportReelsCsv(inputEl, onDone) {

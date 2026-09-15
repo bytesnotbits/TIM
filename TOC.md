@@ -742,11 +742,10 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `_SERIAL_LOOKUP_CAP` | Max device rows rendered before a "narrow your search" note (500) |
 | `serialLookupBuildList()` | Reduce `history.records` → one entry per device (dedup by serial→fsan→mac, most-recent) |
 | `serialLookupBuildBoxIndex()` | Build a `{ normKey(identifier) → box }` index over the live box registry once per render (avoids re-scanning per device) |
 | `serialLookupPlacementHtml(e, boxIndex, palletCache)` | Format one device's Box / Pallet cell: 📦 box + 🗄️ pallet + 📍 location; `palletCache` memoizes box→pallet; em-dash when not in any tracked box |
-| `serialLookupRender()` | Render the Serial / Device Lookup card: filter by `#serialLookupSearch` (serial/FSAN/MAC), group by item, add the Box / Pallet placement column |
+| `serialLookupRender()` | Render the Serial / Device Lookup card: filter by `#serialLookupSearch` (serial/FSAN/MAC), group by item, Box / Pallet placement column. Table flows with the page (`.flow-table`, no inset scroll); rows lazy-render in chunks via `timLazyRender` (no hard cap) |
 
 ---
 
@@ -756,9 +755,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `_REEL_LOOKUP_CAP` | Max reel rows rendered before a "narrow your search" note (500) |
 | `reelLookupBuildList()` | Aggregate non-voided `cable_reel_count` events → latest per item+reel |
-| `reelLookupRender()` | Render the Reel Lookup card: filter by `#reelLookupSearch`, group by item, table per reel |
+| `reelLookupRender()` | Render the Reel Lookup card: filter by `#reelLookupSearch`, group by item, one row per reel. Flows with the page (`.flow-table`); rows lazy-render in chunks via `timLazyRender` (no hard cap) |
 
 ---
 
@@ -913,7 +911,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function | Purpose |
 |----------|---------|
-| `prodRenderList()` | Render product table with search filter |
+| `timLazyRender(appendTo, unitHtmls, chunk)` | **Shared lazy-append renderer for the Products tables** (v2.49.00): paints an initial chunk (150) of row-HTML into `appendTo` (a `<tbody>`), then appends more via a `.main-content` scroll listener when the page nears the bottom (within 800px); a `requestAnimationFrame` fill loop tops up when the first chunk doesn't fill the viewport. Listener is stored on the target element (`_timLazyOnScroll`) so each table detaches only its own and self-removes when done. Uses a scroll listener, not IntersectionObserver — a zero-height sentinel isn't reliably observed. `prodShowSubview` renders only the visible lazy sub-tab so the fill loop measures real layout. Replaced the old fixed row caps |
+| `prodRenderList()` | Render product table with search filter. Table flows with the page (`.flow-table`, no inset scroll box); rows lazy-render via `timLazyRender` into `#prodCatalogBody` with `#prodCatalogSentinel` — no `PROD_ROW_LIMIT` cap |
 | `buildCatalogRowCells(key, map)` | Build HTML cells for one product row |
 | `prodRenderOneRow(key)` | Re-render single row in place |
 | `prodEditProduct(key)` | Open product edit modal |
