@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.47.01";
+const APP_VERSION = "v2.48.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4329,7 +4329,11 @@ function invStorageAvailable() {
 
 // -- Tab switching --------------------------------------------------
 function switchTab(name) {
-  ["dataimport", "receiving", "inventory", "products", "mapping", "barcodes", "boxes", "pallets"].forEach(function(t) {
+  // Product Mapping was folded into Products as a sub-tab (v2.48.00). Any legacy
+  // nav to "mapping" (e.g. a restored tim_active_tab) lands on Products' Mapping sub-view.
+  var _forceProdSub = null;
+  if (name === "mapping") { name = "products"; _forceProdSub = "mapping"; }
+  ["dataimport", "receiving", "inventory", "products", "barcodes", "boxes", "pallets"].forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
@@ -4347,10 +4351,10 @@ function switchTab(name) {
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
   if (name === "products") {
-    prodRenderList(); serialLookupRender(); reelLookupRender();
+    prodRenderList(); serialLookupRender(); reelLookupRender(); renderUnknownProducts();
     var savedProdSub = "catalog";
     try { savedProdSub = localStorage.getItem("tim_prod_subview") || "catalog"; } catch(e) {}
-    prodShowSubview(savedProdSub);
+    prodShowSubview(_forceProdSub || savedProdSub);
   }
   if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
   if (name === "pallets") palletRender();        // dedicated Pallets section — registry front door (no session)
@@ -4411,14 +4415,14 @@ function invShowSubview(name) {
 }
 
 // -- Products sub-screens --------------------------------------------
-// The Products tab is split into sub-views (product catalog, serial/device
-// lookup, reel lookup, catalog health, new-item dup-check) selected from
-// indented sidebar children — same pattern as the Inventory sub-nav. Each
-// section card carries a data-prod-subview attribute; we show the matching
-// card(s) and hide the rest. (The Architecture Notes card rides along with
-// the catalog view.)
+// The Products tab is split into sub-views (product catalog, product mapping,
+// serial/device lookup, reel lookup, catalog health, new-item dup-check,
+// architecture notes) selected from indented sidebar children — same pattern as
+// the Inventory sub-nav. Each section card carries a data-prod-subview attribute;
+// we show the matching card(s) and hide the rest. Product Mapping was folded in
+// here from its former top-level tab (v2.48.00).
 var prodActiveSubview = "catalog";
-var PROD_SUBVIEWS = ["catalog", "serial", "reel", "health", "newitem"];
+var PROD_SUBVIEWS = ["catalog", "mapping", "serial", "reel", "health", "newitem", "notes"];
 function prodShowSubview(name) {
   if (PROD_SUBVIEWS.indexOf(name) === -1) name = "catalog";
   prodActiveSubview = name;
@@ -12155,11 +12159,6 @@ function getTrackingType(map) {
   if (map.tracking_type) return map.tracking_type;
   if (map.serial_tracked) return "serial";
   return "none";
-}
-
-function prodToggleNotes() {
-  var body = $("prodNotesBody");
-  if (body) body.classList.toggle("hidden");
 }
 
 var _prodRenderTimer = null;

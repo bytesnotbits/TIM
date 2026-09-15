@@ -22,9 +22,8 @@ Single-page PWA. Four files do all the work:
 ### Main Tabs / Feature Areas
 - **Receiving** — load vendor/RMA source file, map products, export to Odoo
 - **Inventory** — active session scanning (serial, reel, bulk, box, MAC)
-- **Products** — product catalog editor (`PRODUCT_MAP`)
-- **Product Mapping** — barcode-to-item assignment
-- **Barcodes** — barcode batch management
+- **Products** — sub-tabbed section (indented sidebar sub-nav, `prodShowSubview`): Product Catalog editor (`PRODUCT_MAP`) · Product Mapping (Mapping Editor + Unknown-Products) · Serial/Device Lookup · Reel Lookup · Catalog Health · New Item — Dup Check · Architecture Notes. **Product Mapping folded in here from its former top-level tab (v2.48.00).**
+- **Barcodes** — barcode batch management (barcode-to-item assignment)
 
 ### Data Flow
 ```
@@ -929,7 +928,6 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `prodShowUploadDiff(diff)` | Show upload diff preview |
 | `prodApplyUpload()` | Apply upload changes |
 | `prodCancelUpload()` | Cancel upload |
-| `prodToggleNotes()` | Toggle help text panel |
 
 ---
 
@@ -1008,9 +1006,9 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 
 | Function | Purpose |
 |----------|---------|
-| `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory **and** Products sub-nav + applies their sub-views |
+| `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory **and** Products sub-nav + applies their sub-views. Legacy `switchTab("mapping")` (removed top-level tab) redirects to Products → Mapping sub-view |
 | `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
-| `prodShowSubview(name)` / `PROD_SUBVIEWS` | Switch Products sub-screen (catalog/serial/reel/health/newitem) by toggling `[data-prod-subview]` cards; catalog carries the Architecture Notes card; persists to `tim_prod_subview` |
+| `prodShowSubview(name)` / `PROD_SUBVIEWS` | Switch Products sub-screen (catalog/mapping/serial/reel/health/newitem/notes) by toggling `[data-prod-subview]` cards; persists to `tim_prod_subview`. `mapping` = the folded-in Mapping Editor + Unknown-Products cards; `notes` = Architecture & Data Model Notes (own sub-tab, shown expanded — the old Show/Hide collapsible + `prodToggleNotes` were removed) |
 | `toggleSidebar()` | Collapse/expand left sidebar |
 | `updateSidebarStatus(step, rows)` | Update sidebar file-loaded indicators |
 | `toggleMoreDropdown(e)` | Toggle "More" menu |

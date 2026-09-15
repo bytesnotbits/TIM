@@ -100,15 +100,13 @@
       <!-- Products sub-screens (shown only while the Products tab is active) -->
       <div id="prodSubnav" class="sidebar-subnav hidden">
         <button class="sidebar-subnav-btn active" id="prodSub_catalog" onclick="prodShowSubview('catalog')">Product Catalog</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_mapping" onclick="prodShowSubview('mapping')">Product Mapping</button>
         <button class="sidebar-subnav-btn"        id="prodSub_serial"  onclick="prodShowSubview('serial')">Serial / Device Lookup</button>
         <button class="sidebar-subnav-btn"        id="prodSub_reel"    onclick="prodShowSubview('reel')">Reel Lookup</button>
         <button class="sidebar-subnav-btn"        id="prodSub_health"  onclick="prodShowSubview('health')">Catalog Health</button>
         <button class="sidebar-subnav-btn"        id="prodSub_newitem" onclick="prodShowSubview('newitem')">New Item — Dup Check</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_notes"   onclick="prodShowSubview('notes')">Architecture Notes</button>
       </div>
-      <button class="sidebar-nav-btn" id="sideNavMapping" onclick="switchTab('mapping')">
-        <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></span>
-        <span class="sidebar-nav-label">Product Mapping</span>
-      </button>
       <button class="sidebar-nav-btn" id="sideNavBarcodes" onclick="switchTab('barcodes')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="5" x2="2" y2="19"/><line x1="5" y1="5" x2="5" y2="19"/><line x1="9" y1="5" x2="9" y2="19"/><line x1="11" y1="5" x2="11" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/><line x1="18" y1="5" x2="18" y2="19"/><line x1="22" y1="5" x2="22" y2="19"/></svg></span>
         <span class="sidebar-nav-label">Barcodes</span>
@@ -1217,14 +1215,46 @@
       <div id="niResults"></div>
     </div>
 
+    <!-- Product Mapping (folded in from the former top-level Product Mapping tab) -->
+    <div class="card prod-subview hidden" data-prod-subview="mapping">
+      <h2 style="margin-top:0;">Mapping Editor</h2>
+      <p class="small">Add or update a product mapping. Use the External ID exported from <b>Product Variants</b>. Product Template IDs are blocked to prevent bad Odoo imports. After saving, the current batch will be reprocessed automatically.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:12px;">
+        <label class="small">Vendor Part # (map key)<br><input id="mapProduct" type="text" placeholder="100-05603 — leave blank if NISC-only item" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">NISC Item # / Odoo Internal Ref<br><input id="mapHctc" type="text" placeholder="6030" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Product Variant External ID<br><input id="mapExternalId" type="text" placeholder="__export__.product_product_..." style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Odoo Description<br><input id="mapName" type="text" placeholder="Odoo product description" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Vendor<br><input id="mapVendor" type="text" placeholder="Calix, Tarana, Other" style="width:100%;box-sizing:border-box;" /></label>
+        <label class="small">Tracking Type<br>
+          <select id="mapTrackingType" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;">
+            <option value="serial">Serial — each unit has a unique serial number</option>
+            <option value="reel">Reel — cable/fiber tracked by footage</option>
+            <option value="none">None — bulk quantity count only</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
+        <label class="small"><input id="mapSerialTracked" type="checkbox" checked /> Serial tracked / importable to Odoo</label>
+        <label class="small"><input id="mapRequiresFsan" type="checkbox" /> Requires FSAN/name</label>
+        <label class="small"><input id="mapHistoryOnly" type="checkbox" /> History-only by default / do not export to Odoo</label>
+      </div>
+      <button id="saveMappingBtn">Save Mapping</button>
+      <button class="secondary" id="clearMappingFormBtn">Clear Form</button>
+    </div>
+
+    <div class="card prod-subview hidden" data-prod-subview="mapping">
+      <h2 style="margin-top:0;">Unknown Products From Current Batch</h2>
+      <p class="small">Click a row to pre-fill the mapping form above.</p>
+      <div class="scroll"><table id="unknownProductsTable"></table></div>
+    </div>
+
     <!-- Design Notes & Architecture Decisions -->
-    <div class="card prod-subview" data-prod-subview="catalog">
+    <div class="card prod-subview hidden" data-prod-subview="notes">
       <h2 style="display:flex;align-items:center;gap:12px;">
         Architecture &amp; Data Model Notes
-        <button class="secondary" style="font-size:12px;padding:5px 12px;margin:0;" onclick="prodToggleNotes()">Show / Hide</button>
       </h2>
       <p class="small">Design decisions recorded during development. Review against real usage data after 6–12 months of operation.</p>
-      <div id="prodNotesBody" class="design-notes-body hidden">
+      <div id="prodNotesBody" class="design-notes-body">
 
         <h3>Data Volume Assumptions (recorded May 2026)</h3>
         <table>
@@ -1529,40 +1559,6 @@
   </div>
 
   <!-- ── Product Mapping view ── -->
-  <div id="tabMapping" class="tab-panel">
-    <div class="card">
-      <h2 style="margin-top:0;">Mapping Editor</h2>
-      <p class="small">Add or update a product mapping. Use the External ID exported from <b>Product Variants</b>. Product Template IDs are blocked to prevent bad Odoo imports. After saving, the current batch will be reprocessed automatically.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:12px;">
-        <label class="small">Vendor Part # (map key)<br><input id="mapProduct" type="text" placeholder="100-05603 — leave blank if NISC-only item" style="width:100%;box-sizing:border-box;" /></label>
-        <label class="small">NISC Item # / Odoo Internal Ref<br><input id="mapHctc" type="text" placeholder="6030" style="width:100%;box-sizing:border-box;" /></label>
-        <label class="small">Odoo Product Variant External ID<br><input id="mapExternalId" type="text" placeholder="__export__.product_product_..." style="width:100%;box-sizing:border-box;" /></label>
-        <label class="small">Odoo Description<br><input id="mapName" type="text" placeholder="Odoo product description" style="width:100%;box-sizing:border-box;" /></label>
-        <label class="small">Vendor<br><input id="mapVendor" type="text" placeholder="Calix, Tarana, Other" style="width:100%;box-sizing:border-box;" /></label>
-        <label class="small">Tracking Type<br>
-          <select id="mapTrackingType" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;">
-            <option value="serial">Serial — each unit has a unique serial number</option>
-            <option value="reel">Reel — cable/fiber tracked by footage</option>
-            <option value="none">None — bulk quantity count only</option>
-          </select>
-        </label>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;">
-        <label class="small"><input id="mapSerialTracked" type="checkbox" checked /> Serial tracked / importable to Odoo</label>
-        <label class="small"><input id="mapRequiresFsan" type="checkbox" /> Requires FSAN/name</label>
-        <label class="small"><input id="mapHistoryOnly" type="checkbox" /> History-only by default / do not export to Odoo</label>
-      </div>
-      <button id="saveMappingBtn">Save Mapping</button>
-      <button class="secondary" id="clearMappingFormBtn">Clear Form</button>
-    </div>
-
-    <div class="card">
-      <h2 style="margin-top:0;">Unknown Products From Current Batch</h2>
-      <p class="small">Click a row to pre-fill the mapping form above.</p>
-      <div class="scroll"><table id="unknownProductsTable"></table></div>
-    </div>
-  </div><!-- /tabMapping -->
-
   </main><!-- /main-content -->
 </div><!-- /app-shell -->
 
