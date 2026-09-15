@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.46.00";
+const APP_VERSION = "v2.47.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4346,13 +4346,20 @@ function switchTab(name) {
   }
   // Entering Inventory: force resolution of any box left mid-capture.
   if (name === "inventory") setTimeout(invShowOpenBoxGate, 0);
-  if (name === "products") { prodRenderList(); serialLookupRender(); reelLookupRender(); }
+  if (name === "products") {
+    prodRenderList(); serialLookupRender(); reelLookupRender();
+    var savedProdSub = "catalog";
+    try { savedProdSub = localStorage.getItem("tim_prod_subview") || "catalog"; } catch(e) {}
+    prodShowSubview(savedProdSub);
+  }
   if (name === "boxes") invRenderBoxManager();   // dedicated Boxes section — registry front door (no session)
   if (name === "pallets") palletRender();        // dedicated Pallets section — registry front door (no session)
   if (name === "barcodes") setTimeout(function() { var si = $("bcScanInput"); if (si) si.focus(); }, 50);
   // Inventory sub-screens: show the sub-nav and apply the active sub-view.
   var invSubnav = $("invSubnav");
   if (invSubnav) invSubnav.classList.toggle("hidden", name !== "inventory");
+  var prodSubnav = $("prodSubnav");
+  if (prodSubnav) prodSubnav.classList.toggle("hidden", name !== "products");
   // Leaving Inventory entirely clears the static-frame mode.
   if (name !== "inventory") {
     var mcLeave = document.querySelector(".main-content");
@@ -4401,6 +4408,30 @@ function invShowSubview(name) {
     if (b) b.classList.toggle("active", INV_SUBVIEWS[j] === name);
   }
   try { localStorage.setItem("tim_inv_subview", name); } catch(e) {}
+}
+
+// -- Products sub-screens --------------------------------------------
+// The Products tab is split into sub-views (product catalog, serial/device
+// lookup, reel lookup, catalog health, new-item dup-check) selected from
+// indented sidebar children — same pattern as the Inventory sub-nav. Each
+// section card carries a data-prod-subview attribute; we show the matching
+// card(s) and hide the rest. (The Architecture Notes card rides along with
+// the catalog view.)
+var prodActiveSubview = "catalog";
+var PROD_SUBVIEWS = ["catalog", "serial", "reel", "health", "newitem"];
+function prodShowSubview(name) {
+  if (PROD_SUBVIEWS.indexOf(name) === -1) name = "catalog";
+  prodActiveSubview = name;
+  var cards = document.querySelectorAll("[data-prod-subview]");
+  for (var i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    c.classList.toggle("hidden", c.getAttribute("data-prod-subview") !== name);
+  }
+  for (var j = 0; j < PROD_SUBVIEWS.length; j++) {
+    var b = $("prodSub_" + PROD_SUBVIEWS[j]);
+    if (b) b.classList.toggle("active", PROD_SUBVIEWS[j] === name);
+  }
+  try { localStorage.setItem("tim_prod_subview", name); } catch(e) {}
 }
 
 // -- Sidebar toggle --------------------------------------------------
@@ -16262,6 +16293,37 @@ function serialLookupBuildList() {
   return Object.keys(byKey).map(function(k) { return byKey[k]; });
 }
 
+// Index every device identifier currently in the box registry → its box, so the
+// lookup can show a device's physical placement without re-scanning the registry
+// for each rendered row. Excludes tombstoned boxes (boxAll already does).
+function serialLookupBuildBoxIndex() {
+  var idx = {};
+  boxAll().forEach(function(b) {
+    boxDeviceList(b).forEach(function(d) {
+      boxDevKeys(d).forEach(function(k) { if (k && !idx[k]) idx[k] = b; });
+    });
+  });
+  return idx;
+}
+
+// Format a device's box + pallet placement for the lookup table. `boxIndex` is
+// from serialLookupBuildBoxIndex(); `palletCache` memoizes the box→pallet lookup.
+// Returns an em-dash cell when the device isn't in any tracked box.
+function serialLookupPlacementHtml(e, boxIndex, palletCache) {
+  var box = boxIndex[normKey(e.serial)] || boxIndex[normKey(e.fsan)] || boxIndex[normKey(e.mac)];
+  if (!box) return '<span style="color:#cbd5e1;">—</span>';
+  var bk = boxNormId(box.boxId);
+  var pallet = palletCache.hasOwnProperty(bk) ? palletCache[bk] : (palletCache[bk] = palletFindByBoxKey(box.boxId));
+  var html = '<span title="Box">📦 <span style="font-family:monospace;font-weight:600;">' + escapeHtml(box.boxId) + '</span></span>';
+  if (pallet) {
+    html += '<br><span title="Pallet" style="color:#475569;">🗄️ <span style="font-family:monospace;">' + escapeHtml(pallet.palletId) + '</span></span>';
+  }
+  // Physical location: the pallet's sticky location when on a pallet, else the box's own.
+  var loc = (pallet && pallet.location) || box.location || "";
+  if (loc) html += '<br><span style="color:#64748b;">📍 ' + escapeHtml(loc) + '</span>';
+  return html;
+}
+
 function serialLookupRender() {
   var body = $("serialLookupBody");
   if (!body) return;
@@ -16307,9 +16369,11 @@ function serialLookupRender() {
   }
 
   var html = '<table><thead><tr>'
-    + '<th>Serial</th><th>FSAN</th><th>MAC</th>'
+    + '<th>Serial</th><th>FSAN</th><th>MAC</th><th>Box / Pallet</th>'
     + '</tr></thead><tbody>';
   var shown = 0, capped = false;
+  var boxIndex = serialLookupBuildBoxIndex();
+  var palletCache = {};
 
   for (var gi = 0; gi < itemKeys.length && !capped; gi++) {
     var item = itemKeys[gi];
@@ -16320,7 +16384,7 @@ function serialLookupRender() {
     for (var d = 0; d < devices.length; d++) { if (devices[d].description) { desc = devices[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    html += '<tr style="background:#f8fafc;"><td colspan="3" style="padding:8px 10px;">'
+    html += '<tr style="background:#f8fafc;"><td colspan="4" style="padding:8px 10px;">'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + devices.length + ' device' + (devices.length !== 1 ? 's' : '') + ')</span>'
@@ -16333,6 +16397,7 @@ function serialLookupRender() {
         + '<td style="font-family:monospace;font-weight:600;">' + escapeHtml(e.serial || '—') + '</td>'
         + '<td style="font-family:monospace;">' + escapeHtml(e.fsan || '—') + '</td>'
         + '<td style="font-family:monospace;">' + escapeHtml(e.mac || '—') + '</td>'
+        + '<td style="font-size:12px;line-height:1.5;">' + serialLookupPlacementHtml(e, boxIndex, palletCache) + '</td>'
         + '</tr>';
       shown++;
     }

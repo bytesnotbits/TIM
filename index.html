@@ -97,6 +97,14 @@
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
         <span class="sidebar-nav-label">Products</span>
       </button>
+      <!-- Products sub-screens (shown only while the Products tab is active) -->
+      <div id="prodSubnav" class="sidebar-subnav hidden">
+        <button class="sidebar-subnav-btn active" id="prodSub_catalog" onclick="prodShowSubview('catalog')">Product Catalog</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_serial"  onclick="prodShowSubview('serial')">Serial / Device Lookup</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_reel"    onclick="prodShowSubview('reel')">Reel Lookup</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_health"  onclick="prodShowSubview('health')">Catalog Health</button>
+        <button class="sidebar-subnav-btn"        id="prodSub_newitem" onclick="prodShowSubview('newitem')">New Item — Dup Check</button>
+      </div>
       <button class="sidebar-nav-btn" id="sideNavMapping" onclick="switchTab('mapping')">
         <span class="sidebar-nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></span>
         <span class="sidebar-nav-label">Product Mapping</span>
@@ -1123,7 +1131,7 @@
   <div id="tabProducts" class="tab-panel">
 
     <!-- Product Catalog -->
-    <div class="card">
+    <div class="card prod-subview" data-prod-subview="catalog">
       <h2>Product Catalog &nbsp;<span id="prodCatalogCount" class="small" style="font-weight:400;">0 products</span></h2>
       <div class="prod-search-row">
         <input type="search" id="prodSearch" placeholder="Search by vendor part #, NISC item #, name, vendor…" oninput="prodDebouncedRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
@@ -1148,12 +1156,12 @@
     </div>
 
     <!-- Serial / Device Lookup -->
-    <div class="card">
+    <div class="card prod-subview hidden" data-prod-subview="serial">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         Serial / Device Lookup
         <span id="serialLookupCount" class="small" style="font-weight:400;color:#64748b;"></span>
       </h2>
-      <p class="small" style="color:#475569;margin:0 0 12px;">Find a serialized device by any identifier a scanner produces — serial, FSAN, or MAC — and see the item it's assigned to. Reads receiving history; no inventory session needed.</p>
+      <p class="small" style="color:#475569;margin:0 0 12px;">Find a serialized device by any identifier a scanner produces — serial, FSAN, or MAC — and see the item it's assigned to, plus where it's stored if it's in a tracked box or on a pallet. Reads receiving history + the box/pallet registries; no inventory session needed.</p>
       <div class="prod-search-row">
         <input type="search" id="serialLookupSearch" placeholder="Search by serial, FSAN, or MAC…" oninput="serialLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
         <button class="secondary" onclick="serialLookupRender()">Refresh</button>
@@ -1162,7 +1170,7 @@
     </div>
 
     <!-- Reel Lookup -->
-    <div class="card">
+    <div class="card prod-subview hidden" data-prod-subview="reel">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         Reel Lookup
         <span id="reelLookupCount" class="small" style="font-weight:400;color:#64748b;"></span>
@@ -1176,7 +1184,7 @@
     </div>
 
     <!-- Catalog Health -->
-    <div class="card">
+    <div class="card prod-subview hidden" data-prod-subview="health">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         Catalog Health
         <button onclick="chkRunHealthCheck()" style="font-size:12px;padding:5px 14px;margin:0;">Run check</button>
@@ -1187,7 +1195,7 @@
     </div>
 
     <!-- New Item — Dup Check & Numbering -->
-    <div class="card">
+    <div class="card prod-subview hidden" data-prod-subview="newitem">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         New Item — Dup Check &amp; Numbering
         <span id="niCatStatus" class="small" style="font-weight:400;color:#94a3b8;"></span>
@@ -1210,7 +1218,7 @@
     </div>
 
     <!-- Design Notes & Architecture Decisions -->
-    <div class="card">
+    <div class="card prod-subview" data-prod-subview="catalog">
       <h2 style="display:flex;align-items:center;gap:12px;">
         Architecture &amp; Data Model Notes
         <button class="secondary" style="font-size:12px;padding:5px 12px;margin:0;" onclick="prodToggleNotes()">Show / Hide</button>

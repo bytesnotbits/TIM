@@ -59,7 +59,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_nisc_catalog_v1` | NISC catalog master layer `{ item → {name,long_desc,group,status,class,class_source,…} }` (device-local; feeds dup-check + numbering) |
 | `tim_numbering_db_v1` | AABBCC-N numbering legend, seeded from bundled `numbering_db.json` (occupancy computed live) |
 
-`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`.
+`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`, `tim_inv_subview`, `tim_prod_subview`.
 
 ---
 
@@ -739,13 +739,15 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 ### Serial / Device Lookup (Products tab)
 
-> Read-only reverse lookup of a serialized device, in the Products tab — parallel to Reel Lookup, no inventory session required. Sources from `history.records`, deduped to one entry per device (primary identity serial→fsan→mac, most-recent kept). Matches on serial / FSAN / MAC (any scanner identifier); grouped by item; item links open `prodShowItemHistory`. Shows item/product identity only (Joe's scope, v2.39.00) — not location/sale-order/box.
+> Read-only reverse lookup of a serialized device, in the Products **sub-tab** — parallel to Reel Lookup, no inventory session required. Sources from `history.records`, deduped to one entry per device (primary identity serial→fsan→mac, most-recent kept). Matches on serial / FSAN / MAC (any scanner identifier); grouped by item; item links open `prodShowItemHistory`. Shows item/product identity **plus box/pallet placement** (v2.47.00): a **Box / Pallet** column resolves each device against the box registry (any identifier) → its box, the box → its pallet (`palletFindByBoxKey`), and the physical location (pallet's sticky location when on a pallet, else the box's own). Still no sale-order.
 
 | Function / Variable | Purpose |
 |---------------------|---------|
 | `_SERIAL_LOOKUP_CAP` | Max device rows rendered before a "narrow your search" note (500) |
 | `serialLookupBuildList()` | Reduce `history.records` → one entry per device (dedup by serial→fsan→mac, most-recent) |
-| `serialLookupRender()` | Render the Serial / Device Lookup card: filter by `#serialLookupSearch` (serial/FSAN/MAC), group by item |
+| `serialLookupBuildBoxIndex()` | Build a `{ normKey(identifier) → box }` index over the live box registry once per render (avoids re-scanning per device) |
+| `serialLookupPlacementHtml(e, boxIndex, palletCache)` | Format one device's Box / Pallet cell: 📦 box + 🗄️ pallet + 📍 location; `palletCache` memoizes box→pallet; em-dash when not in any tracked box |
+| `serialLookupRender()` | Render the Serial / Device Lookup card: filter by `#serialLookupSearch` (serial/FSAN/MAC), group by item, add the Box / Pallet placement column |
 
 ---
 
@@ -1006,8 +1008,9 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 
 | Function | Purpose |
 |----------|---------|
-| `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory sub-nav + applies sub-view |
+| `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory **and** Products sub-nav + applies their sub-views |
 | `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
+| `prodShowSubview(name)` / `PROD_SUBVIEWS` | Switch Products sub-screen (catalog/serial/reel/health/newitem) by toggling `[data-prod-subview]` cards; catalog carries the Architecture Notes card; persists to `tim_prod_subview` |
 | `toggleSidebar()` | Collapse/expand left sidebar |
 | `updateSidebarStatus(step, rows)` | Update sidebar file-loaded indicators |
 | `toggleMoreDropdown(e)` | Toggle "More" menu |
