@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.49.02";
+const APP_VERSION = "v2.49.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -1521,6 +1521,25 @@ $("exportCsvBtn").addEventListener("click", () => {
   if (badRows.length) {
     alert("Export blocked: " + badRows.length + " row(s) still use Product Template external IDs. Update the mapping with Product Variant external IDs first.");
     return;
+  }
+  // The Calix accounting tabs/CSVs now emit [FSAN][FSAN][MAC]; a Calix-shaped
+  // row (real FSAN, i.e. not the non-FSAN serial===fsan case) with no MAC would
+  // export a blank 3rd column. Warn — don't silently ship blanks — and let Joe
+  // decide whether to fix the source first or proceed anyway.
+  const macMissing = rows.filter(r => {
+    const isNonFsan = !r.original_fsan && r.fsan === r.serial;
+    return !isNonFsan && !getRecordMac(r);
+  });
+  if (macMissing.length) {
+    const sample = macMissing.slice(0, 10)
+      .map(r => "  • " + (r.hctc || "?") + "  FSAN " + (r.fsan || "?") + "  S/N " + (r.serial || "?"))
+      .join("\n");
+    const more = macMissing.length > 10 ? "\n  …and " + (macMissing.length - 10) + " more" : "";
+    if (!confirm(
+      macMissing.length + " Calix device row(s) have no MAC address. Their accounting " +
+      "tab/CSV 3rd column will be BLANK:\n\n" + sample + more +
+      "\n\nBest fix the source file so every device has a MAC. Export anyway with blanks?"
+    )) return;
   }
   const header = ["Product/External ID","ref","name","x_studio_mac_address","note"];
   const dataRows = rows.map(r => {
