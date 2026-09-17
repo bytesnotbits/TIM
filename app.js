@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.49.01";
+const APP_VERSION = "v2.49.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -1538,7 +1538,7 @@ $("exportCsvBtn").addEventListener("click", () => {
   // RMA number — matching the `note` column on the Devices sheet.
   //
   // Calix tabs use the exact headerless shape NISC accepts on import:
-  // [FSAN][FSAN][Serial] — the CXNK FSAN twice, then the numeric Calix serial.
+  // [FSAN][FSAN][MAC] — the CXNK FSAN twice, then the device MAC address.
   // Non-FSAN gear (Tarana etc., original_fsan absent → fsan === serial) keeps
   // its single-column serial tab; those are small and handled manually, so we
   // deliberately don't reshape them or emit a CSV for them.
@@ -1554,13 +1554,14 @@ $("exportCsvBtn").addEventListener("click", () => {
     const isNonFsan = !r.original_fsan && r.fsan === r.serial;
     const fsan   = r.fsan || r.serial;
     const serial = r.serial || r.fsan;
+    const mac    = getRecordMac(r);
     const acctId = isNonFsan ? serial : fsan;   // non-FSAN single-col identifier
     if (!acctId) return;
     const key = item + "\x00" + ref;
     if (!byGroup[key]) { byGroup[key] = { item, ref, calix: false, units: [] }; groupOrder.push(key); }
     const g = byGroup[key];
     if (!isNonFsan) g.calix = true;             // any real FSAN row → Calix shape
-    g.units.push({ fsan, serial, acctId });
+    g.units.push({ fsan, serial, mac, acctId });
   });
 
   const safeFileName = s => String(s == null ? "" : s).replace(/[\\/:*?"<>|]/g, "-").trim();
@@ -1570,7 +1571,7 @@ $("exportCsvBtn").addEventListener("click", () => {
     const g = byGroup[key];
     const label = g.ref ? (g.item + " RMA " + g.ref) : g.item;
     if (g.calix) {
-      const tabRows = g.units.map(u => [u.fsan, u.fsan, u.serial]);  // [FSAN][FSAN][Serial]
+      const tabRows = g.units.map(u => [u.fsan, u.fsan, u.mac]);  // [FSAN][FSAN][MAC]
       sheets.push({ name: label, headers: null, rows: tabRows });
       const csvText = tabRows.map(row => row.map(csvEscape).join(",")).join("\r\n");
       csvDownloads.push({ name: safeFileName(label) + ".csv", text: csvText });
