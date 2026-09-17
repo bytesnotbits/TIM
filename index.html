@@ -1141,16 +1141,14 @@
         </select>
         <button class="secondary" onclick="prodRenderList()">Refresh</button>
       </div>
-      <div class="flow-table">
-        <table>
-          <thead>
-            <tr><th>Vendor Part #</th><th>NISC Item #</th><th>Name / Description</th><th>Vendor</th><th>Tracking</th><th>Odoo External ID</th><th>Req. FSAN</th><th>History Only</th><th>Actions</th></tr>
-          </thead>
-          <tbody id="prodCatalogBody">
-            <tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">Load a master JSON or upload products to populate the catalog.</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <table class="sticky-head">
+        <thead>
+          <tr><th>Vendor Part #</th><th>NISC Item #</th><th>Name / Description</th><th>Vendor</th><th>Tracking</th><th>Odoo External ID</th><th>Req. FSAN</th><th>History Only</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="prodCatalogBody">
+          <tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px;">Load a master JSON or upload products to populate the catalog.</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- Serial / Device Lookup -->

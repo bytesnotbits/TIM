@@ -912,7 +912,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | Function | Purpose |
 |----------|---------|
 | `timLazyRender(appendTo, unitHtmls, chunk)` | **Shared lazy-append renderer for the Products tables** (v2.49.00): paints an initial chunk (150) of row-HTML into `appendTo` (a `<tbody>`), then appends more via a `.main-content` scroll listener when the page nears the bottom (within 800px); a `requestAnimationFrame` fill loop tops up when the first chunk doesn't fill the viewport. Listener is stored on the target element (`_timLazyOnScroll`) so each table detaches only its own and self-removes when done. Uses a scroll listener, not IntersectionObserver — a zero-height sentinel isn't reliably observed. `prodShowSubview` renders only the visible lazy sub-tab so the fill loop measures real layout. Replaced the old fixed row caps |
-| `prodRenderList()` | Render product table with search filter. Table flows with the page (`.flow-table`, no inset scroll box); rows lazy-render via `timLazyRender` into `#prodCatalogBody` with `#prodCatalogSentinel` — no `PROD_ROW_LIMIT` cap |
+| `prodRenderList()` | Render product table with search filter. Table flows with the page — no inset scroll box; rendered directly in the card (`table.sticky-head`, not a `.flow-table` wrapper) so its `<thead>` stays pinned (`position:sticky`) on long scrolls; a wide catalog scrolls horizontally via `.main-content`. Rows lazy-render via `timLazyRender` into `#prodCatalogBody` — no `PROD_ROW_LIMIT` cap |
 | `buildCatalogRowCells(key, map)` | Build HTML cells for one product row |
 | `prodRenderOneRow(key)` | Re-render single row in place |
 | `prodEditProduct(key)` | Open product edit modal |

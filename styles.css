@@ -375,6 +375,13 @@ th { background: #f1f5f9; position: sticky; top: 0; z-index: 1; }
    while wide tables still scroll horizontally on their own. Used by the Products
    tables, which lazy-render rows as you scroll. */
 .flow-table { overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
+/* Catalog table flows directly in the page (no overflow wrapper) so its header
+   pins to the top of the scroll area on long scrolls. Sticky is applied to the
+   whole <thead> (per-cell sticky on <th> isn't honored on a border-collapse
+   table in Chromium). With border-collapse the header's own border scrolls away,
+   so draw the separator + a soft drop as a shadow on the cells. */
+.sticky-head thead { position: sticky; top: 0; z-index: 2; }
+.sticky-head thead th { box-shadow: inset 0 -1px 0 #e5e7eb, 0 2px 3px rgba(0,0,0,.05); }
 textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12px; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .62); display: flex; align-items: flex-start; justify-content: center; padding: 32px 16px; overflow: auto; z-index: 50; }
