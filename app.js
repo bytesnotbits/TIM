@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.49.03";
+const APP_VERSION = "v2.49.04";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -12584,9 +12584,18 @@ function invBuildGapReport() {
 
   // Counted reels: normKey(reelNumber) → event
   var countedReels = {};
-  // Counted serials: normKey(defCode+"||"+loc+"||"+lotName) → event
-  var countedSerials = {};
-  // Counted bulk: normKey(defCode+"||"+loc) → {defCode, loc, qty, description}
+  // Counted serialized units. A device is matched on IDENTITY (any of its
+  // identifiers), NOT on item#/location: serial/lot numbers are globally
+  // unique in Odoo, and Odoo's lot for Calix is the FSAN while TIM stores the
+  // true hardware serial as e.serial. Indexing every identifier (serial, fsan,
+  // mac, scannedValue) → the event lets a baseline lot recorded under ANY of
+  // them resolve to the same physical unit. Location is compared separately
+  // (reported as a "moved" gap), never used to match. (Fixed v2.49.04 — before
+  // this, matching on defCode||location||serial made every counted Calix device
+  // double-flag as missing+unexpected. See project_gap_analysis_serial_bug.)
+  var countedSerialEvents = [];   // serialized events, in scan order
+  var countedSerialIndex  = {};   // identifier normKey → index into countedSerialEvents
+  // Counted bulk: normKey(defCode+"||"+locBarcode) → {defCode, loc, qty, description}
   var countedBulk = {};
 
   activeEvents.forEach(function(e) {
@@ -12601,11 +12610,15 @@ function invBuildGapReport() {
       var rn = normKey(e.reelNumber || e.scannedValue || "");
       if (rn) countedReels[rn] = e;
     } else if (e.eventType === "serialized_device_scan") {
-      var lot = normKey(e.serial || e.fsan || e.scannedValue || "");
-      countedSerials[defCode + "||" + loc + "||" + lot] = e;
+      var idx = countedSerialEvents.length;
+      countedSerialEvents.push(e);
+      [e.serial, e.fsan, e.mac, e.scannedValue].forEach(function(id) {
+        var k = normKey(id || "");
+        if (k && countedSerialIndex[k] === undefined) countedSerialIndex[k] = idx;
+      });
     } else if (e.eventType === "bulk_quantity_count") {
       // box_scan is an audit marker; its fromSealedBox serial events are
-      // reconciled via countedSerials above.
+      // reconciled via the serialized index above.
       var bk = defCode + "||" + loc;
       if (!countedBulk[bk]) {
         countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "" };
@@ -12619,13 +12632,17 @@ function invBuildGapReport() {
   var reelGaps   = [];
 
   // Track which counted items matched a quant
-  var matchedSerials = {};
-  var matchedBulk    = {};
-  var matchedReels   = {};
+  var matchedSerialIdx = {};   // index into countedSerialEvents → true
+  var matchedBulk      = {};
+  var matchedReels     = {};
 
   invQuantsBaseline.forEach(function(q) {
     var defCode = normKey(q.itemNumber);
-    var loc     = normKey(q.locationId);
+    // Bulk matches on location, so compare in the SAME namespace as the scan:
+    // the baseline's resolved locationBarcode (e.g. WH03800), not the Odoo path
+    // (W367/S/3800). Falls back to the path only if the location map didn't
+    // resolve it.
+    var loc     = normKey(q.locationBarcode || q.locationId);
 
     if (!q.lotId) {
       // ── Bulk quant ──
@@ -12648,20 +12665,27 @@ function invBuildGapReport() {
           reelGaps.push({ gapType: "footage_diff", reelNumber: q.lotId, itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooFt: q.odooQty, countedFt: countedFt });
         }
       } else {
-        // ── Serialized quant (or uncounted reel) ──
-        var sKey = defCode + "||" + loc + "||" + lotNorm;
-        matchedSerials[sKey] = true;
-        if (!countedSerials[sKey]) {
+        // ── Serialized quant (or uncounted reel) ── match on identity, any id
+        var evtIdx = countedSerialIndex[lotNorm];
+        if (evtIdx === undefined) {
           serialGaps.push({ gapType: "missing", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId });
+        } else {
+          matchedSerialIdx[evtIdx] = true;
+          // Matched unit found — flag only if it was counted somewhere other
+          // than where Odoo expects it (same-namespace location compare).
+          var expectLoc = normKey(q.locationBarcode || q.locationId);
+          var gotLoc    = normKey(countedSerialEvents[evtIdx].location || "");
+          if (expectLoc && gotLoc && expectLoc !== gotLoc) {
+            serialGaps.push({ gapType: "moved", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId, countedLocation: countedSerialEvents[evtIdx].location || "" });
+          }
         }
       }
     }
   });
 
-  // Counted serials with no matching quant
-  Object.keys(countedSerials).forEach(function(key) {
-    if (!matchedSerials[key]) {
-      var e = countedSerials[key];
+  // Counted serialized units with no matching quant
+  countedSerialEvents.forEach(function(e, i) {
+    if (!matchedSerialIdx[i]) {
       serialGaps.push({ gapType: "unexpected", itemNumber: e.itemNumber || "", description: e.description || "", serial: e.serial || e.fsan || e.scannedValue || "", location: e.location || "" });
     }
   });
@@ -12709,6 +12733,7 @@ function invRenderGapReport(report) {
     }
     var missingSerial   = report.serialGaps.filter(function(g){ return g.gapType === "missing"; }).length;
     var unexpectedSerial = report.serialGaps.filter(function(g){ return g.gapType === "unexpected"; }).length;
+    var movedSerial     = report.serialGaps.filter(function(g){ return g.gapType === "moved"; }).length;
     var bulkMismatch    = report.bulkGaps.filter(function(g){ return g.gapType === "qty_mismatch"; }).length;
     var bulkNotCounted  = report.bulkGaps.filter(function(g){ return g.gapType === "not_counted"; }).length;
     var bulkExtra       = report.bulkGaps.filter(function(g){ return g.gapType === "not_in_quants"; }).length;
@@ -12717,6 +12742,7 @@ function invRenderGapReport(report) {
     bar.innerHTML =
       chip("Missing serials", missingSerial) +
       chip("Unexpected serials", unexpectedSerial) +
+      chip("Serials moved", movedSerial) +
       chip("Bulk qty mismatch", bulkMismatch) +
       chip("Bulk not counted", bulkNotCounted) +
       chip("Bulk not in quants", bulkExtra) +
@@ -12734,8 +12760,13 @@ function invRenderGapReport(report) {
     } else {
       var rows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Serial / FSAN</th><th>Location</th></tr></thead><tbody>' +
         report.serialGaps.map(function(g) {
-          var typeLabel = g.gapType === "missing" ? '<span style="color:#b91c1c;font-weight:600;">Missing</span>' : '<span style="color:#d97706;font-weight:600;">Unexpected</span>';
-          return '<tr><td>' + typeLabel + '</td><td>' + escapeHtml(g.itemNumber) + '</td><td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td><td style="font-family:monospace;">' + escapeHtml(g.serial) + '</td><td>' + escapeHtml(g.location) + '</td></tr>';
+          var typeLabel = g.gapType === "missing" ? '<span style="color:#b91c1c;font-weight:600;">Missing</span>'
+            : g.gapType === "moved" ? '<span style="color:#2563eb;font-weight:600;">Moved</span>'
+            : '<span style="color:#d97706;font-weight:600;">Unexpected</span>';
+          var locCell = g.gapType === "moved"
+            ? escapeHtml(g.location) + ' <span style="color:#64748b;">&rarr;</span> ' + escapeHtml(g.countedLocation || "")
+            : escapeHtml(g.location);
+          return '<tr><td>' + typeLabel + '</td><td>' + escapeHtml(g.itemNumber) + '</td><td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td><td style="font-family:monospace;">' + escapeHtml(g.serial) + '</td><td>' + locCell + '</td></tr>';
         }).join("") + '</tbody>';
       serialTbl.outerHTML = '<table id="invGapSerialTable">' + rows + '</table>';
     }
