@@ -591,7 +591,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function | Purpose |
 |----------|---------|
-| `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception; loose scan of a box member stamps `formerBoxId` + flags the box opened (v2.36.00) |
+| `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception. Resolution order: **history → Odoo quants baseline (`invResolveQuantSerial`, v2.50.00) → unknown-device prompt**; loose scan of a box member stamps `formerBoxId` + flags the box opened (v2.36.00) |
 | `invBoxNoteLooseCount(serial, fsan)` | Phase 1 box lifecycle: a box member counted loose → flag its box `opened`, return box ID for `formerBoxId` stamp (v2.36.00) |
 | `invHandleBoxScan(boxId, ctx, notes, loc)` | Sealed fast-count of a known box (see Box Registry section) |
 | `invHandleBulkCount(itemNum, qty, notes, loc)` | Record bulk quantity count |
@@ -601,6 +601,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `invResolveBySerial(key)` | Look up history record by serial |
 | `invResolveByFsan(key)` | Look up history record by FSAN |
 | `invResolveByMac(mac)` | Look up history record by MAC |
+| `invBuildQuantSerialIndex()` | Cached `normKey(lotId) → quant row` map of **qty-1 unit-serials only** from `invQuantsBaseline` (Option A); rebuilt when the baseline array is reassigned (v2.50.00) |
+| `invResolveQuantSerial(vKey)` | Fallback lookup: device not in history but Odoo has it on hand as a unit-serial → return the quant row (v2.50.00) |
+| `invQuantSerialCoverage()` | `{total, known, unknown}` — on-hand unit-serials vs. what history knows; drives the readiness line on quants load (v2.50.00) |
 | `invCreateExceptionEvent(value, type, problem, action, notes)` | Create exception event |
 
 ---

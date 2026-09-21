@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.49.05";
+const APP_VERSION = "v2.50.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5627,6 +5627,49 @@ function invResolveByMac(macBare) {
   }) || null;
 }
 
+// -- Quants baseline fallback (Option A: qty-1 unit-serials only) ----
+// When a serialized scan isn't in history, Odoo's on-hand quants may still know
+// it by its Lot/Serial. We resolve ONLY true unit-serials (odooQty === 1) this
+// way — lot-tracked bulk/reels (qty > 1) deliberately fall through to the
+// unknown-device prompt so a reel lot isn't miscounted as a single unit. The
+// index is cached and rebuilt whenever invQuantsBaseline is reassigned (import,
+// load, and clear all REPLACE the array, so reference identity flags staleness).
+var _invQuantSerialIndex = null, _invQuantSerialIndexSrc = null;
+function invBuildQuantSerialIndex() {
+  if (_invQuantSerialIndexSrc === invQuantsBaseline && _invQuantSerialIndex) return _invQuantSerialIndex;
+  var idx = Object.create(null);
+  (invQuantsBaseline || []).forEach(function(q) {
+    if (!q || !q.lotId || q.odooQty !== 1) return;
+    var k = normKey(q.lotId);
+    if (k && !idx[k]) idx[k] = q;   // unit serials are unique; first wins
+  });
+  _invQuantSerialIndex = idx;
+  _invQuantSerialIndexSrc = invQuantsBaseline;
+  return idx;
+}
+function invResolveQuantSerial(vKey) {
+  return invBuildQuantSerialIndex()[vKey] || null;
+}
+
+// Coverage of the quants baseline's unit-serials (qty 1) vs. what history
+// already knows. Drives the one-line readiness summary on quants load (and any
+// future coverage view). "unknown" = on-hand in Odoo but not in history — those
+// now auto-count via invResolveQuantSerial in invHandleSerializedScan.
+function invQuantSerialCoverage() {
+  var known = Object.create(null);
+  (history.records || []).forEach(function(r) {
+    var s = normKey(r.serial || r.ref  || ""); if (s) known[s] = 1;
+    var f = normKey(r.fsan   || r.name || ""); if (f) known[f] = 1;
+  });
+  var total = 0, hit = 0;
+  (invQuantsBaseline || []).forEach(function(q) {
+    if (!q || !q.lotId || q.odooQty !== 1) return;
+    total++;
+    if (known[normKey(q.lotId)]) hit++;
+  });
+  return { total: total, known: hit, unknown: total - hit };
+}
+
 // -- Duplicate detection -------------------------------------------
 function invFindSerializedDuplicate(serial, fsan) {
   var sk = normKey(serial);
@@ -5698,6 +5741,9 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
     if (histRecord) serial = normalize(histRecord.serial || histRecord.ref || "");
   }
 
+  // Not in history? Fall back to Odoo's on-hand quants (unit-serials only).
+  var quantRec = (!histRecord) ? invResolveQuantSerial(vKey) : null;
+
   // Duplicate check
   var dupEvt = invFindSerializedDuplicate(serial || value, fsan);
   if (dupEvt) {
@@ -5719,6 +5765,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
   if (!itemNumber && histRecord) {
     itemNumber = normalize(histRecord.hctc || histRecord.calix_product || histRecord.product || "");
   }
+  if (!itemNumber && quantRec) itemNumber = quantRec.itemNumber || "";
   if (itemNumber) {
     var mm = findProductMapMatch(itemNumber);
     if (mm) description = getMapDescription(mm.entry);
@@ -5726,9 +5773,11 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
   if (!description && histRecord) {
     description = normalize(histRecord.odoo_name || histRecord.calix_description || "");
   }
+  if (!description && quantRec) description = quantRec.description || "";
 
-  // Unknown device — show inline prompt instead of immediate exception
-  if (!histRecord && !contextItem) {
+  // Unknown device — show inline prompt instead of immediate exception.
+  // A quant match (quantRec) counts as "known" here, so it skips the prompt.
+  if (!histRecord && !quantRec && !contextItem) {
     invSetScanFeedback(
       "Unknown device: " + value + " — fill in details below and Commit, or Cancel to log an exception.",
       "warn");
@@ -5753,6 +5802,7 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
     notes:        notes
   };
   if (formerBoxId) evtData.formerBoxId = formerBoxId;
+  if (quantRec) evtData.identitySource = "odoo_quant";
   invCreateEvent("serialized_device_scan", evtData);
 
   var detail = description ? " (" + description + ")" : "";
@@ -5760,7 +5810,8 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
   if (serial) ids.push("S/N: " + serial);
   if (fsan)   ids.push("FSAN: " + fsan);
   var boxNote = formerBoxId ? "  (was in box " + formerBoxId + " — box flagged opened)" : "";
-  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : "") + boxNote, "ok", "", "serialized");
+  var srcNote = quantRec ? "  (Odoo on-hand)" : "";
+  invSetScanFeedback("Counted: " + value + detail + (ids.length ? "  " + ids.join("  ") : "") + boxNote + srcNote, "ok", "", "serialized");
   return true;
 }
 
@@ -11736,6 +11787,15 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     if (pmUpdated)  parts.push(pmUpdated  + " product variant ID" + (pmUpdated !== 1 ? "s" : "") + " updated");
     parts.push("from " + (fileName || "file"));
     statusEl.textContent = parts.join(" · ") + ". Total baseline: " + invQuantsBaseline.length.toLocaleString() + " records.";
+    // Serialized-coverage readiness line: how many on-hand unit-serials TIM's
+    // history already knows vs. how many are new (Odoo-only). New ones now
+    // auto-count via the quants fallback in invHandleSerializedScan.
+    var cov = invQuantSerialCoverage();
+    if (cov.total) {
+      statusEl.textContent += " Serialized: " + cov.total.toLocaleString() + " device" +
+        (cov.total !== 1 ? "s" : "") + " on hand · " + cov.known.toLocaleString() +
+        " known to history · " + cov.unknown.toLocaleString() + " new (auto-count from Odoo).";
+    }
   }
 }
 
