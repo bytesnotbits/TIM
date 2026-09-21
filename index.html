@@ -310,8 +310,8 @@
         </h3>
         <p class="small">Three CSV exports from Odoo that prepare TIM for an inventory count. Drop them all into the universal zone above — TIM identifies each one automatically.</p>
         <div class="import-card-fmt">
-          <strong>Quants Baseline</strong> — Odoo → Inventory → Products → Quants → Export (include <code>id, product_id, product_id/id, location_id, lot_id, inventory_quantity_auto_apply</code>)<br>
-          <strong>Location Map</strong> — Odoo → Inventory → Configuration → Locations → Export (include <code>id, name, barcode, location_id, parent_path</code>)<br>
+          <strong>Quants Baseline</strong> — Odoo → Inventory → Products → Quants → Export. A normal export works as-is (the default <code>Product / Location / Lot/Serial Number / Quantity</code> columns); leave <em>"I want to update data"</em> <strong>unchecked</strong> so locations stay readable paths.<br>
+          <strong>Location Map</strong> — Odoo → Inventory → Configuration → Locations → Export. A normal export works as-is (<code>Location Name / Parent Location / Barcode</code>); leave <em>"I want to update data"</em> <strong>unchecked</strong>.<br>
           <strong>Inv. Adj. Sync</strong> — Odoo → Inventory → Adjustments → Export (include <code>id, product_id/default_code, location_id/barcode, quantity</code>)
         </div>
         <div class="odoo-setup-rows">

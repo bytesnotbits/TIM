@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.49.04";
+const APP_VERSION = "v2.49.05";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -11483,13 +11483,16 @@ function invProcessLocationMapCsv(text, fileName) {
     return -1;
   }
 
-  var parentIdx       = colIdx("location_id");   // parent path e.g. "W367/S"
-  var nameIdx         = colIdx("name");           // location name e.g. "Y01"
-  var barcodeIdx      = colIdx("barcode");        // barcode e.g. "WHY01"
-  var completeNameIdx = colIdx("complete_name");  // Odoo full path if exported
+  // Accept both Odoo's technical field names AND the display-name headers a
+  // normal (non-import-compatible) UI export produces, so a file dropped
+  // straight from Odoo works without renaming headers (v2.49.05).
+  var parentIdx       = colIdx("location_id", "parent location");   // parent path e.g. "W367/S"
+  var nameIdx         = colIdx("name", "location name");            // location name e.g. "Y01"
+  var barcodeIdx      = colIdx("barcode");                           // barcode e.g. "WHY01"
+  var completeNameIdx = colIdx("complete_name", "complete name");    // Odoo full path if exported
 
-  if (nameIdx    === -1) throw new Error("Column 'name' not found. Export Locations from Odoo: Inventory → Configuration → Locations.");
-  if (barcodeIdx === -1) throw new Error("Column 'barcode' not found.");
+  if (nameIdx    === -1) throw new Error("Column 'name' (or 'Location Name') not found. Export Locations from Odoo: Inventory → Configuration → Locations.");
+  if (barcodeIdx === -1) throw new Error("Column 'barcode' (or 'Barcode') not found.");
 
   var newMap = {};
   var newBarcodeMap = {};
@@ -11596,19 +11599,26 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     return -1;
   }
 
-  var idIdx         = colIdx("id");
-  var prodIdx       = colIdx("product_id");
-  var varExtIdIdx   = colIdx("product_id/id");
-  var locIdx        = colIdx("location_id");
-  var lotIdx        = colIdx("lot_id");
+  // Accept both Odoo's technical field names AND the display-name headers a
+  // normal (non-import-compatible) UI export produces, so a file dropped
+  // straight from Odoo works without renaming headers (v2.49.05).
+  var idIdx         = colIdx("id", "external id");
+  var prodIdx       = colIdx("product_id", "product");
+  var varExtIdIdx   = colIdx("product_id/id", "product/id");
+  var locIdx        = colIdx("location_id", "location");
+  var lotIdx        = colIdx("lot_id", "lot/serial number", "lot/serial");
   var qtyIdx        = colIdx("quantity", "inventory_quantity_auto_apply");
   var invQtyIdx     = colIdx("inventory_quantity");
-  var dateIdx       = colIdx("accounting_date");
+  var dateIdx       = colIdx("accounting_date", "accounting date");
 
-  if (idIdx === -1)   throw new Error("Column 'id' not found. Export Quants from Odoo: Inventory → Products → Quants.");
-  if (prodIdx === -1) throw new Error("Column 'product_id' not found.");
-  if (locIdx === -1)  throw new Error("Column 'location_id' not found.");
-  if (qtyIdx === -1)  throw new Error("Column 'quantity' or 'inventory_quantity_auto_apply' not found.");
+  // 'id' (the Odoo quant record id) is OPTIONAL: it's only needed to target
+  // existing quants when pushing adjustments back to Odoo (a deferred flow).
+  // Gap Analysis never uses it, and the UI export omits it, so a missing id
+  // no longer blocks the import — quant-map entries are just skipped for rows
+  // without one (see the row loop below).
+  if (prodIdx === -1) throw new Error("Column 'product_id' (or 'Product') not found. Export Quants from Odoo: Inventory → Products → Quants.");
+  if (locIdx === -1)  throw new Error("Column 'location_id' (or 'Location') not found.");
+  if (qtyIdx === -1)  throw new Error("Column 'quantity' / 'inventory_quantity_auto_apply' (or 'Quantity') not found.");
 
   // Parse [itemNumber] description format from product_id
   function parseProductId(raw) {
@@ -11636,7 +11646,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
     var inventoryQty   = invQtyIdx >= 0 ? (parseFloat(cells[invQtyIdx] || 0) || 0) : 0;
     var accountingDate = (dateIdx  >= 0 ? (cells[dateIdx]       || "") : "").trim();
 
-    if (!quantId || !rawProd) continue;
+    if (!rawProd) continue;   // id is optional (v2.49.05); only product is required
 
     var prod    = parseProductId(rawProd);
     var barcode = invLocationPathToBarcode(locationPath);
@@ -11655,9 +11665,14 @@ function invProcessQuantsBaselineCsv(text, fileName) {
       importedAt:      importedAt
     });
 
-    // Quant map entry — keyed by defCode||barcode||lot (matches invGetQuantId lookup format)
-    var qmKey = normKey(prod.itemNumber) + "||" + normKey(barcode) + "||" + normKey(lotId);
-    newQuantMap[qmKey] = { id: quantId, onHandQty: odooQty };
+    // Quant map entry — keyed by defCode||barcode||lot (matches invGetQuantId
+    // lookup format). Only built when we have a REAL Odoo quant id; a display
+    // export without an id column still imports for gap analysis, it just can't
+    // seed the id-based Odoo-adjustment lookup (which is a deferred flow).
+    if (quantId) {
+      var qmKey = normKey(prod.itemNumber) + "||" + normKey(barcode) + "||" + normKey(lotId);
+      newQuantMap[qmKey] = { id: quantId, onHandQty: odooQty };
+    }
 
     // Collect variant external IDs for PRODUCT_MAP update (skip product_template IDs)
     if (variantExtId && !/product_template/i.test(variantExtId)) {
@@ -11666,7 +11681,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   }
 
   if (!newRows.length)
-    throw new Error("No valid rows found. Verify this is an Odoo Quants export with 'id', 'product_id', 'location_id', and 'quantity' columns.");
+    throw new Error("No valid rows found. Verify this is an Odoo Quants export with product, location, and quantity columns (technical names or the default 'Product' / 'Location' / 'Quantity' display headers).");
 
   // ── 1. Upsert baseline ──────────────────────────────────────────────
   var incomingKeys = {};
