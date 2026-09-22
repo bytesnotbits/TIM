@@ -807,3 +807,8 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .inv-reel-swap-btn { padding:3px 10px; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; cursor:pointer; margin:0; white-space:nowrap; }
 .inv-reel-swap-btn:hover { background:#dbeafe; border-color:#93c5fd; }
 .inv-reel-swap-btn.swapped { background:#dbeafe; border-color:#60a5fa; }
+
+/* Apply key doubles as the reel panel's Enter: blue whilst it only walks to the next
+   field, green (the default .apply) once the next press actually writes the count —
+   so there is never any doubt which press commits. */
+.inv-qty-key.apply.stepping { background:#2563eb; border-color:#1d4ed8; }

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.53.00";
+const APP_VERSION = "v2.53.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -9507,11 +9507,7 @@ function invKeyFocusField(target) {
   else if (target === "outer")  { el = $("invReelOuterA"); }
   else if (target === "inner2") { el = $("invReelInnerB"); }
   else if (target === "outer2") { el = $("invReelOuterB"); }
-  if (!el) return;
-  invKeypadTargetEl = el;
-  el.focus();
-  invReelFocusSeqField(el);   // pre-filled → select, so typing replaces
-  invQtyKeypadRefreshReelTarget();
+  invReelSetRing(el);
 }
 
 function invQtyKeyBackspace() {
@@ -9604,8 +9600,11 @@ function invQtyKeySkip() {
 }
 
 function invQtyKeyApply() {
-  if (invQtyKeypadMode === "reel") {
-    invSubmitReelEntry();
+  // Routed by the PANEL being open, not by keypad mode — in Auto-Detect the mode
+  // stays "qty" while a reel scan opens the panel over it.
+  var rip = $("invReelInlinePanel");
+  if ((rip && !rip.classList.contains("hidden")) || invQtyKeypadMode === "reel") {
+    invReelApplyAsEnter();
     return;
   }
   var n = parseInt(invQtyKeypadValue, 10);
@@ -9915,6 +9914,13 @@ var invReelSwaps = [];
 // than re-picking it once.
 var invReelStickySpanType = "single";
 
+// Which ring field the soft keypad's Apply key will act on. Tracked separately from
+// document.activeElement because tapping a keypad button can pull focus off the panel
+// entirely — the pointer has to survive that. Kept current by the panel's `focusin`
+// listener, so every route in (Enter/Tab, a focus-jump button, a direct tap on a
+// field) updates it for free.
+var invReelRingCurrent = null;
+
 // Span Type for the reel now in the panel, most-specific source first:
 //   1. what we already know about THIS reel (count event or registry) — a fact
 //   2. the SKU's reel_direction in PRODUCT_MAP ("one_way"/"two_way") — a product fact
@@ -10062,6 +10068,7 @@ function invPrefillReelItemNumber(itemNumber, notes, location) {
   if (spanSel) spanSel.value = _invReelResolveSpanType(null, itemNumber);
   invReelSpanTypeChange();
   invCalcReelFt();
+  invReelKeypadEngage();
 
   setTimeout(function() {
     var reelField = $("invReelNumber");
@@ -10161,20 +10168,9 @@ function invOpenReelModal(reelNumber, notes, location) {
   // already known (everything pre-filled), land on Inner Seq A rather than Save.
   // The operator is here to replace the known markers with today's reading, so the
   // cursor belongs on the first number they will overwrite, not on the way out.
+  invReelKeypadEngage();
   setTimeout(function() {
-    var required = [$("invReelItemNumber"), $("invReelInnerA"), $("invReelOuterA")];
-    var firstEmpty = null;
-    for (var i = 0; i < required.length; i++) {
-      if (required[i] && !required[i].value) { firstEmpty = required[i]; break; }
-    }
-    var f = firstEmpty || $("invReelInnerA") || $("invReelSaveBtn");
-    if (f) {
-      f.focus();   // a pre-filled field selects itself via invReelFocusSeqField
-      if (f !== $("invReelSaveBtn")) {
-        invKeypadTargetEl = f;
-        invQtyKeypadRefreshReelTarget();
-      }
-    }
+    invReelSetRing(_invReelFirstNeeded() || $("invReelInnerA") || $("invReelSaveBtn"));
   }, 50);
 }
 
@@ -10190,11 +10186,7 @@ function invReelCommitReelField() {
   var reelNum = $("invReelNumber") ? $("invReelNumber").value.trim() : "";
   if (!reelNum) return;
   var itemNum = $("invReelItemNumber") ? $("invReelItemNumber").value.trim() : "";
-  var target  = itemNum ? $("invReelInnerA") : $("invReelItemNumber");
-  if (!target) return;
-  target.focus();
-  invKeypadTargetEl = target;
-  invQtyKeypadRefreshReelTarget();
+  invReelSetRing(itemNum ? $("invReelInnerA") : $("invReelItemNumber"));
 }
 
 // Focusing a pre-filled (grey) sequence field selects its contents, so the first
@@ -10241,13 +10233,24 @@ function invReelAdvance(fromEl, back) {
   if (i < 0) return false;
   var next = order[i + (back ? -1 : 1)];
   if (!next) return false;
-  next.focus();
-  invReelFocusSeqField(next);                       // pre-filled → select, so typing replaces
-  if (next.getAttribute("data-reel-label")) {       // a keypad-able field
-    invKeypadTargetEl = next;
+  invReelSetRing(next);
+  return true;
+}
+
+// Move the ring pointer AND the focus together. The pointer is set explicitly by
+// whatever moves the ring rather than inferred from a focus event: focusin is the
+// right net for a direct tap on a field, but it does not fire when the document
+// itself is unfocused, and the Apply key must still know where it is.
+function invReelSetRing(el) {
+  if (!el) return;
+  invReelRingCurrent = el;
+  el.focus();
+  invReelFocusSeqField(el);                       // pre-filled → select, so typing replaces
+  if (el.getAttribute && el.getAttribute("data-reel-label")) {   // a keypad-able field
+    invKeypadTargetEl = el;
     invQtyKeypadRefreshReelTarget();
   }
-  return true;
+  invReelRefreshApplyLabel();
 }
 
 // Enter / Tab handler for every field in the ring. Enter on the Save button is left
@@ -10271,6 +10274,77 @@ function invReelKeyNav(el, ev) {
     return;
   }
   if (invReelAdvance(el, back)) ev.preventDefault();
+}
+
+// First required field still lacking a value, or null when the reel is fully known.
+function _invReelFirstNeeded() {
+  var req = [$("invReelItemNumber"), $("invReelInnerA"), $("invReelOuterA")];
+  for (var i = 0; i < req.length; i++) if (req[i] && !req[i].value) return req[i];
+  return null;
+}
+
+// Apply on the soft keypad IS the Enter key while a reel is being entered: it walks
+// the same ring and commits only once it has landed on Save. That keeps the entire
+// entry on the keypad — on the iPad the OS keyboard would otherwise slide up and
+// cover most of the screen every time focus moved to a field.
+function invReelApplyAsEnter() {
+  var order = invReelFieldOrder();
+  var save  = $("invReelSaveBtn");
+  var cur   = invReelRingCurrent;
+  if (order.indexOf(cur) < 0) cur = null;   // stale: panel reopened, or Span B hidden
+
+  if (!cur) {                                // no position yet — start where input is due
+    cur = _invReelFirstNeeded() || $("invReelInnerA");
+    if (cur) { invReelSetRing(cur); return; }
+    cur = save;
+  }
+  if (cur === save) { invSubmitReelEntry(); return; }
+  if (!invReelAdvance(cur, false)) invSubmitReelEntry();
+}
+
+// The Apply key says what the NEXT press will do — walk on, or commit. Green "Save
+// Reel" only ever means the next press writes the count, so there is no guessing at
+// which press was the committing one.
+function invReelRefreshApplyLabel() {
+  var btn = $("invQtyKeyApplyBtn");
+  var rip = $("invReelInlinePanel");
+  if (!btn || !rip || rip.classList.contains("hidden")) return;
+  var atSave = (invReelRingCurrent === $("invReelSaveBtn"));
+  btn.innerHTML = atSave ? "&#10003; Save Reel" : "&#8594; Next";
+  btn.classList.toggle("stepping", !atSave);
+  var ctx = $("invQtyKeypadContext");
+  if (ctx && atSave) ctx.textContent = "→ Save Reel Count";
+}
+
+// Put the soft keypad into reel presentation for as long as the panel is open, and
+// restore it afterwards. Needed because the panel can open while the keypad is in qty
+// mode: in Auto-Detect, invSetScanMode leaves the keypad on "qty" and a reel scan then
+// opens the panel over it, so the digits went to the qty display and the focus-jump
+// row stayed hidden. Presentation only — scan mode is untouched.
+function invReelKeypadEngage() {
+  invQtyKeypadMode = "reel";
+  var kp = $("invQtyKeypad");
+  if (kp) kp.className = kp.className.replace(/\bmode-\w+/g, "").trim() + " mode-reel";
+  var focusRow = $("invKeyFocusRow"); if (focusRow) focusRow.classList.remove("hidden");
+  var signBtn  = $("invQtyKeySignMinus"); if (signBtn) signBtn.style.display = "none";
+  var title = $("invQtyKeypadTitle"); if (title) title.textContent = "Reel Entry";
+  var lbl   = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "→";
+  invReelRefreshApplyLabel();
+}
+
+function invReelKeypadRelease() {
+  if (invScanMode === "reel") return;        // reel mode owns the keypad anyway
+  invQtyKeypadMode = "qty";
+  invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
+  var kp = $("invQtyKeypad");
+  if (kp) kp.className = kp.className.replace(/\bmode-\w+/g, "").trim() + " mode-qty";
+  var focusRow = $("invKeyFocusRow"); if (focusRow) focusRow.classList.add("hidden");
+  var signBtn  = $("invQtyKeySignMinus"); if (signBtn) signBtn.style.display = "";
+  var title = $("invQtyKeypadTitle"); if (title) title.textContent = "Quantity";
+  var lbl   = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "Qty:";
+  var btn   = $("invQtyKeyApplyBtn");
+  if (btn) { btn.innerHTML = "&#10003; Apply"; btn.classList.remove("stepping"); }
+  invQtyRefreshDisplay();
 }
 
 function invReelSeqKeyDown(el, ev) {
@@ -10730,6 +10804,8 @@ function invClearReelFields() {
   var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
   var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; }
   invReelResetSwaps();
+  invReelRingCurrent = null;
+  invReelRefreshApplyLabel();
   invReelModalScannedValue = "";
   // NOTE: deliberately do NOT pre-fill the item # from the sticky invScanItem
   // context. That context is only ever set by the serial-tracked-item path, so in
@@ -10740,6 +10816,7 @@ function invClearReelFields() {
 
 function invCloseReelInline() {
   invKeypadTargetEl = null;
+  invReelRingCurrent = null;
   document.querySelectorAll(".inv-reel-keypad-targeted").forEach(function(el) {
     el.classList.remove("inv-reel-keypad-targeted");
   });
@@ -10759,6 +10836,7 @@ function invCloseReelInline() {
       var disp2 = $("invQtyDisplay");
       if (disp2) { disp2.textContent = "—"; disp2.className = "inv-qty-display"; }
     }
+    invReelKeypadRelease();   // panel gone — hand the keypad back to qty mode
   }
   setTimeout(function() { var i = $("invScanInput"); if (i) { i.focus(); i.select(); } }, 50);
 }
@@ -12621,6 +12699,12 @@ function reelSyncFromQuants() {
       if (t && (t.type === "number") && !t.readOnly) {
         invKeypadTargetEl = t;
         if (invQtyKeypadMode === "reel") invQtyKeypadRefreshReelTarget();
+      }
+      // Single place the Apply key's ring position is maintained — whatever put focus
+      // here (Enter/Tab, a focus-jump button, a direct tap) updates it for free.
+      if (t && invReelFieldOrder().indexOf(t) >= 0) {
+        invReelRingCurrent = t;
+        invReelRefreshApplyLabel();
       }
     });
   })();
