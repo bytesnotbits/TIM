@@ -55,6 +55,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_gh_shas_v1` | Per-file blob SHAs from last GitHub sync (for Phase 2 write-back) |
 | `tim_catalog_health_v1` | Catalog Health review state `{ ignored: { extId → true } }` (dismissed alias groups) |
 | `tim_pallets_v1` | Pallet registry `normKey(palletId) → PalletEntry` (pallet→box associations; GitHub-synced whole-pallet LWW as `pallets.json`) |
+| `tim_reels_v1` | Reel registry `normKey(reelNumber) → ReelEntry` (quants footage + Product Reels sequences; GitHub-synced whole-reel LWW as `reels.json`, `_ghMergeReelsLWW`, v2.52.00) |
 | `tim_nisc_catalog_v1` | NISC catalog master layer `{ item → {name,long_desc,group,status,class,class_source,…} }` (device-local; feeds dup-check + numbering) |
 | `tim_numbering_db_v1` | AABBCC-N numbering legend, seeded from bundled `numbering_db.json` (occupancy computed live) |
 
@@ -766,16 +767,22 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `reelItemIsReelTracked(itemNumber)` | Gate: is the item `tracking_type:"reel"` in PRODUCT_MAP? (which quant lots enter the registry) |
 | `reelRecomputeDerived(e)` | Recompute `refFt` / `needsSequences` / `sequenceStale` / `source` from the source-owned fields |
 | `reelUpsertReference(row)` | **Reference writer** — upsert inner/outer/notes/refCountDate from a parsed reel-CSV row (footage untouched) |
-| `reelSyncFromQuants()` | **Live-truth writer** — reconcile footage/presence against `invQuantsBaseline`; create new reels; archive (`gone`) / resurrect. Returns `{live,gone,created,resurrected}`. Called after every baseline change (import, load, boot, master-JSON adopt) |
+| `reelSyncFromQuants()` | **Live-truth writer** — reconcile footage/presence against `invQuantsBaseline`; create new reels; archive (`gone`) / resurrect. Returns `{live,gone,created,resurrected}`. Called after every baseline change (import, load, boot, master-JSON adopt). Persists LOCAL only (`_reelPersistLocal`) — footage re-derives from synced `quants.json`, so it never schedules a GitHub push |
+| `_reelPersistLocal()` / `reelSaveToStorage()` | IDB write only / IDB write + `scheduleReelPush()`. Reference writes use the latter; the quants reconcile uses the former |
+| `scheduleReelPush()` / `_reelPushTimer` | Debounced `reels.json` push (v2.52.00 Phase 2), guarded by `ghConfigured` + `ghSyncInFlight` — mirrors `scheduleBoxPush` |
+| `reelDirtyQuantLots()` | Detect quant reel lots with notes typed into the lot field (`288R02 (2 REELS)`, `432R04BIG`) → `[{lot,item,clean}]`. REPORTS, never strips (fix at source in Odoo) |
+| `reelLookupFilter` / `reelSetLookupFilter(f)` | Reel Lookup view: `active` (default, non-archived) / `stale` / `needseq` / `archived` / `all` |
+| `_reelBadges(e)` / `_reelDirtyLotsNote()` | Status-cell badges (Archived/Stale/Need seq/Unconfirmed) / amber dirty-lot warning above the table |
 
 ### Reel Lookup (Products tab)
 
-> Read-only browse of every reel TIM knows, in the Products tab — no inventory session required. Unions the **reel registry** with live `cable_reel_count` events (a real count wins over registry footage). Searchable by item number or reel number; grouped by item; item links open `prodShowItemHistory`.
+> Read-only browse of every reel TIM knows, in the Products tab — no inventory session required. **Registry-primary**, with `cable_reel_count` events overriding footage/sequences only when a count is **NEWER** than the quants baseline that set it (recency-aware: a fresh floor scan is ground truth; a stale historical count must not shadow the current baseline or hide the staleness flag). Filter chips (Active/Stale/Need seq/Archived/All) + Status-cell badges. Searchable; grouped by item; item links open `prodShowItemHistory`.
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `reelLookupBuildList()` | Union: latest non-voided count event per item+reel, then registry entries for every reel WITHOUT a count event (footage = quants on-hand, else reference). Carries `_fromRegistry`/`presence`/`sequenceStale`/`needsSequences`/`source` for Phase 2 badges |
-| `reelLookupRender()` | Render the Reel Lookup card: filter by `#reelLookupSearch`, group by item, one row per reel. Flows with the page (`.flow-table`); rows lazy-render in chunks via `timLazyRender` (no hard cap) |
+| `reelLookupBuildList()` | Registry-primary union. Per reel: use the count event only if `ev.timestamp > r.quantsAt`, else the registry row (quants footage + reference sequences + flags); count-only reels (never in quants/reference) appended. Rows carry `_fromRegistry`/`_fromCount`/`presence`/`sequenceStale`/`needsSequences`/`source` |
+| `_reelRowFromRegistry(r)` / `_reelRowFromEvent(ev,r)` | Build a display row from a registry entry / from a (fresh) count event (never stale/needs-seq — a count reconciles both) |
+| `reelLookupRender()` | Render the card: filter chips + `#reelLookupSearch`, group by item, Status badges, archived rows dimmed. `.flow-table`; rows lazy-render via `timLazyRender` |
 
 ---
 

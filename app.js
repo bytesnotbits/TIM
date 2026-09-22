@@ -3022,6 +3022,7 @@ function ghBuildDataFiles() {
     "inventory.json": { inventory_sessions: payload.inventory_sessions, inventory_events: payload.inventory_events },
     "boxes.json": payload.boxes || {},  // carton→device registry; merged last-writer-wins per box
     "pallets.json": payload.pallets || {},  // pallet→box registry; merged last-writer-wins per pallet
+    "reels.json": payload.reels || {},  // cable-reel registry; merged last-writer-wins per reel (v2.52.00)
     // Writer-version stamp. Deliberately NO timestamp/device fields so it's
     // byte-STABLE across pushes from the same version (a volatile field would make
     // every push rewrite it → phantom commits). It changes only when a newer app
@@ -3061,6 +3062,7 @@ function _ghAssembleRemote(fetched) {
     else if (f.name === "meta.json" && f.json && typeof f.json === "object") versionMeta = f.json;
     else if (f.name === "boxes.json" && f.json && typeof f.json === "object") payload.boxes = f.json;
     else if (f.name === "pallets.json" && f.json && typeof f.json === "object") payload.pallets = f.json;
+    else if (f.name === "reels.json" && f.json && typeof f.json === "object") payload.reels = f.json;
     else if (f.name === "recounts.json" && f.json && typeof f.json === "object") {
       if (Array.isArray(f.json.recount_sessions))  payload.recount_sessions  = f.json.recount_sessions;
       if (Array.isArray(f.json.recount_movements)) payload.recount_movements = f.json.recount_movements;
@@ -3332,6 +3334,13 @@ function ghMergeMasters(base, local, remote, ctx) {
   // to one pallet can lose. Pallets are lower-churn than boxes, so this is safe.
   merged.pallets = _ghMergePalletsLWW(local.pallets, remote.pallets);
 
+  // reels: same keyed-map last-writer-wins (per reel, by updatedAt). Only a
+  // REFERENCE import bumps updatedAt, so the device with the freshest inner/outer
+  // sequences wins the whole record; footage/presence are then re-derived locally
+  // from the synced quants baseline (loadSourceData → reelSyncFromQuants), so a
+  // footage-only device can't clobber another device's sequences. (v2.52.00)
+  merged.reels = _ghMergeReelsLWW(local.reels, remote.reels);
+
   return { merged: merged, conflicts: conflicts };
 }
 
@@ -3360,6 +3369,23 @@ function _ghMergePalletsLWW(local, remote) {
   Object.keys(remote).forEach(function(k) {
     if (!(k in merged)) { merged[k] = remote[k]; return; }
     if (palTs(remote[k]) > palTs(merged[k])) merged[k] = remote[k];
+  });
+  return merged;
+}
+
+// Union the two reel maps; on a shared reel number keep whichever record has the
+// newer updatedAt (createdAt as fallback, then remote). Order-independent.
+// Mirrors _ghMergeBoxesLWW (see the tradeoff note at the call site). Because only
+// reference imports bump updatedAt, the sequence-bearing record wins and footage
+// re-derives locally from the quants baseline.
+function _ghMergeReelsLWW(local, remote) {
+  local = local || {}; remote = remote || {};
+  var merged = {};
+  var reelTs = function(r) { return (r && (r.updatedAt || r.createdAt)) || ""; };
+  Object.keys(local).forEach(function(k) { merged[k] = local[k]; });
+  Object.keys(remote).forEach(function(k) {
+    if (!(k in merged)) { merged[k] = remote[k]; return; }
+    if (reelTs(remote[k]) > reelTs(merged[k])) merged[k] = remote[k];
   });
   return merged;
 }
@@ -11867,10 +11893,30 @@ var REEL_STALE_TOL_FT = 2;   // |onHandFt - refFt| within this ⇒ NOT stale (ro
 
 function reelWho() { return (typeof timGetUsername === "function" ? timGetUsername() : "") || ""; }
 
-function reelSaveToStorage() {
-  // Phase 1: local persistence + it rides in the master JSON via buildExportPayload.
-  // Phase 2 will add a dedicated reels.json GitHub push (scheduleReelPush).
+function _reelPersistLocal() {
+  // Local IDB write only — no GitHub push. Used by the quants footage reconcile,
+  // whose result is re-derivable on every device from the synced quants.json, so
+  // it must not schedule a push (that would fire a no-op on every boot).
   TimDB.set(REEL_STORAGE_KEY, appData.reels || {}).catch(function(){});
+}
+function reelSaveToStorage() {
+  _reelPersistLocal();
+  scheduleReelPush();
+}
+// Debounced GitHub push for reel-registry changes (v2.52.00 Phase 2) — same
+// machinery as boxes/pallets. reels.json is merged last-writer-wins PER REEL by
+// updatedAt (_ghMergeReelsLWW). Only REFERENCE writes (reelUpsertReference) bump
+// updatedAt; a quants-driven footage sync does NOT, so a device that only
+// refreshed footage never clobbers another device's freshly-imported sequences —
+// and footage self-heals locally from the quants baseline after any pull.
+var _reelPushTimer = null;
+function scheduleReelPush() {
+  if (typeof ghConfigured !== "function" || !ghConfigured()) return;
+  clearTimeout(_reelPushTimer);
+  _reelPushTimer = setTimeout(function() {
+    if (typeof ghSyncInFlight !== "undefined" && ghSyncInFlight) { scheduleReelPush(); return; }
+    ghPushToGitHub({ auto: true });
+  }, 4000);
 }
 function reelLoadFromStorage() {
   return TimDB.get(REEL_STORAGE_KEY).then(function(saved) {
@@ -11897,6 +11943,28 @@ function reelItemIsReelTracked(itemNumber) {
     e = m && m.entry;
   }
   return !!(e && e.tracking_type === "reel");
+}
+
+// Detect Odoo quant lots (for reel items) that have notes typed INTO the lot
+// field — e.g. "288R02 (2 REELS)", "432R04BIG", "S1H01 [1498]". These won't join
+// to the clean Product Reels "Reels No", so a reel looks both new AND gone. We
+// REPORT them (never silently strip) so the fix happens at the source in Odoo —
+// stripping would corrupt lot identity and hide a growing data problem.
+function reelDirtyQuantLots() {
+  var seen = {}, out = [];
+  (invQuantsBaseline || []).forEach(function(q) {
+    var lot = (q && q.lotId ? String(q.lotId) : "").trim();
+    if (!lot) return;
+    if (!reelItemIsReelTracked(q.itemNumber) && !reelGet(lot)) return;
+    if (seen[lot]) return; seen[lot] = true;
+    // Unambiguous pollution: a space, paren, or bracket anywhere; OR a junk word
+    // appended to the end of an otherwise-clean lot (e.g. "432R04BIG", "…BAD").
+    if (/[\s()\[\]]/.test(lot) || /(BAD|BIG|OLD|DUP|DUPLICATE)$/i.test(lot)) {
+      var clean = lot.split(/[\s([]/)[0].replace(/(BAD|BIG|OLD|DUP|DUPLICATE)$/i, "").replace(/[^A-Za-z0-9-].*$/, "").trim();
+      out.push({ lot: lot, item: q.itemNumber || "", clean: clean });
+    }
+  });
+  return out;
 }
 
 // Recompute all derived fields + provenance from the source-owned fields.
@@ -12036,7 +12104,7 @@ function reelSyncFromQuants() {
     summary.created++; summary.live++;
   });
 
-  reelSaveToStorage();
+  _reelPersistLocal();   // local only — footage is re-derivable from synced quants.json
   return summary;
 }
 
@@ -16588,53 +16656,118 @@ var _csvImportPending = null;
 // Aggregate every counted reel to its most-recent non-voided event. Includes
 // master events + the active session so an in-progress count shows immediately.
 // Returns an array of latest events, deduped by item number + reel number.
-function reelLookupBuildList() {
-  // Footage precedence: live floor-count event > quants > reference.
-  // 1. Live count events win — strongest truth (also carry two-way sequences).
-  var all = (appData.inventory_events || []).concat(invEvents || []);
-  var byKey = {};
-  all.forEach(function(e) {
-    if (!e || e.eventType !== "cable_reel_count" || e.status === "voided") return;
-    var item = e.itemNumber || "", reel = e.reelNumber || "";
-    if (!item && !reel) return;
-    var k = normKey(item) + "|" + normKey(reel);
-    var cur = byKey[k];
-    if (!cur || (e.timestamp || "") > (cur.timestamp || "")) byKey[k] = e;
-  });
-  var out = Object.keys(byKey).map(function(k) { return byKey[k]; });
+// A Reel Lookup display row built from a registry entry (quants footage +
+// reference sequences + derived flags).
+function _reelRowFromRegistry(r) {
+  var ft = (r.onHandFt != null) ? r.onHandFt : (r.refFt != null ? r.refFt : null);
+  return {
+    itemNumber:       r.itemNumber || "",
+    reelNumber:       r.reelNumber || "",
+    description:      r.description || "",
+    spanType:         r.spanType || "single",
+    totalAvailableFt: ft, qty: ft,
+    innerSeqA:        r.innerSeq, outerSeqA: r.outerSeq,
+    innerSeqB:        null, outerSeqB: null,
+    location:         r.locationId || "",
+    timestamp:        r.quantsAt || r.refCountDate || "",
+    notes:            r.notes || "",
+    _fromRegistry:    true,
+    presence:         r.presence,
+    sequenceStale:    r.sequenceStale,
+    needsSequences:   r.needsSequences,
+    source:           r.source
+  };
+}
 
-  // 2. Registry entries fill in every reel WITHOUT a live count event. Footage
-  //    is the quants on-hand (or reference footage if quants hasn't seen it yet).
-  //    "gone" reels are included so they stay retrievable (archived, not deleted).
-  var seen = {};
-  out.forEach(function(e) { seen[normKey(e.itemNumber || "") + "|" + normKey(e.reelNumber || "")] = true; });
+// A Reel Lookup display row built from a (fresh) count event, carrying registry
+// item/description/presence when we have them. A physical count reconciles
+// footage AND sequences together, so it is never "stale" or "needs sequences".
+function _reelRowFromEvent(ev, r) {
+  var ft = (ev.totalAvailableFt != null) ? ev.totalAvailableFt : (ev.qty != null ? ev.qty : null);
+  return {
+    itemNumber:       ev.itemNumber || (r ? r.itemNumber : "") || "",
+    reelNumber:       ev.reelNumber || (r ? r.reelNumber : "") || "",
+    description:      ev.description || (r ? r.description : "") || "",
+    spanType:         ev.spanType || "single",
+    totalAvailableFt: ft, qty: ft,
+    innerSeqA:        ev.innerSeqA, outerSeqA: ev.outerSeqA,
+    innerSeqB:        ev.innerSeqB != null ? ev.innerSeqB : null,
+    outerSeqB:        ev.outerSeqB != null ? ev.outerSeqB : null,
+    location:         ev.location || (r ? r.locationId : "") || "",
+    timestamp:        ev.timestamp || "",
+    notes:            ev.notes || "",
+    _fromRegistry:    false,
+    _fromCount:       true,
+    presence:         r ? r.presence : "live",
+    sequenceStale:    false,
+    needsSequences:   false,
+    source:           r ? r.source : "count"
+  };
+}
+
+function reelLookupBuildList() {
+  // Latest non-voided count event per reel (keyed by reel number).
+  var evByReel = {};
+  (appData.inventory_events || []).concat(invEvents || []).forEach(function(e) {
+    if (!e || e.eventType !== "cable_reel_count" || e.status === "voided") return;
+    var reel = normKey(e.reelNumber || ""); if (!reel) return;
+    var cur = evByReel[reel];
+    if (!cur || (e.timestamp || "") > (cur.timestamp || "")) evByReel[reel] = e;
+  });
+
   var reels = appData.reels || {};
+  var out = [];
+  var usedEvent = {};
+
+  // Registry-primary. Footage precedence is RECENCY-AWARE: a count event beats
+  // the quants footage only when it is NEWER than the quants baseline that set it
+  // (a fresh floor scan is ground truth; a stale historical count is not — it must
+  // not shadow the current baseline or hide the staleness flag). "gone" reels are
+  // kept so they stay retrievable (archived, not deleted).
   Object.keys(reels).forEach(function(rk) {
     var r = reels[rk]; if (!r) return;
-    var k = normKey(r.itemNumber || "") + "|" + normKey(r.reelNumber || "");
-    if (seen[k]) return;   // a real count event already represents this reel
-    var ft = (r.onHandFt != null) ? r.onHandFt : (r.refFt != null ? r.refFt : null);
-    out.push({
-      itemNumber:       r.itemNumber || "",
-      reelNumber:       r.reelNumber || "",
-      description:      r.description || "",
-      spanType:         r.spanType || "single",
-      totalAvailableFt: ft, qty: ft,
-      innerSeqA:        r.innerSeq, outerSeqA: r.outerSeq,
-      innerSeqB:        null, outerSeqB: null,
-      location:         r.locationId || "",
-      timestamp:        r.quantsAt || r.refCountDate || "",
-      notes:            r.notes || "",
-      // Registry metadata — Phase 2 rendering (badges/filters) reads these; the
-      // current renderer ignores unknown fields.
-      _fromRegistry:    true,
-      presence:         r.presence,
-      sequenceStale:    r.sequenceStale,
-      needsSequences:   r.needsSequences,
-      source:           r.source
-    });
+    var ev = evByReel[rk];
+    if (ev) usedEvent[rk] = true;
+    var countNewer = ev && (ev.timestamp || "") > (r.quantsAt || "");
+    if (countNewer) {
+      out.push(_reelRowFromEvent(ev, r));
+    } else {
+      var row = _reelRowFromRegistry(r);
+      // Unconfirmed reel (no quants footage) with an older count → at least show
+      // that count's footage rather than a blank.
+      if (row.totalAvailableFt == null && ev) {
+        var ft = (ev.totalAvailableFt != null) ? ev.totalAvailableFt : ev.qty;
+        row.totalAvailableFt = ft; row.qty = ft;
+        if (row.innerSeqA == null) row.innerSeqA = ev.innerSeqA;
+        if (row.outerSeqA == null) row.outerSeqA = ev.outerSeqA;
+      }
+      out.push(row);
+    }
   });
+
+  // Count events for reels the registry has never seen (counted, but not in the
+  // quants baseline or a Product Reels import).
+  Object.keys(evByReel).forEach(function(rk) {
+    if (usedEvent[rk] || reels[rk]) return;
+    out.push(_reelRowFromEvent(evByReel[rk], null));
+  });
+
   return out;
+}
+
+// Reel Lookup filter (Phase 2). "active" = everything that isn't archived
+// (live + unconfirmed); the other views isolate the reels that need attention.
+var reelLookupFilter = "active";
+function reelSetLookupFilter(f) { reelLookupFilter = f; reelLookupRender(); }
+
+// Small status badge for a reel row (may stack several).
+function _reelBadges(e) {
+  var b = [];
+  if (e.presence === "gone") b.push('<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600;">🗄 Archived</span>');
+  if (e.sequenceStale)       b.push('<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde047;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600;" title="Live footage no longer matches the inner/outer sequences — re-verify the markers.">⚠ Stale</span>');
+  if (e.needsSequences)      b.push('<span style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600;" title="On hand per quants but no inner/outer captured yet — capture at next scan.">✎ Need seq</span>');
+  if (e.presence === "unconfirmed") b.push('<span style="display:inline-block;background:#f8fafc;color:#64748b;border:1px dashed #cbd5e1;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600;" title="In the Product Reels reference but not in the current quants baseline — no confirmed on-hand.">◌ Unconfirmed</span>');
+  return b.join(" ");
 }
 
 function reelLookupRender() {
@@ -16644,12 +16777,49 @@ function reelLookupRender() {
 
   var all = reelLookupBuildList();
   var totalReels = all.length;
-  var list = q
-    ? all.filter(function(e) {
-        return (e.itemNumber || "").toLowerCase().indexOf(q) !== -1
-            || (e.reelNumber || "").toLowerCase().indexOf(q) !== -1;
-      })
-    : all;
+
+  // Counts over the FULL union (independent of the active view) — drive the chips.
+  var cnt = { active: 0, stale: 0, needseq: 0, archived: 0 };
+  all.forEach(function(e) {
+    if (e.presence === "gone") cnt.archived++; else cnt.active++;
+    if (e.sequenceStale)  cnt.stale++;
+    if (e.needsSequences) cnt.needseq++;
+  });
+
+  // Render filter chips.
+  var filtEl = $("reelLookupFilters");
+  if (filtEl) {
+    var chip = function(key, label, n, activeBg, activeBd) {
+      var on = reelLookupFilter === key;
+      return '<button type="button" onclick="reelSetLookupFilter(\'' + key + '\')" style="cursor:pointer;border-radius:14px;padding:4px 11px;font-size:12px;font-weight:600;'
+        + (on ? ('background:' + activeBg + ';border:1px solid ' + activeBd + ';color:#0f172a;')
+              : 'background:#fff;border:1px solid #e2e8f0;color:#475569;') + '">'
+        + label + ' <span style="opacity:.7;">' + n + '</span></button>';
+    };
+    filtEl.innerHTML =
+        chip("active",   "Active",      cnt.active,   "#e0e7ff", "#a5b4fc")
+      + chip("stale",    "⚠ Stale",     cnt.stale,    "#fef3c7", "#fde047")
+      + chip("needseq",  "✎ Need seq",  cnt.needseq,  "#dbeafe", "#93c5fd")
+      + chip("archived", "🗄 Archived",  cnt.archived, "#f1f5f9", "#cbd5e1")
+      + chip("all",      "All",         totalReels,   "#f8fafc", "#cbd5e1");
+  }
+
+  // Apply the active view, then the text search.
+  var list = all.filter(function(e) {
+    switch (reelLookupFilter) {
+      case "stale":    return !!e.sequenceStale;
+      case "needseq":  return !!e.needsSequences;
+      case "archived": return e.presence === "gone";
+      case "all":      return true;
+      default:         return e.presence !== "gone";   // "active"
+    }
+  });
+  if (q) {
+    list = list.filter(function(e) {
+      return (e.itemNumber || "").toLowerCase().indexOf(q) !== -1
+          || (e.reelNumber || "").toLowerCase().indexOf(q) !== -1;
+    });
+  }
 
   // Group surviving reels by item number
   var groups = {};
@@ -16662,17 +16832,16 @@ function reelLookupRender() {
   var countEl = $("reelLookupCount");
   if (countEl) {
     countEl.textContent = totalReels
-      ? (q ? list.length + " of " + totalReels + " reels"
-           : totalReels + " reels across " + itemKeys.length + " item" + (itemKeys.length !== 1 ? "s" : ""))
-      : "no reels counted yet";
+      ? (list.length + " of " + totalReels + " reels across " + itemKeys.length + " item" + (itemKeys.length !== 1 ? "s" : ""))
+      : "no reels yet";
   }
 
   if (!totalReels) {
-    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels counted yet. Import a reel CSV (Inventory tab) or count reels in a session.</p>';
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels yet. Load the Odoo quants baseline (Inventory → Odoo Setup) and import the Product Reels CSV (Inventory → Import Reels CSV).</p>';
     return;
   }
   if (!list.length) {
-    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels match “' + escapeHtml(q) + '”.</p>';
+    body.innerHTML = '<p class="small" style="color:#94a3b8;margin:0;">No reels match this filter' + (q ? ' and “' + escapeHtml(q) + '”' : '') + '.</p>';
     return;
   }
 
@@ -16687,7 +16856,7 @@ function reelLookupRender() {
     for (var d = 0; d < reels.length; d++) { if (reels[d].description) { desc = reels[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    units.push('<tr style="background:#f8fafc;"><td colspan="9" style="padding:8px 10px;">'
+    units.push('<tr style="background:#f8fafc;"><td colspan="10" style="padding:8px 10px;">'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + reels.length + ' reel' + (reels.length !== 1 ? 's' : '') + ')</span>'
@@ -16699,8 +16868,10 @@ function reelLookupRender() {
       var ft = (e.totalAvailableFt != null ? e.totalAvailableFt : (e.qty != null ? e.qty : null));
       var loc = e.location ? (invLocationBarcodeToCompleteName(e.location) || e.location) : "";
       var num = function(v) { return v != null && v !== "" ? Number(v).toLocaleString() : "—"; };
-      units.push('<tr>'
+      var dim = (e.presence === "gone") ? ' style="opacity:.55;"' : '';
+      units.push('<tr' + dim + '>'
         + '<td style="font-weight:600;">' + escapeHtml(e.reelNumber || "") + '</td>'
+        + '<td>' + _reelBadges(e) + '</td>'
         + '<td style="font-weight:700;">' + (ft != null ? Number(ft).toLocaleString() + ' ft' : '—') + '</td>'
         + '<td>' + num(e.innerSeqA) + '</td>'
         + '<td>' + num(e.outerSeqA) + '</td>'
@@ -16713,11 +16884,31 @@ function reelLookupRender() {
     }
   }
 
-  body.innerHTML = '<div class="flow-table"><table><thead><tr>'
-    + '<th>Reel #</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
+  body.innerHTML = _reelDirtyLotsNote()
+    + '<div class="flow-table"><table><thead><tr>'
+    + '<th>Reel #</th><th>Status</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
     + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th>'
     + '</tr></thead><tbody id="reelLookupTbody"></tbody></table></div>';
   timLazyRender($("reelLookupTbody"), units);
+}
+
+// Amber note listing quant lots that carry notes in the lot field. Empty string
+// when clean. Independent of the active filter — it's a data-hygiene warning.
+function _reelDirtyLotsNote() {
+  var dirty = reelDirtyQuantLots();
+  if (!dirty.length) return "";
+  var rows = dirty.slice(0, 30).map(function(d) {
+    return '<li style="margin:2px 0;"><code>' + escapeHtml(d.lot) + '</code>'
+      + (d.item ? ' <span style="color:#92400e;">(item ' + escapeHtml(d.item) + ')</span>' : '')
+      + (d.clean && normKey(d.clean) !== normKey(d.lot) ? ' → should be <code>' + escapeHtml(d.clean) + '</code>' : '')
+      + '</li>';
+  }).join("");
+  var more = dirty.length > 30 ? '<li style="color:#92400e;">…and ' + (dirty.length - 30) + ' more</li>' : "";
+  return '<details style="margin:0 0 12px;border:1px solid #fde047;background:#fffbeb;border-radius:8px;padding:8px 12px;">'
+    + '<summary style="cursor:pointer;color:#92400e;font-weight:600;font-size:13px;">⚠ ' + dirty.length
+    + ' Odoo quant lot' + (dirty.length !== 1 ? "s" : "") + ' have notes typed into the lot field — clean in Odoo so they match Product Reels</summary>'
+    + '<p style="margin:8px 0 4px;font-size:12px;color:#78350f;">A reel with a note in its lot name won’t join to the Product Reels "Reels No", so it can show up as both a new reel and a missing one. Fix the lot name in Odoo (Inventory → Lots/Serial Numbers); TIM deliberately does not auto-strip these.</p>'
+    + '<ul style="margin:4px 0 0;padding-left:18px;font-size:12px;color:#78350f;">' + rows + more + '</ul></details>';
 }
 
 // ─── Serial / Device Lookup ─────────────────────────────────────────────────
