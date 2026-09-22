@@ -613,21 +613,25 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function | Purpose |
 |----------|---------|
-| `invOpenReelModal(reelNum, notes, loc)` | Populate and show reel entry panel; reverse-looks up item if blank |
+| `invOpenReelModal(reelNum, notes, loc)` | Populate and show reel entry panel; reverse-looks up item, pre-fills the known markers, and lands focus on Inner Seq A (v2.53.00) |
 | `invPrefillReelItemNumber(itemNum, notes, loc)` | Pre-fill reel form from item number |
 | `invAutoSaveReelInline()` | Silently save current reel before switching to next |
-| `invReelUpdateSpanTypeFromContext()` | **Auto-set span type** from history → product map → default; also fills item from reel |
+| `invReelUpdateSpanTypeFromContext()` | Per-keystroke resolver on the reel/item fields: fills item from reel, applies the known-marker prefill, then **sets span type** from known → product map → default |
+| `invReelKnownSequences(itemNum, reelNum)` | **What TIM already knows about this reel**, newest wins across BOTH sources: the latest `cable_reel_count` event and the reel registry (`reelGet` — Odoo Product Reels / quants / manual edit). Count wins only if `timestamp > refCountDate`. Returns `{innerA,outerA,innerB,outerB,hasSeq,spanType,ft,at,source}` (v2.53.00) |
+| `invReelApplyKnownPrefill()` | Write those markers into the form, staleness-aware — same rule as the item field: a TYPED value is never touched, an auto-filled (grey) one is re-resolved or cleared against the current reel. Safe per keystroke; never moves focus. Returns the known record |
+| `invReelCommitReelField()` | `onchange` (Enter/blur) on the reel field — resolve, then move focus to Inner Seq A (or Item Number when the reel resolved no item). The focus move lives here, not in `oninput`, so it cannot fire mid-keystroke |
+| `invReelFocusSeqField(el)` / `invReelSeqKeyDown(el, ev)` | Pre-filled (grey) seq field: select on focus / first digit clears it, so the reading REPLACES the known marker instead of appending (a known 4500 must not become 45003). `invQtyKeyDigit` enforces the same rule for the on-screen keypad |
 | `invReelSpanTypeChange()` | Show/hide Span B section; recalc footage |
 | `invCalcReelFt()` | Calculate footage from inner/outer seq numbers |
 | `invReelSwapSpan(span)` | Swap a span's Inner/Outer values (fix a reversed entry); appends to `invReelSwaps` audit trail |
 | `invReelRenderSwapNote()` | Render the in-panel swap note from `invReelSwaps` |
 | `invReelResetSwaps()` | Clear the swap trail + its UI (note, button highlight) |
-| `invReelUpdateHistoryPanel(item, reel, ft)` | Show previous footage comparison |
+| `invReelUpdateHistoryPanel(item, reel, ft)` | Show the on-record footage comparison — from `invReelKnownSequences`, so registry-only reels compare too; `#invReelHistoryTitle` switches between "Previous Count for This Reel" and "On Record for This Reel (Odoo)" |
 | `invReelDetectConflict(itemNum, reelNum)` | Detect a reel conflict: `cross_item` (reel on record under a different item) or `session_dup` (already counted this session); null for the normal same-item prefill case |
 | `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning as item/reel fields change — from `invReelDetectConflict`, plus an ambiguous-reel notice (reel on record under multiple items) when item is blank |
 | `invFindReelMaster(reelNum)` | **Reverse lookup**: latest event with this reel# across all sessions (used for scan classification) |
 | `invReelDistinctItems(reelNum)` | Distinct non-voided item numbers this reel has been recorded under (master + session) — basis for ambiguity detection |
-| `invReelReverseFillItem()` | Resolve the item field from the reel master, ambiguity- & staleness-aware: keeps a user-typed item, but re-resolves an auto-filled (grey) item against the **current** reel (single item → fill; ambiguous/unknown → clear) so a previous reel's item can't leak forward |
+| `invReelReverseFillItem()` | Resolve the item field from the reel master, ambiguity- & staleness-aware: keeps a user-typed item, but re-resolves an auto-filled (grey) item against the **current** reel (single item → fill; ambiguous/unknown → clear) so a previous reel’s item can’t leak forward. Falls back to the **reel registry** (`reelGet().itemNumber`) when no count event knows the reel — the common floor case, an Odoo reel never counted in TIM (v2.53.00) |
 | `invGetReelHistory(itemNum, reelNum)` | Find most recent event for item+reel pair |
 | `invSubmitReelEntry(silent)` | Validate + save reel count event |
 | `invClearReelFields()` | Reset all reel form fields |

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.52.03";
+const APP_VERSION = "v2.53.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -9466,7 +9466,13 @@ function invQtyKeypadRefreshReelTarget() {
 function invQtyKeyDigit(d) {
   if (invQtyKeypadMode === "reel") {
     if (!invKeypadTargetEl) return;
-    invKeypadTargetEl.value = (invKeypadTargetEl.value || "") + d;
+    // A pre-filled (grey) field holds a KNOWN marker, not the operator's input — the
+    // first digit replaces it, the way the physical keyboard replaces the selection.
+    // Appending would silently build 45003 out of a known 4500. The `input` event
+    // dispatched below strips the marker, so only the first digit replaces.
+    var _base = invKeypadTargetEl.classList.contains("inv-reel-prefilled")
+      ? "" : (invKeypadTargetEl.value || "");
+    invKeypadTargetEl.value = _base + d;
     invKeypadTargetEl.dispatchEvent(new Event("input"));
     invQtyKeypadRefreshReelTarget();
     invKeypadTargetEl.focus();
@@ -9504,6 +9510,7 @@ function invKeyFocusField(target) {
   if (!el) return;
   invKeypadTargetEl = el;
   el.focus();
+  invReelFocusSeqField(el);   // pre-filled → select, so typing replaces
   invQtyKeypadRefreshReelTarget();
 }
 
@@ -10098,19 +10105,12 @@ function invOpenReelModal(reelNumber, notes, location) {
   // so a value from a previous reel can't leak onto this one.
   itemNum = invReelReverseFillItem();
 
-  var prev = invGetReelHistory(itemNum, reelNum);
-  if (prev) {
-    var setAndMark = function(id, val) {
-      var el = $(id);
-      if (el && val !== "" && val != null) { el.value = val; el.classList.add("inv-reel-prefilled"); }
-    };
-    setAndMark("invReelInnerA", prev.innerSeqA);
-    setAndMark("invReelOuterA", prev.outerSeqA);
-    $("invReelSpanType").value = (prev.spanType === "two_way") ? "two_way" : "single";
-    if (prev.spanType === "two_way") {
-      setAndMark("invReelInnerB", prev.innerSeqB);
-      setAndMark("invReelOuterB", prev.outerSeqB);
-    }
+  // Pre-fill the markers we already know for this reel — a prior count event OR the
+  // reel registry (Odoo Product Reels / quants), newest wins. The counter's job is to
+  // UPDATE a known reading, not re-derive it; registry-only reels used to open blank.
+  var known = invReelApplyKnownPrefill();
+  if (known && known.hasSeq) {
+    $("invReelSpanType").value = (known.spanType === "two_way") ? "two_way" : "single";
   } else {
     var mapMatch = findProductMapMatch(itemNum);
     var rd = mapMatch && mapMatch.entry ? mapMatch.entry.reel_direction : null;
@@ -10133,16 +10133,19 @@ function invOpenReelModal(reelNumber, notes, location) {
   var ctx = $("invQtyKeypadContext");
   if (ctx) ctx.textContent = "Reel: " + (reelNum || reelNumber) + (itemNum ? " · " + itemNum : "");
 
-  // Auto-focus: first unfilled required field, or Save button if everything is pre-filled
+  // Auto-focus: the first field that still needs a value — and when the reel is
+  // already known (everything pre-filled), land on Inner Seq A rather than Save.
+  // The operator is here to replace the known markers with today's reading, so the
+  // cursor belongs on the first number they will overwrite, not on the way out.
   setTimeout(function() {
     var required = [$("invReelItemNumber"), $("invReelInnerA"), $("invReelOuterA")];
     var firstEmpty = null;
     for (var i = 0; i < required.length; i++) {
       if (required[i] && !required[i].value) { firstEmpty = required[i]; break; }
     }
-    var f = firstEmpty || $("invReelSaveBtn");
+    var f = firstEmpty || $("invReelInnerA") || $("invReelSaveBtn");
     if (f) {
-      f.focus();
+      f.focus();   // a pre-filled field selects itself via invReelFocusSeqField
       if (f !== $("invReelSaveBtn")) {
         invKeypadTargetEl = f;
         invQtyKeypadRefreshReelTarget();
@@ -10151,22 +10154,64 @@ function invOpenReelModal(reelNumber, notes, location) {
   }, 50);
 }
 
+// The reel number was COMMITTED (Enter or blur), not just typed into. oninput keeps
+// the resolved item/markers live on every keystroke; this owns the focus move, which
+// must not happen mid-keystroke or it fights the operator (and the scanner). Once the
+// reel resolves, Inner Seq A becomes the active field — the counter's actual job.
+// A reel we can't resolve to an item parks on Item Number instead, since that is then
+// the first thing still missing.
+function invReelCommitReelField() {
+  invReelUpdateSpanTypeFromContext();
+  var reelNum = $("invReelNumber") ? $("invReelNumber").value.trim() : "";
+  if (!reelNum) return;
+  var itemNum = $("invReelItemNumber") ? $("invReelItemNumber").value.trim() : "";
+  var target  = itemNum ? $("invReelInnerA") : $("invReelItemNumber");
+  if (!target) return;
+  target.focus();
+  invKeypadTargetEl = target;
+  invQtyKeypadRefreshReelTarget();
+}
+
+// Focusing a pre-filled (grey) sequence field selects its contents, so the first
+// digit typed REPLACES the known marker instead of appending to it. Deferred a tick
+// because iOS Safari clears a selection made synchronously inside a focus handler.
+// Belt-and-braces: `select()` is unreliable on `type=number` across browsers, so
+// invReelSeqKeyDown enforces the same rule on the keystroke itself.
+function invReelFocusSeqField(el) {
+  if (!el || !el.classList.contains("inv-reel-prefilled")) return;
+  setTimeout(function() { try { el.select(); } catch (e) {} }, 0);
+}
+
+// First keystroke into a pre-filled (grey) sequence field clears the known marker,
+// so the operator's reading REPLACES it rather than appending digits to it (a known
+// 4500 must not become 45003). Only the first one: typing strips the grey marker via
+// the field's oninput. Navigation/edit keys are left alone so the value can still be
+// corrected by hand, and clearing it outright (Backspace/Delete) is honoured as-is.
+function invReelSeqKeyDown(el, ev) {
+  if (!el || !ev || !el.classList.contains("inv-reel-prefilled")) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  var k = ev.key || "";
+  if (k.length !== 1) return;           // Tab, Enter, arrows, Backspace, Delete, …
+  if (!/[0-9.\-]/.test(k)) return;
+  el.value = "";
+  el.classList.remove("inv-reel-prefilled");
+}
+
 function invReelUpdateSpanTypeFromContext() {
-  var itemField = $("invReelItemNumber");
-  var reelField = $("invReelNumber");
-  var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
-  var reelNum = reelField ? reelField.value.trim().toUpperCase() : "";
   var spanSel = $("invReelSpanType");
   if (!spanSel) return;
 
   // Resolve item from the reel master. The helper keeps a user-typed item, but
   // re-resolves (or clears) a stale auto-filled item against the current reel —
   // so a value from a previous reel can't leak onto this one.
-  itemNum = invReelReverseFillItem();
+  var itemNum = invReelReverseFillItem();
 
-  var prev = invGetReelHistory(itemNum, reelNum);
-  if (prev) {
-    spanSel.value = (prev.spanType === "two_way") ? "two_way" : "single";
+  // Then pre-fill the markers we know for the reel now in the field (safe per
+  // keystroke — it only ever touches blank or auto-filled values).
+  var known = invReelApplyKnownPrefill();
+
+  if (known && known.hasSeq) {
+    spanSel.value = (known.spanType === "two_way") ? "two_way" : "single";
   } else if (itemNum) {
     var match = findProductMapMatch(itemNum);
     var rd = match && match.entry ? match.entry.reel_direction : null;
@@ -10211,6 +10256,12 @@ function invCalcReelFt() {
   invReelUpdateHistoryPanel(itemNum, reelNum, totalFt || null);
 }
 
+function _invReelWhenText(at) {
+  if (!at) return "—";
+  var d = new Date(at);
+  return isNaN(d.getTime()) ? String(at) : invFormatDateTime(at);
+}
+
 function invReelUpdateHistoryPanel(itemNum, reelNum, currentFt) {
   var panel = $("invReelHistoryPanel");
   var tbody = $("invReelHistoryBody");
@@ -10218,11 +10269,21 @@ function invReelUpdateHistoryPanel(itemNum, reelNum, currentFt) {
 
   if (!itemNum && !reelNum) { panel.style.display = "none"; return; }
 
-  var prev = invGetReelHistory(itemNum, reelNum);
-  if (!prev) { panel.style.display = "none"; return; }
+  // Compare against everything we know, not just prior TIM counts: a reel that only
+  // exists in the registry (Odoo) used to show nothing here, hiding the very
+  // comparison the counter is standing there to make.
+  var prev = invReelKnownSequences(itemNum, reelNum);
+  if (!prev || prev.ft == null) { panel.style.display = "none"; return; }
+
+  var title = $("invReelHistoryTitle");
+  if (title) {
+    title.textContent = prev.source === "count"
+      ? "Previous Count for This Reel"
+      : "On Record for This Reel (Odoo)";
+  }
 
   panel.style.display = "block";
-  var prevFt = prev.totalAvailableFt || 0;
+  var prevFt = prev.ft || 0;
   var diff   = currentFt != null ? currentFt - prevFt : null;
   var diffStr   = diff != null ? (diff >= 0 ? "+" : "") + diff.toLocaleString() + " ft" : "—";
   var diffColor = diff == null ? "#475569" : diff < 0 ? "#dc2626" : diff > 0 ? "#16a34a" : "#475569";
@@ -10231,7 +10292,9 @@ function invReelUpdateHistoryPanel(itemNum, reelNum, currentFt) {
     "<td style='padding:4px 12px 4px 0;font-weight:700'>" + prevFt.toLocaleString() + " ft</td>" +
     "<td style='padding:4px 12px 4px 0;font-weight:700'>" + (currentFt != null ? currentFt.toLocaleString() + " ft" : "—") + "</td>" +
     "<td style='padding:4px 12px 4px 0;font-weight:700;color:" + diffColor + "'>" + diffStr + "</td>" +
-    "<td style='padding:4px 0;white-space:nowrap'>" + invFormatDateTime(prev.timestamp) + "</td>" +
+    // Registry dates come straight from Odoo and aren't always ISO — show the raw
+    // string rather than an "Invalid Date" when it won't parse.
+    "<td style='padding:4px 0;white-space:nowrap'>" + escapeHtml(_invReelWhenText(prev.at)) + "</td>" +
     "</tr>";
 }
 
@@ -10303,6 +10366,21 @@ function invReelReverseFillItem() {
       itemField.classList.add("inv-reel-prefilled");
       return itemNum;
     }
+    // No count event knows this reel — fall back to the reel registry (Odoo quants /
+    // Product Reels). On the floor the registry-only reel is the COMMON case: it
+    // exists in Odoo but has never been counted in TIM, and leaving the item blank
+    // made the operator type a number the app already knew. Only consulted when the
+    // event history is silent, so a genuine multi-item ambiguity still wins and the
+    // field stays blank for invReelCheckDuplicate to explain.
+    if (!items.length && typeof reelGet === "function") {
+      var reg = reelGet(reelNum);
+      if (reg && reg.itemNumber) {
+        itemNum = String(reg.itemNumber).trim().toUpperCase();
+        itemField.value = itemNum;
+        itemField.classList.add("inv-reel-prefilled");
+        return itemNum;
+      }
+    }
   }
   // Ambiguous / unknown / no reel — never carry a stale auto-fill forward.
   if (wasAutoFilled) { itemField.value = ""; itemField.classList.remove("inv-reel-prefilled"); }
@@ -10322,6 +10400,85 @@ function invGetReelHistory(itemNum, reelNum) {
   if (!matches.length) return null;
   matches.sort(function(a, b) { return (a.timestamp || "") < (b.timestamp || "") ? -1 : 1; });
   return matches[matches.length - 1];
+}
+
+// Everything TIM already knows about this reel's markers, from EITHER source,
+// newest wins. Two places remember a reel:
+//   • a prior `cable_reel_count` event (invGetReelHistory) — counted in TIM before
+//   • the reel registry `appData.reels` (reelGet) — imported from the Odoo "Product
+//     Reels" view, written by a live count, or hand-corrected in Reel Lookup → Edit
+// The registry-only reel is the common floor case (in Odoo, never counted in TIM);
+// prefilling from events alone left those panels blank, so the counter had to
+// re-derive markers instead of updating a known reading.
+//
+// Recency decides: the count event wins only if NEWER than the registry's
+// refCountDate — a Reel Lookup manual edit stamps refCountDate = now and must beat
+// an older count. Same rule Reel Lookup applies against the quants baseline.
+// Returns { innerA, outerA, innerB, outerB, hasSeq, spanType, ft, at, source } or null.
+function invReelKnownSequences(itemNum, reelNum) {
+  if (!reelNum) return null;
+  var ev  = invGetReelHistory(itemNum, reelNum);
+  var reg = (typeof reelGet === "function") ? reelGet(reelNum) : null;
+
+  var fromEv = ev ? {
+    innerA:   ev.innerSeqA, outerA: ev.outerSeqA,
+    innerB:   ev.innerSeqB, outerB: ev.outerSeqB,
+    hasSeq:   (ev.innerSeqA != null || ev.outerSeqA != null),
+    spanType: ev.spanType || "single",
+    ft:       (ev.totalAvailableFt != null ? ev.totalAvailableFt : null),
+    at:       ev.timestamp || "",
+    source:   "count"
+  } : null;
+
+  var fromReg = reg ? {
+    innerA:   reg.innerSeq,  outerA: reg.outerSeq,
+    innerB:   reg.innerSeqB, outerB: reg.outerSeqB,
+    hasSeq:   (reg.innerSeq != null || reg.outerSeq != null),
+    spanType: reg.spanType || "single",
+    // Effective footage, same precedence as reelRecomputeDerived: count > quants > markers.
+    ft:       (reg.lastCountedFt != null ? reg.lastCountedFt
+              : reg.onHandFt != null     ? reg.onHandFt
+              : reg.refFt    != null     ? reg.refFt : null),
+    at:       reg.refCountDate || reg.quantsAt || "",
+    source:   "registry"
+  } : null;
+
+  if (!fromEv)  return fromReg;
+  if (!fromReg) return fromEv;
+  return (String(fromEv.at) > String(fromReg.at)) ? fromEv : fromReg;
+}
+
+// Put the known markers into the reel form, staleness-aware. Returns the known
+// record (or null) so the caller can set span type from it.
+//
+// Mirrors the item-field rule in invReelReverseFillItem: a value the operator TYPED
+// (no `inv-reel-prefilled` marker) is authoritative and never touched; an auto-filled
+// (grey) value belongs to whatever reel was loaded when it was set, so when the reel
+// changes it is re-resolved — or cleared — against the CURRENT reel. That keeps one
+// reel's markers from leaking onto the next as the operator retypes in the same open
+// panel, and makes this safe to call on every keystroke. Never moves focus.
+function invReelApplyKnownPrefill() {
+  var reelNum = $("invReelNumber")     ? $("invReelNumber").value.trim().toUpperCase()     : "";
+  var itemNum = $("invReelItemNumber") ? $("invReelItemNumber").value.trim().toUpperCase() : "";
+  var known   = invReelKnownSequences(itemNum, reelNum);
+  var twoWay  = !!(known && known.hasSeq && known.spanType === "two_way");
+
+  [["invReelInnerA", known ? known.innerA : null],
+   ["invReelOuterA", known ? known.outerA : null],
+   ["invReelInnerB", twoWay ? known.innerB : null],
+   ["invReelOuterB", twoWay ? known.outerB : null]].forEach(function(p) {
+    var el = $(p[0]); if (!el) return;
+    var auto = el.classList.contains("inv-reel-prefilled");
+    if (el.value && !auto) return;                 // operator typed it — leave alone
+    if (p[1] != null && p[1] !== "") {
+      el.value = p[1];
+      el.classList.add("inv-reel-prefilled");
+    } else if (auto) {
+      el.value = "";
+      el.classList.remove("inv-reel-prefilled");
+    }
+  });
+  return known;
 }
 
 // Detect a duplicate/conflict for a reel being entered. Returns null, or
