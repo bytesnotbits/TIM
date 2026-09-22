@@ -812,3 +812,141 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
    field, green (the default .apply) once the next press actually writes the count —
    so there is never any doubt which press commits. */
 .inv-qty-key.apply.stepping { background:#2563eb; border-color:#1d4ed8; }
+
+/* ── Short-viewport Count frame ──────────────────────────────────────────────
+   The case Joe hit: wide enough for the two-column static frame (>900px), not
+   tall enough for it. At 908x742 the frame's chrome — card heading, how-to line,
+   status bar, activity bar — ate ~170px that the keypad (492px) and the reel form
+   (523px) both needed, so the keypad's Apply row and the form's Save button fell
+   below the fold and the form grew an internal scrollbar.
+
+   Trim the chrome first: it is signage, not tools. Then the keypad's own spacing
+   and the reel form's paddings. The digit keys keep their full size — they are
+   what gets tapped, with gloves on, and shrinking them to win pixels would trade
+   the real problem for a worse one. */
+@media (min-width: 901px) and (max-height: 900px), (max-width: 900px) {
+  .main-content.inv-count-static #invScanCard { padding: 12px; }
+  .main-content.inv-count-static #invScanCard > h2 { font-size: 15px; margin-bottom: 1px; }
+  .main-content.inv-count-static #invScanCard > p.small { display: none; }
+  .main-content.inv-count-static #invStatusBar { margin-bottom: 6px; }
+  .main-content.inv-count-static .inv-status-bar { padding: 5px 10px; min-height: 0; gap: 6px; }
+
+  /* Focus-jump targets 3 across instead of 2 — one row back, same button size. */
+  .main-content.inv-count-static .inv-key-focus-row { grid-template-columns: repeat(3, 1fr); }
+  .main-content.inv-count-static .inv-qty-keypad { padding: 8px; }
+  .main-content.inv-count-static .inv-qty-keypad-header { margin-bottom: 4px; }
+  .main-content.inv-count-static .inv-qty-display-row { margin-bottom: 4px; }
+  /* Apply reads "→ Next" / "✓ Save Reel"; keep it on one line so the bottom row
+     doesn't grow a second line's worth of height. */
+  .main-content.inv-count-static .inv-qty-key.apply { font-size: 13px; white-space: nowrap; }
+
+  /* Activity bar: still a full-width tap target, just not 54px of it. */
+  .main-content.inv-count-static .inv-activity-lastbar { margin-top: 6px; padding: 6px 12px; min-height: 0; }
+
+  /* Reel form: tighten the frames around the fields, not the fields. */
+  .main-content.inv-count-static .inv-reel-entry-panel { padding: 10px; }
+  .main-content.inv-count-static .inv-reel-entry-header { margin-bottom: 6px; }
+  .main-content.inv-count-static .inv-reel-inline-grid { margin-bottom: 6px; }
+  .main-content.inv-count-static .inv-reel-span-section { padding: 7px; margin-bottom: 6px; }
+  .main-content.inv-count-static .inv-reel-inline-total { margin-bottom: 6px; padding: 6px 10px; }
+}
+
+/* Same short-viewport frame: reclaim the page chrome around the Count view, and
+   compact the reel form's read-only blocks. The goal is that the whole form —
+   through the on-record comparison — and the whole keypad are visible together,
+   because during a count you are reading the comparison and tapping the keypad at
+   the same time. Notes and the Save/Discard row are the parts allowed to fall
+   below the panel's own scroll: Apply on the keypad commits, and the panel header
+   already carries Discard / Clear. */
+@media (min-width: 901px) and (max-height: 900px), (max-width: 900px) {
+  /* The app title and the card heading are signage — the sidebar already says
+     where you are, and the mode toolbar says what you are scanning. */
+  .main-content.inv-count-static .app-header { display: none; }
+  .main-content.inv-count-static #invScanCard > h2 { display: none; }
+  .main-content.inv-count-static { padding: 12px 16px 14px; }
+  /* Narrower gutters stop the session-info chip wrapping the toolbar onto a
+     second line, which alone cost ~28px. */
+  .main-content.inv-count-static .inv-toolbar-info { font-size: 11px; }
+
+  /* On-record comparison: one row of four numbers does not need a 70px scroller. */
+  .main-content.inv-count-static #invReelHistoryPanel { padding: 7px 9px; margin-bottom: 6px; }
+  .main-content.inv-count-static #invReelHistoryPanel .scroll { max-height: none; margin-top: 3px; overflow: visible; }
+  .main-content.inv-count-static #invReelHistoryPanel table { font-size: 11px; }
+  .main-content.inv-count-static #invReelHistoryPanel th,
+  .main-content.inv-count-static #invReelHistoryPanel td { padding-top: 2px; padding-bottom: 2px; }
+
+  .main-content.inv-count-static #invReelNotes { padding: 5px 8px; }
+  .main-content.inv-count-static #invReelSaveBtn { padding: 8px; }
+}
+@media (min-width: 901px) and (max-height: 900px), (max-width: 900px) {
+  /* Last of the reel-form trims: frames and read-only strips, never the inputs. */
+  .main-content.inv-count-static .inv-reel-entry-header { margin-bottom: 4px; }
+  .main-content.inv-count-static .inv-reel-inline-total { padding: 5px 10px; }
+  .main-content.inv-count-static .inv-reel-inline-total span { font-size: 17px; }
+  .main-content.inv-count-static #invReelHistoryPanel { margin-bottom: 6px; }
+  .main-content.inv-count-static #invReelNotes { margin-top: 1px; }
+  .main-content.inv-count-static .inv-reel-entry-panel > label { margin-bottom: 6px !important; }
+
+}
+
+/* Save / Discard pinned to the foot of the form. When the form does outgrow its
+   box — a long duplicate-reel warning, a two-way span, a narrow window — the commit
+   controls must not be the thing that scrolls out of reach; the scrolling content
+   passes underneath them instead. Only in the static frame, where the panel is its
+   own scroller: in the stacked layout the panel has its natural height and the PAGE
+   scrolls, so sticking here would pin the buttons over the keypad below. */
+@media (min-width: 901px) and (max-height: 900px) {
+  .main-content.inv-count-static .inv-reel-actions {
+    position: sticky; bottom: 0; z-index: 2;
+    margin: 0 -10px -10px; padding: 8px 10px;
+    background: linear-gradient(to bottom, rgba(240,253,244,0), #f0fdf4 22%);
+  }
+}
+
+/* The reel form is built with inline style= attributes on several blocks, which
+   out-specify a stylesheet rule no matter how it is written — the trims above were
+   being silently ignored on exactly the tallest blocks. !important is the correct
+   tool here rather than reformatting the markup mid-count-season. */
+@media (min-width: 901px) and (max-height: 900px), (max-width: 900px) {
+  .main-content.inv-count-static #invReelHistoryPanel {
+    padding: 6px 8px !important; margin-bottom: 6px !important;
+  }
+  .main-content.inv-count-static #invReelHistoryPanel > b { font-size: 11px !important; }
+  .main-content.inv-count-static #invReelHistoryPanel .scroll {
+    max-height: none !important; margin-top: 2px !important;
+  }
+  /* Span Type wrapper and the on-panel notes both carry inline margins. */
+  .main-content.inv-count-static .inv-reel-entry-panel > div[style*="margin-bottom:10px"] {
+    margin-bottom: 6px !important;
+  }
+  .main-content.inv-count-static .inv-reel-span-section { padding: 6px 7px !important; }
+}
+
+/* Stacked (narrow/portrait) Count view while a reel is being entered.
+   Here the reel panel flows in-document instead of overlaying, so the scan input,
+   its feedback line and the help text all sit ABOVE the form — 227px of controls
+   you cannot use whilst the form is open, pushing the keypad clean off the bottom
+   of an iPad in portrait. The two-column frame hides them behind the overlay; this
+   does the same thing by other means. */
+@media (max-width: 900px) {
+  .main-content.inv-count-static.reel-open .inv-scan-main-row,
+  .main-content.inv-count-static.reel-open .inv-detected-badge,
+  .main-content.inv-count-static.reel-open #invScanMetaRow,
+  /* The bare wrapper around the detected-type badge, which would otherwise leave a
+     28px empty row where the badge used to be. */
+  .main-content.inv-count-static.reel-open .inv-scan-fields-col > div:not([class]):not([id]),
+  /* The per-scan Notes field — it carries an inline display:block, hence !important. */
+  .main-content.inv-count-static.reel-open .inv-scan-fields-col > label.small { display: none !important; }
+
+  /* Even with those gone the keypad's last row falls ~75px short on a 1024-tall
+     iPad, so pin it to the bottom of the viewport and let the form scroll behind
+     it — Apply stays under the thumb the whole way down. The explicit z-index pair
+     is load-bearing: .inv-scan-fields-col is position:relative, so without putting
+     the form on layer 0 it paints OVER the pinned keypad. */
+  .main-content.inv-count-static.reel-open .inv-scan-fields-col { z-index: 0; }
+  .main-content.inv-count-static.reel-open .inv-scan-keypad-col {
+    position: sticky; bottom: 0; z-index: 4;
+    background: #fff; padding: 6px 0 4px;
+    box-shadow: 0 -8px 16px rgba(15, 23, 42, .12);
+  }
+}

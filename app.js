@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.53.01";
+const APP_VERSION = "v2.53.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -9355,6 +9355,7 @@ function invSetScanMode(mode) {
     var ctx = $("invQtyKeypadContext"); if (ctx) ctx.textContent = "Scan an item to begin. Tip: press Tab after scanning, then type qty + Enter.";
   }
 
+  invReelSyncOpenClass();   // mode change may have shown/hidden the reel panel
   invBoxRenderBar();
   renderInvStatusBar();
 
@@ -10321,7 +10322,20 @@ function invReelRefreshApplyLabel() {
 // mode: in Auto-Detect, invSetScanMode leaves the keypad on "qty" and a reel scan then
 // opens the panel over it, so the digits went to the qty display and the focus-jump
 // row stayed hidden. Presentation only — scan mode is untouched.
+// Mirror "the reel panel is open" onto .main-content as a class, so CSS can react to
+// it. Used by the stacked (narrow) layout to hide the scan input block while a reel
+// is being entered — the two-column frame hides it behind the panel overlay anyway,
+// but stacked it sits above the form and pushes the keypad 227px below the fold, for
+// an input you cannot use while the form is open.
+function invReelSyncOpenClass() {
+  var mc  = document.querySelector(".main-content");
+  var rip = $("invReelInlinePanel");
+  if (!mc) return;
+  mc.classList.toggle("reel-open", !!(rip && !rip.classList.contains("hidden")));
+}
+
 function invReelKeypadEngage() {
+  invReelSyncOpenClass();
   invQtyKeypadMode = "reel";
   var kp = $("invQtyKeypad");
   if (kp) kp.className = kp.className.replace(/\bmode-\w+/g, "").trim() + " mode-reel";
@@ -10333,6 +10347,7 @@ function invReelKeypadEngage() {
 }
 
 function invReelKeypadRelease() {
+  invReelSyncOpenClass();
   if (invScanMode === "reel") return;        // reel mode owns the keypad anyway
   invQtyKeypadMode = "qty";
   invQtyKeypadValue = "1"; invQtyKeypadFresh = true;
