@@ -9905,6 +9905,38 @@ var invReelModalScannedValue = "";
 // Reset whenever a reel entry is cleared, opened, or saved.
 var invReelSwaps = [];
 
+// Sticky span type — the operator's last EXPLICIT Span Type choice, carried to the
+// next reel. Reels are counted in runs (a rack of two-way reels in a row), and
+// resetting to Single on every entry made them re-pick it every single time. Only a
+// real user change to the dropdown sets this (invReelSpanTypeUserChanged); it is the
+// lowest-precedence guess, so anything we actually KNOW about the reel or the SKU
+// still wins. Deliberately in-memory, not localStorage: a page reload is a natural
+// reset point, and a two-way default silently surviving into next week would be worse
+// than re-picking it once.
+var invReelStickySpanType = "single";
+
+// Span Type for the reel now in the panel, most-specific source first:
+//   1. what we already know about THIS reel (count event or registry) — a fact
+//   2. the SKU's reel_direction in PRODUCT_MAP ("one_way"/"two_way") — a product fact
+//   3. the sticky value — the previous reel is the best guess for the next one
+function _invReelResolveSpanType(known, itemNum) {
+  if (known && known.hasSeq) return known.spanType === "two_way" ? "two_way" : "single";
+  var mm = itemNum ? findProductMapMatch(itemNum) : null;
+  var rd = mm && mm.entry ? mm.entry.reel_direction : null;
+  if (rd === "two_way") return "two_way";
+  if (rd === "one_way") return "single";
+  return invReelStickySpanType === "two_way" ? "two_way" : "single";
+}
+
+// onchange on the Span Type dropdown — only a real user interaction reaches this
+// (setting .value in code fires no change event), which is exactly what makes it a
+// safe place to record the sticky choice.
+function invReelSpanTypeUserChanged() {
+  var sel = $("invReelSpanType");
+  if (sel) invReelStickySpanType = (sel.value === "two_way") ? "two_way" : "single";
+  invReelSpanTypeChange();
+}
+
 // Swap a span's Inner and Outer sequence values. Used when a reel was recorded
 // with the inner/outer reading reversed. Footage (|outer - inner|) is unchanged
 // by the swap — the point is to store the correct inner vs outer value and leave
@@ -10026,10 +10058,8 @@ function invPrefillReelItemNumber(itemNumber, notes, location) {
   var itemField = $("invReelItemNumber");
   if (itemField) { itemField.value = itemNumber; itemField.classList.remove("inv-reel-prefilled"); }
 
-  var mapMatch = findProductMapMatch(itemNumber);
-  var rd = mapMatch && mapMatch.entry ? mapMatch.entry.reel_direction : null;
   var spanSel = $("invReelSpanType");
-  if (spanSel) spanSel.value = (rd === "two_way") ? "two_way" : "single";
+  if (spanSel) spanSel.value = _invReelResolveSpanType(null, itemNumber);
   invReelSpanTypeChange();
   invCalcReelFt();
 
@@ -10109,13 +10139,7 @@ function invOpenReelModal(reelNumber, notes, location) {
   // reel registry (Odoo Product Reels / quants), newest wins. The counter's job is to
   // UPDATE a known reading, not re-derive it; registry-only reels used to open blank.
   var known = invReelApplyKnownPrefill();
-  if (known && known.hasSeq) {
-    $("invReelSpanType").value = (known.spanType === "two_way") ? "two_way" : "single";
-  } else {
-    var mapMatch = findProductMapMatch(itemNum);
-    var rd = mapMatch && mapMatch.entry ? mapMatch.entry.reel_direction : null;
-    $("invReelSpanType").value = (rd === "two_way") ? "two_way" : "single";
-  }
+  $("invReelSpanType").value = _invReelResolveSpanType(known, itemNum);
 
   var notesEl = $("invReelNotes");
   if (notesEl) notesEl.value = notes || "";
@@ -10154,12 +10178,13 @@ function invOpenReelModal(reelNumber, notes, location) {
   }, 50);
 }
 
-// The reel number was COMMITTED (Enter or blur), not just typed into. oninput keeps
+// The reel number was COMMITTED — Enter or Tab, deliberately NOT blur. oninput keeps
 // the resolved item/markers live on every keystroke; this owns the focus move, which
-// must not happen mid-keystroke or it fights the operator (and the scanner). Once the
-// reel resolves, Inner Seq A becomes the active field — the counter's actual job.
-// A reel we can't resolve to an item parks on Item Number instead, since that is then
-// the first thing still missing.
+// must not happen mid-keystroke or it fights the operator (and the scanner), and must
+// not happen on blur or it steals the field the operator just tapped. Once the reel
+// resolves, Inner Seq A becomes the active field — the counter's actual job. A reel we
+// can't resolve to an item parks on Item Number instead, that being the first thing
+// still missing.
 function invReelCommitReelField() {
   invReelUpdateSpanTypeFromContext();
   var reelNum = $("invReelNumber") ? $("invReelNumber").value.trim() : "";
@@ -10187,6 +10212,67 @@ function invReelFocusSeqField(el) {
 // 4500 must not become 45003). Only the first one: typing strips the grey marker via
 // the field's oninput. Navigation/edit keys are left alone so the value can still be
 // corrected by hand, and clearing it outright (Backspace/Delete) is honoured as-is.
+// ── Reel panel keyboard path ────────────────────────────────────────────────
+// One ordered ring of fields, Enter and Tab both walk it:
+//   Reel Number → Item Number → Span Type → Inner A → Outer A → [Inner B → Outer B] → Save
+// The operator ENTERS the ring at different points — a known reel hydrates and starts
+// at Inner Seq A (Inner → Outer → Save), an unknown one starts at Item Number — but
+// the order itself never changes, so the muscle memory holds either way.
+//
+// Native tab order is wrong for counting: it walks the Swap buttons, the read-only
+// Available Ft boxes and Notes, all of which the operator is never typing into
+// mid-count. Hence an explicit ring rather than tabindex juggling. Notes stays
+// reachable by tap/click; it is optional and does not belong in the fast path.
+// Span B is in the ring only when the panel is showing it.
+function invReelFieldOrder() {
+  var twoWay = $("invReelSpanType") && $("invReelSpanType").value === "two_way";
+  var ids = ["invReelNumber", "invReelItemNumber", "invReelSpanType", "invReelInnerA", "invReelOuterA"];
+  if (twoWay) ids.push("invReelInnerB", "invReelOuterB");
+  ids.push("invReelSaveBtn");
+  return ids.map(function(id) { return $(id); })
+            .filter(function(el) { return el && el.offsetParent !== null; });  // visible only
+}
+
+// Move one step along the ring. Returns false when there is nowhere to go, so the
+// caller can let the browser's own default happen instead of trapping focus.
+function invReelAdvance(fromEl, back) {
+  var order = invReelFieldOrder();
+  var i = order.indexOf(fromEl);
+  if (i < 0) return false;
+  var next = order[i + (back ? -1 : 1)];
+  if (!next) return false;
+  next.focus();
+  invReelFocusSeqField(next);                       // pre-filled → select, so typing replaces
+  if (next.getAttribute("data-reel-label")) {       // a keypad-able field
+    invKeypadTargetEl = next;
+    invQtyKeypadRefreshReelTarget();
+  }
+  return true;
+}
+
+// Enter / Tab handler for every field in the ring. Enter on the Save button is left
+// to the browser (it clicks it) — the ring lands you there, a second Enter commits,
+// so a scanner's trailing Enter can never save a reel on its own.
+function invReelKeyNav(el, ev) {
+  if (!el || !ev) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  var k = ev.key || "";
+  var back;
+  if (k === "Enter")    back = false;
+  else if (k === "Tab") back = !!ev.shiftKey;
+  else return;
+  if (k === "Enter" && el.id === "invReelSaveBtn") return;   // native click
+
+  // The reel number drives everything downstream, so committing it decides where we
+  // land: Inner Seq A when it resolved to an item, Item Number when it didn't.
+  if (!back && el.id === "invReelNumber" && (el.value || "").trim()) {
+    ev.preventDefault();
+    invReelCommitReelField();
+    return;
+  }
+  if (invReelAdvance(el, back)) ev.preventDefault();
+}
+
 function invReelSeqKeyDown(el, ev) {
   if (!el || !ev || !el.classList.contains("inv-reel-prefilled")) return;
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
@@ -10210,15 +10296,7 @@ function invReelUpdateSpanTypeFromContext() {
   // keystroke — it only ever touches blank or auto-filled values).
   var known = invReelApplyKnownPrefill();
 
-  if (known && known.hasSeq) {
-    spanSel.value = (known.spanType === "two_way") ? "two_way" : "single";
-  } else if (itemNum) {
-    var match = findProductMapMatch(itemNum);
-    var rd = match && match.entry ? match.entry.reel_direction : null;
-    spanSel.value = (rd === "two_way") ? "two_way" : "single";
-  } else {
-    spanSel.value = "single";
-  }
+  spanSel.value = _invReelResolveSpanType(known, itemNum);
 
   invReelSpanTypeChange();
   invReelCheckDuplicate();
@@ -10641,8 +10719,11 @@ function invClearReelFields() {
     var el = $(id);
     if (el) { el.value = ""; el.classList.remove("inv-reel-prefilled"); }
   });
-  var st = $("invReelSpanType"); if (st) st.value = "single";
-  var sb = $("invReelSpanBSection"); if (sb) sb.style.display = "none";
+  // Reset to the sticky choice, not hard "single" — clearing the form between reels
+  // must not undo the span type the operator picked for this run.
+  var st = $("invReelSpanType"); if (st) st.value = invReelStickySpanType;
+  var sb = $("invReelSpanBSection");
+  if (sb) sb.style.display = (invReelStickySpanType === "two_way") ? "block" : "none";
   var notes = $("invReelNotes"); if (notes) notes.value = "";
   var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
@@ -12561,6 +12642,13 @@ function reelSyncFromQuants() {
   // Qty keypad: physical keyboard support (item mode only; reel fields and scan input handle their own)
   document.addEventListener("keydown", function(e) {
     if (invQtyKeypadMode !== "qty") return; // reel fields handle their own keyboard
+    // ...and stand down whenever the reel panel is open, whatever the keypad mode
+    // says. In Auto-Detect the mode stays "qty" whilst a reel scan opens the panel,
+    // so without this the Enter branch below would fire instead of the Save button's
+    // own click (and Escape would fight the panel's discard handler). The text-input
+    // guard underneath doesn't cover it — the Save button isn't an input.
+    var _rip = $("invReelInlinePanel");
+    if (_rip && !_rip.classList.contains("hidden")) return;
     // Never intercept when the scan input or any text input has focus
     var si = $("invScanInput");
     var active = document.activeElement;

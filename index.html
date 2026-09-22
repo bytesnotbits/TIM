@@ -650,20 +650,23 @@
               <div id="invReelDupNote" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:12px;color:#991b1b;"></div>
               <div class="inv-reel-inline-grid">
                 <label>Reel Number *
-                  <!-- onchange = the reel was committed (Enter/blur): resolve it and
-                       jump to Inner Seq. oninput only keeps the prefill live. -->
+                  <!-- onchange is a resolve-only safety net (a scanner that fills the field
+                       without firing input). It must NOT move focus: change also fires when
+                       the operator taps another field, and jumping then would steal the
+                       field they just tapped. Enter/Tab own navigation (invReelKeyNav). -->
                   <input id="invReelNumber" type="text" placeholder="e.g. REEL123" autocomplete="off"
                          oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()"
-                         onchange="invReelCommitReelField()" style="text-transform:uppercase;" />
+                         onchange="invReelUpdateSpanTypeFromContext()" onkeydown="invReelKeyNav(this,event)" style="text-transform:uppercase;" />
                 </label>
                 <label>Item Number *
                   <input id="invReelItemNumber" type="text" placeholder="e.g. FIBER-144" autocomplete="off"
-                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()" style="text-transform:uppercase;" />
+                         oninput="this.classList.remove('inv-reel-prefilled');invReelUpdateSpanTypeFromContext()"
+                         onkeydown="invReelKeyNav(this,event)" style="text-transform:uppercase;" />
                 </label>
               </div>
               <div style="margin-bottom:10px;">
                 <label style="font-size:12px;color:#475569;font-weight:700;display:block;">Span Type
-                  <select id="invReelSpanType" onchange="invReelSpanTypeChange()" style="margin-top:3px;width:100%;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+                  <select id="invReelSpanType" onchange="invReelSpanTypeUserChanged()" onkeydown="invReelKeyNav(this,event)" style="margin-top:3px;width:100%;padding:7px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
                     <option value="single">Single Span</option>
                     <option value="two_way">Two-Way (two spans)</option>
                   </select>
@@ -679,11 +682,11 @@
                 <div class="inv-reel-span-row">
                   <label>Inner Seq
                     <input id="invReelInnerA" type="number" min="0" placeholder="0"
-                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event)" data-reel-label="Inner Seq A" />
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event);invReelKeyNav(this,event)" data-reel-label="Inner Seq A" />
                   </label>
                   <label>Outer Seq
                     <input id="invReelOuterA" type="number" min="0" placeholder="0"
-                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event)" data-reel-label="Outer Seq A" />
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event);invReelKeyNav(this,event)" data-reel-label="Outer Seq A" />
                   </label>
                   <label>Available Ft
                     <input id="invReelFtA" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#1d4ed8;" placeholder="—" />
@@ -700,11 +703,11 @@
                 <div class="inv-reel-span-row">
                   <label>Inner Seq
                     <input id="invReelInnerB" type="number" min="0" placeholder="0"
-                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event)" data-reel-label="Inner Seq B" />
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event);invReelKeyNav(this,event)" data-reel-label="Inner Seq B" />
                   </label>
                   <label>Outer Seq
                     <input id="invReelOuterB" type="number" min="0" placeholder="0"
-                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event)" data-reel-label="Outer Seq B" />
+                           oninput="this.classList.remove('inv-reel-prefilled');invCalcReelFt()" onfocus="invReelFocusSeqField(this)" onkeydown="invReelSeqKeyDown(this,event);invReelKeyNav(this,event)" data-reel-label="Outer Seq B" />
                   </label>
                   <label>Available Ft
                     <input id="invReelFtB" type="text" readonly style="background:#f1f5f9;font-weight:700;color:#16a34a;" placeholder="—" />
@@ -742,7 +745,7 @@
                        onkeydown="if(event.key==='Enter'){event.preventDefault();invSubmitReelEntry();}" />
               </label>
               <div style="display:flex;gap:8px;">
-                <button id="invReelSaveBtn" onclick="invSubmitReelEntry()" style="flex:1;padding:10px;">Save Reel Count</button>
+                <button id="invReelSaveBtn" onclick="invSubmitReelEntry()" onkeydown="invReelKeyNav(this,event)" style="flex:1;padding:10px;">Save Reel Count</button>
                 <button class="secondary" onclick="invDiscardReelEntry()">Discard</button>
               </div>
             </div>
