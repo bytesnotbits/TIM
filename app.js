@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.53.02";
+const APP_VERSION = "v2.53.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -10132,7 +10132,13 @@ function invOpenReelModal(reelNumber, notes, location) {
   });
   invReelResetSwaps();  // a freshly-opened reel starts with no pending swaps
   if (reelField) reelField.classList.remove("inv-reel-prefilled");
-  if (itemField) itemField.classList.remove("inv-reel-prefilled");
+  // NOTE: the item field's prefill marker is deliberately LEFT ALONE here. It is the
+  // only signal telling invReelReverseFillItem whether the item currently in the box
+  // was typed by the operator (authoritative — the item-then-reel path) or auto-filled
+  // from the PREVIOUS reel (must be re-resolved against this one). Stripping it made
+  // every stale auto-fill look user-typed, so a second reel scan kept the first reel's
+  // item while every other field re-hydrated — and only the cross-item save warning
+  // caught it. invReelReverseFillItem owns this class (v2.53.03).
 
   // Pre-populate from the last known entry for this reel, marking pre-filled fields
   var itemNum = itemField ? itemField.value.trim().toUpperCase() : "";
@@ -10310,11 +10316,16 @@ function invReelRefreshApplyLabel() {
   var btn = $("invQtyKeyApplyBtn");
   var rip = $("invReelInlinePanel");
   if (!btn || !rip || rip.classList.contains("hidden")) return;
-  var atSave = (invReelRingCurrent === $("invReelSaveBtn"));
-  btn.innerHTML = atSave ? "&#10003; Save Reel" : "&#8594; Next";
+  var atSave   = (invReelRingCurrent === $("invReelSaveBtn"));
+  // A blocking conflict renames the committing press too. The keypad is where the
+  // operator's eyes are mid-count, so a green "Save Reel" there would quietly
+  // contradict the red banner above the form (v2.53.03).
+  var blocking = (invReelConflictLevel === "blocking");
+  btn.innerHTML = atSave ? (blocking ? "&#9888; Save Anyway" : "&#10003; Save Reel") : "&#8594; Next";
   btn.classList.toggle("stepping", !atSave);
+  btn.classList.toggle("conflict", atSave && blocking);
   var ctx = $("invQtyKeypadContext");
-  if (ctx && atSave) ctx.textContent = "→ Save Reel Count";
+  if (ctx && atSave) ctx.textContent = blocking ? "⚠ Conflict — → Save Anyway" : "→ Save Reel Count";
 }
 
 // Put the soft keypad into reel presentation for as long as the panel is open, and
@@ -10679,42 +10690,95 @@ function invReelDetectConflict(itemNum, reelNum) {
 }
 
 // Live warning in the reel panel as the user types/scans item + reel.
+//
+// Two severities, because they are not the same kind of problem (v2.53.03):
+//   • "blocking" — the reel/item pairing itself is WRONG or unknowable: the reel is
+//     on record under a different item (cross_item), or under several (ambiguous).
+//     Saving writes bad data. Loud: red banner, red fields, warn tone + flash the
+//     moment the state goes inconsistent, and the Save button renames to
+//     "⚠ Save Anyway" so the action can't be reached without reading the reason.
+//   • "notice" — a legitimate-but-worth-knowing second entry for a reel already
+//     counted this session (session_dup). Amber, quiet, no alarm.
+//
+// The confirm() in invSubmitReelEntry is the last gate, not the first: it fires when
+// the count is finished and the operator is already committing. This is the same
+// finding surfaced while the fields are still being filled, which is when it is
+// cheap to fix. The alarm fires on TRANSITION only (keyed by `_invReelConflictSig`),
+// so it does not buzz on every keystroke of a conflict you have already seen.
+var invReelConflictLevel = null;   // null | "notice" | "blocking" — read by the Apply key
+var _invReelConflictSig  = "";     // conflict state we last sounded the alarm for
+
 function invReelCheckDuplicate() {
   var note = $("invReelDupNote");
   if (!note) return;
   var item = ($("invReelItemNumber") ? $("invReelItemNumber").value : "").trim().toUpperCase();
   var reel = ($("invReelNumber")     ? $("invReelNumber").value     : "").trim().toUpperCase();
 
+  var level = null, msg = "", sig = "";
+
   // Ambiguous reel: item left blank because the reel is on record under more than
   // one item. Don't guess — list the candidates so the operator picks the right one.
   if (!item && reel) {
     var ambItems = invReelDistinctItems(reel);
     if (ambItems.length > 1) {
-      note.innerHTML = "⚠️ Reel " + escapeHtml(reel) + " is on record under multiple items: <strong>"
-        + ambItems.map(escapeHtml).join("</strong>, <strong>") + "</strong>. "
-        + "Enter the correct item number for this reel before saving.";
-      note.style.display = "block";
-      return;
+      level = "blocking";
+      sig   = "amb|" + reel;
+      msg   = "<strong>Reel " + escapeHtml(reel) + " is on record under "
+            + ambItems.length + " different items</strong><span>"
+            + ambItems.map(escapeHtml).join(" · ")
+            + " — enter the correct item number for this reel before saving.</span>";
     }
   }
 
-  var c = invReelDetectConflict(item, reel);
-  if (!c) { note.style.display = "none"; note.innerHTML = ""; return; }
-
-  var oft = (c.other.totalAvailableFt != null ? c.other.totalAvailableFt : (c.other.qty || 0));
-  var msg;
-  if (c.type === "cross_item") {
-    msg = "⚠️ Reel " + escapeHtml(reel) + " is already on record for item <strong>"
-        + escapeHtml(c.other.itemNumber || "?") + "</strong> (" + Number(oft).toLocaleString() + " ft). "
-        + "You entered item <strong>" + escapeHtml(item) + "</strong>. A reel number should belong to one item — confirm before saving.";
-  } else {
-    msg = "⚠️ Reel " + escapeHtml(reel) + " was already counted this session ("
-        + Number(oft).toLocaleString() + " ft"
-        + (c.other.timestamp ? " at " + escapeHtml(invFormatTime(c.other.timestamp)) : "") + "). "
-        + "Saving will add a second entry for it.";
+  if (!level) {
+    var c = invReelDetectConflict(item, reel);
+    if (c) {
+      var oft = (c.other.totalAvailableFt != null ? c.other.totalAvailableFt : (c.other.qty || 0));
+      if (c.type === "cross_item") {
+        level = "blocking";
+        sig   = "cross|" + reel + "|" + item;
+        msg   = "<strong>Wrong item for reel " + escapeHtml(reel) + "</strong><span>On record as <strong>"
+              + escapeHtml(c.other.itemNumber || "?") + "</strong> (" + Number(oft).toLocaleString()
+              + " ft); you have <strong>" + escapeHtml(item) + "</strong> in the box. "
+              + "A reel number belongs to ONE item — fix the item number, or Save Anyway if this reel really was re-labelled.</span>";
+      } else {
+        level = "notice";
+        sig   = "dup|" + reel;
+        msg   = "⚠️ Reel " + escapeHtml(reel) + " was already counted this session ("
+              + Number(oft).toLocaleString() + " ft"
+              + (c.other.timestamp ? " at " + escapeHtml(invFormatTime(c.other.timestamp)) : "") + "). "
+              + "Saving will add a second entry for it.";
+      }
+    }
   }
+
+  invReelConflictLevel = level;
+  note.className = "inv-reel-note" + (level ? " " + level : "");
   note.innerHTML = msg;
-  note.style.display = "block";
+  note.style.display = level ? "block" : "none";
+
+  // Mark the two fields that cause it, so the eye goes to the cause and not just
+  // the banner — on a stacked iPad the banner can be scrolled off above the form.
+  var blocking = (level === "blocking");
+  ["invReelItemNumber", "invReelNumber"].forEach(function(id) {
+    var el = $(id); if (el) el.classList.toggle("inv-reel-conflict-field", blocking);
+  });
+
+  var save = $("invReelSaveBtn");
+  if (save) {
+    save.classList.toggle("conflict", blocking);
+    save.textContent = blocking ? "⚠ Save Anyway" : "Save Reel Count";
+  }
+  invReelRefreshApplyLabel();
+
+  // Dual-channel alert on the transition into a blocking state — same tone+flash
+  // contract as a bad scan, because this IS a bad scan result.
+  if (blocking && sig !== _invReelConflictSig) {
+    _invReelConflictSig = sig;
+    if (typeof timFeedback === "function") timFeedback("warn");
+  } else if (!blocking) {
+    _invReelConflictSig = "";
+  }
 }
 
 function invSubmitReelEntry(silent) {
@@ -10817,7 +10881,16 @@ function invClearReelFields() {
   var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
   var cNote = $("invReelConflictNote"); if (cNote) cNote.style.display = "none";
-  var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; }
+  var dNote = $("invReelDupNote"); if (dNote) { dNote.style.display = "none"; dNote.innerHTML = ""; dNote.className = "inv-reel-note"; }
+  // Drop the conflict state with the values that caused it — otherwise the next
+  // reel opens wearing the last one's red fields and "Save Anyway" button.
+  invReelConflictLevel = null;
+  _invReelConflictSig  = "";
+  ["invReelItemNumber","invReelNumber"].forEach(function(id) {
+    var el = $(id); if (el) el.classList.remove("inv-reel-conflict-field");
+  });
+  var sBtn = $("invReelSaveBtn");
+  if (sBtn) { sBtn.classList.remove("conflict"); sBtn.textContent = "Save Reel Count"; }
   invReelResetSwaps();
   invReelRingCurrent = null;
   invReelRefreshApplyLabel();
@@ -10835,9 +10908,13 @@ function invCloseReelInline() {
   document.querySelectorAll(".inv-reel-keypad-targeted").forEach(function(el) {
     el.classList.remove("inv-reel-keypad-targeted");
   });
+  // Empty the form in BOTH modes. Auto-Detect used to only hide the panel, leaving
+  // the finished reel's values sitting in the DOM; the next reel scan re-opened that
+  // same form, so a typed item number carried over to a reel it had nothing to do
+  // with (v2.53.03). A closed panel must never hold a previous reel's data.
+  invClearReelFields();
   if (invScanMode === "reel") {
-    // Keep panel open — just clear fields for next entry
-    invClearReelFields();
+    // Keep panel open — cleared above, ready for the next entry
     var ctx = $("invQtyKeypadContext");
     if (ctx) ctx.textContent = "Scan a reel or fill fields below.";
     var disp = $("invQtyDisplay");

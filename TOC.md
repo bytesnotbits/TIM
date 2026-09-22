@@ -613,7 +613,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 | Function | Purpose |
 |----------|---------|
-| `invOpenReelModal(reelNum, notes, loc)` | Populate and show reel entry panel; reverse-looks up item, pre-fills the known markers, and lands focus on Inner Seq A (v2.53.00) |
+| `invOpenReelModal(reelNum, notes, loc)` | Populate and show reel entry panel; reverse-looks up item, pre-fills the known markers, and lands focus on Inner Seq A (v2.53.00). **Never strips the item field's `inv-reel-prefilled` marker** — that class is the only signal separating a typed item from a previous reel's auto-fill; `invReelReverseFillItem` owns it (v2.53.03 fix: a second reel scan kept the first reel's item) |
 | `invPrefillReelItemNumber(itemNum, notes, loc)` | Pre-fill reel form from item number |
 | `invAutoSaveReelInline()` | Silently save current reel before switching to next |
 | `invReelUpdateSpanTypeFromContext()` | Per-keystroke resolver on the reel/item fields: fills item from reel, applies the known-marker prefill, then **sets span type** from known → product map → default |
@@ -636,14 +636,14 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `invReelResetSwaps()` | Clear the swap trail + its UI (note, button highlight) |
 | `invReelUpdateHistoryPanel(item, reel, ft)` | Show the on-record footage comparison — from `invReelKnownSequences`, so registry-only reels compare too; `#invReelHistoryTitle` switches between "Previous Count for This Reel" and "On Record for This Reel (Odoo)" |
 | `invReelDetectConflict(itemNum, reelNum)` | Detect a reel conflict: `cross_item` (reel on record under a different item) or `session_dup` (already counted this session); null for the normal same-item prefill case |
-| `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning as item/reel fields change — from `invReelDetectConflict`, plus an ambiguous-reel notice (reel on record under multiple items) when item is blank |
+| `invReelCheckDuplicate()` | Render the live `#invReelDupNote` warning as item/reel fields change — from `invReelDetectConflict`, plus an ambiguous-reel notice (reel on record under multiple items) when item is blank. **Two severities (v2.53.03):** `blocking` (cross-item / ambiguous — the pairing is wrong, so saving writes bad data) turns the banner red with a headline, red-rings the item+reel fields, renames Save → "⚠ Save Anyway" (form button AND keypad Apply), and fires `timFeedback("warn")` **once per state transition** (`_invReelConflictSig`, so it can't buzz per keystroke); `notice` (same-session duplicate) stays quiet amber. Sets `invReelConflictLevel`, read by `invReelRefreshApplyLabel`; cleared by `invClearReelFields`. The `confirm()` in `invSubmitReelEntry` remains the last gate — this is the same finding surfaced while the fields are still being filled |
 | `invFindReelMaster(reelNum)` | **Reverse lookup**: latest event with this reel# across all sessions (used for scan classification) |
 | `invReelDistinctItems(reelNum)` | Distinct non-voided item numbers this reel has been recorded under (master + session) — basis for ambiguity detection |
 | `invReelReverseFillItem()` | Resolve the item field from the reel master, ambiguity- & staleness-aware: keeps a user-typed item, but re-resolves an auto-filled (grey) item against the **current** reel (single item → fill; ambiguous/unknown → clear) so a previous reel’s item can’t leak forward. Falls back to the **reel registry** (`reelGet().itemNumber`) when no count event knows the reel — the common floor case, an Odoo reel never counted in TIM (v2.53.00) |
 | `invGetReelHistory(itemNum, reelNum)` | Find most recent event for item+reel pair |
 | `invSubmitReelEntry(silent)` | Validate + save reel count event |
 | `invClearReelFields()` | Reset all reel form fields |
-| `invCloseReelInline()` | Close reel panel |
+| `invCloseReelInline()` | Close reel panel — **clears the form in BOTH modes** (v2.53.03). Auto-Detect used to only hide it, so the finished reel's values sat in the DOM and leaked into the next reel scan |
 | `invDiscardReelEntry()` | Discard reel + log exception |
 
 ---

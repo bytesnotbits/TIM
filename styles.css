@@ -950,3 +950,46 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
     box-shadow: 0 -8px 16px rgba(15, 23, 42, .12);
   }
 }
+
+/* ── Reel conflict warning (v2.53.03) ───────────────────────────────────────
+   Two severities, deliberately unequal. "notice" is a second count of a reel
+   already counted this session — legitimate, amber, quiet. "blocking" means the
+   reel/item pairing is wrong or unknowable, so saving writes bad data: it gets a
+   red banner with a headline, a red ring on the two fields that caused it, and a
+   Save button that renames itself. Previously both looked the same, and neither
+   arrived until the confirm() at save time. */
+.inv-reel-note {
+  display:none; border-radius:6px; padding:7px 10px; margin-bottom:8px;
+  font-size:12px; background:#fef2f2; border:1px solid #fca5a5; color:#991b1b;
+}
+.inv-reel-note.notice {
+  background:#fef3c7; border-color:#fcd34d; color:#92400e;
+}
+.inv-reel-note.blocking {
+  background:#fee2e2; border:2px solid #dc2626; color:#7f1d1d;
+  padding:9px 12px; font-size:13px; line-height:1.4;
+  box-shadow:0 0 0 3px rgba(220,38,38,.14);
+  animation:invReelConflictIn .45s ease-out;
+}
+.inv-reel-note.blocking > strong { display:block; font-size:14px; font-weight:800; letter-spacing:.2px; }
+.inv-reel-note.blocking > strong::before { content:"\26A0\FE0F  "; }
+.inv-reel-note.blocking span { display:block; margin-top:3px; }
+@keyframes invReelConflictIn {
+  0%   { transform:scale(.99); box-shadow:0 0 0 0 rgba(220,38,38,.55); }
+  55%  { transform:scale(1);   box-shadow:0 0 0 9px rgba(220,38,38,0); }
+  100% { transform:scale(1);   box-shadow:0 0 0 3px rgba(220,38,38,.14); }
+}
+
+/* The cause, not just the banner: on a stacked iPad the note can sit above the
+   fold whilst the operator is typing into the fields it is about. */
+.inv-reel-conflict-field {
+  border-color:#dc2626 !important; background:#fff5f5 !important;
+  box-shadow:0 0 0 2px rgba(220,38,38,.18);
+}
+
+/* Committing under a conflict is allowed — but it must never look routine. */
+#invReelSaveBtn.conflict {
+  background:#dc2626; border-color:#b91c1c; color:#fff; font-weight:700;
+}
+#invReelSaveBtn.conflict:hover { background:#b91c1c; }
+.inv-qty-key.apply.conflict { background:#dc2626; border-color:#b91c1c; }
