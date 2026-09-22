@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.52.01";
+const APP_VERSION = "v2.52.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -11974,7 +11974,9 @@ function reelDirtyQuantLots() {
 // Called after every write to any source (quants / reference / count).
 function reelRecomputeDerived(e) {
   if (!e) return;
-  e.refFt = (e.innerSeq != null && e.outerSeq != null) ? Math.abs(e.outerSeq - e.innerSeq) : null;
+  var ftA = (e.innerSeq != null && e.outerSeq != null) ? Math.abs(e.outerSeq - e.innerSeq) : null;
+  var ftB = (e.spanType === "two_way" && e.innerSeqB != null && e.outerSeqB != null) ? Math.abs(e.outerSeqB - e.innerSeqB) : 0;
+  e.refFt = (ftA != null) ? (ftA + ftB) : null;
   var isLive = (e.presence === "live");
   // Effective footage: a floor count NEWER than the quants baseline is ground
   // truth (Phase 3); otherwise the quants on-hand.
@@ -12073,8 +12075,12 @@ function reelUpsertFromCount(ev) {
   e.lastCountedBy = reelWho();
   if (ev.innerSeqA != null && ev.innerSeqA !== "") e.innerSeq = Number(ev.innerSeqA);
   if (ev.outerSeqA != null && ev.outerSeqA !== "") e.outerSeq = Number(ev.outerSeqA);
-  e.refCountDate  = ts;       // newest reference — blocks an older Product Reels overwrite
   e.spanType      = ev.spanType || e.spanType || "single";
+  if (e.spanType === "two_way") {
+    e.innerSeqB = (ev.innerSeqB != null && ev.innerSeqB !== "") ? Number(ev.innerSeqB) : e.innerSeqB;
+    e.outerSeqB = (ev.outerSeqB != null && ev.outerSeqB !== "") ? Number(ev.outerSeqB) : e.outerSeqB;
+  } else { e.innerSeqB = null; e.outerSeqB = null; }
+  e.refCountDate  = ts;       // newest reference — blocks an older Product Reels overwrite
   if (ev.location) e.locationId = ev.location;
   if (!e.itemNumber && ev.itemNumber) e.itemNumber = ev.itemNumber;
   if (ev.description) e.description = ev.description;
@@ -12083,6 +12089,117 @@ function reelUpsertFromCount(ev) {
   reelRecomputeDerived(e);
   reelSaveToStorage();        // real change → local + GitHub push (rides reels.json)
   return e;
+}
+
+// Manual edit writer (v2.52.02) — a human correction from the Reel Lookup edit
+// modal. Owns sequences (+ notes) as the NEWEST reference (refCountDate = now, so
+// an older Product Reels import can't overwrite it) and, optionally, a presence
+// override recency-guarded in reelSyncFromQuants. It does NOT set footage —
+// footage stays owned by quants/counts, so a hand-entered sequence that disagrees
+// with on-hand correctly lights the Stale flag. `fields`: {innerA,outerA,spanType,
+// innerB,outerB,notes, presence?}. presence is applied only when provided.
+function reelApplyManualEdit(reelNumber, fields) {
+  var e = reelGet(reelNumber);
+  if (!e) return null;
+  fields = fields || {};
+  var nowISO = new Date().toISOString();
+  var num = function(v) { return (v != null && v !== "" && !isNaN(v)) ? Number(v) : null; };
+  e.spanType = (fields.spanType === "two_way") ? "two_way" : "single";
+  e.innerSeq = num(fields.innerA);
+  e.outerSeq = num(fields.outerA);
+  if (e.spanType === "two_way") { e.innerSeqB = num(fields.innerB); e.outerSeqB = num(fields.outerB); }
+  else { e.innerSeqB = null; e.outerSeqB = null; }
+  e.refCountDate = nowISO;    // manual edit = newest reference
+  if (fields.notes != null) e.notes = String(fields.notes);
+  if (fields.presence === "live" || fields.presence === "gone") {
+    e.presence = fields.presence;
+    e.presenceOverride = fields.presence;   // recency-guarded in reelSyncFromQuants
+    e.presenceOverrideAt = nowISO;
+  }
+  e.editedAt = nowISO; e.editedBy = reelWho();
+  e.updatedAt = nowISO; e.updatedBy = reelWho();
+  reelRecomputeDerived(e);
+  reelSaveToStorage();        // local + GitHub push (rides reels.json)
+  return e;
+}
+
+// ── Reel Edit modal (Reel Lookup → Edit) ──────────────────────────────────
+var _reelEditKey = null;
+var _reelEditOrigPresence = null;
+
+function reelOpenEditModal(reelNumber) {
+  var e = reelGet(reelNumber);
+  if (!e) return;
+  _reelEditKey = normKey(reelNumber);
+  _reelEditOrigPresence = e.presence || "";
+  var disp = $("reelEditKeyDisplay");
+  if (disp) disp.textContent = (e.reelNumber || "") + (e.itemNumber ? "  ·  item " + e.itemNumber : "") + (e.description ? "  ·  " + e.description : "");
+  if ($("reelEditInnerA")) $("reelEditInnerA").value = e.innerSeq != null ? e.innerSeq : "";
+  if ($("reelEditOuterA")) $("reelEditOuterA").value = e.outerSeq != null ? e.outerSeq : "";
+  if ($("reelEditSpanType")) $("reelEditSpanType").value = (e.spanType === "two_way") ? "two_way" : "single";
+  if ($("reelEditInnerB")) $("reelEditInnerB").value = e.innerSeqB != null ? e.innerSeqB : "";
+  if ($("reelEditOuterB")) $("reelEditOuterB").value = e.outerSeqB != null ? e.outerSeqB : "";
+  var pres = $("reelEditPresence");
+  if (pres) {
+    var opts = '<option value="live">Active (on hand)</option><option value="gone">Archived</option>';
+    if (e.presence === "unconfirmed") opts = '<option value="unconfirmed">Unconfirmed (no on-hand)</option>' + opts;
+    pres.innerHTML = opts;
+    pres.value = (e.presence === "gone") ? "gone" : (e.presence === "unconfirmed") ? "unconfirmed" : "live";
+  }
+  if ($("reelEditNotes")) $("reelEditNotes").value = e.notes || "";
+  reelEditSpanChanged();
+  var m = $("reelEditModal"); if (m) m.classList.remove("hidden");
+}
+
+function reelEditSpanChanged() {
+  var two = $("reelEditSpanType") && $("reelEditSpanType").value === "two_way";
+  var wrap = $("reelEditSpanBWrap"); if (wrap) wrap.style.display = two ? "" : "none";
+  reelEditRecalcPreview();
+}
+
+function reelEditRecalcPreview() {
+  var el = $("reelEditFtPreview"); if (!el) return;
+  var e = _reelEditKey ? (appData.reels || {})[_reelEditKey] : null;
+  var iA = parseFloat($("reelEditInnerA").value), oA = parseFloat($("reelEditOuterA").value);
+  var two = $("reelEditSpanType") && $("reelEditSpanType").value === "two_way";
+  var ftA = (!isNaN(iA) && !isNaN(oA)) ? Math.abs(oA - iA) : null;
+  var ftB = 0;
+  if (two) { var iB = parseFloat($("reelEditInnerB").value), oB = parseFloat($("reelEditOuterB").value); if (!isNaN(iB) && !isNaN(oB)) ftB = Math.abs(oB - iB); }
+  var ref = (ftA != null) ? ftA + ftB : null;
+  if (ref == null) { el.textContent = "Sequences imply: — ft"; el.style.color = "#94a3b8"; return; }
+  var onHand = e ? ((e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || "")) ? e.lastCountedFt : e.onHandFt) : null;
+  var txt = "Sequences imply: " + ref.toLocaleString() + " ft";
+  if (onHand != null) {
+    txt += " · on hand: " + onHand.toLocaleString() + " ft";
+    if (Math.abs(onHand - ref) > REEL_STALE_TOL_FT) { el.style.color = "#92400e"; txt += "  ⚠ will flag Stale (" + Math.abs(onHand - ref).toLocaleString() + " ft off)"; }
+    else { el.style.color = "#166534"; txt += "  ✓ matches"; }
+  } else { el.style.color = "#0f172a"; }
+  el.textContent = txt;
+}
+
+function reelSaveEdit() {
+  if (!_reelEditKey) return;
+  var e = (appData.reels || {})[_reelEditKey];
+  if (!e) { reelCancelEdit(); return; }
+  var selP = $("reelEditPresence") ? $("reelEditPresence").value : "";
+  // Only override presence when the user actually changed it to a live/gone value.
+  var presence = ((selP === "live" || selP === "gone") && selP !== _reelEditOrigPresence) ? selP : undefined;
+  reelApplyManualEdit(e.reelNumber, {
+    innerA:   $("reelEditInnerA") ? $("reelEditInnerA").value : "",
+    outerA:   $("reelEditOuterA") ? $("reelEditOuterA").value : "",
+    spanType: $("reelEditSpanType") ? $("reelEditSpanType").value : "single",
+    innerB:   $("reelEditInnerB") ? $("reelEditInnerB").value : "",
+    outerB:   $("reelEditOuterB") ? $("reelEditOuterB").value : "",
+    notes:    $("reelEditNotes") ? $("reelEditNotes").value : "",
+    presence: presence
+  });
+  reelCancelEdit();
+  if (typeof reelLookupRender === "function") reelLookupRender();
+}
+
+function reelCancelEdit() {
+  _reelEditKey = null; _reelEditOrigPresence = null;
+  var m = $("reelEditModal"); if (m) m.classList.add("hidden");
 }
 
 // Live-truth writer — the Odoo quants baseline. Writes ONLY footage/location/
@@ -12121,15 +12238,16 @@ function reelSyncFromQuants() {
   // 2. Reconcile existing entries against the live set.
   Object.keys(reels).forEach(function(k) {
     var e = reels[k]; if (!e) return;
+    // What quants/counts would derive for presence this round:
+    var derived;
     if (live[k]) {
       if (e.presence === "gone") summary.resurrected++;
-      e.presence   = "live";
+      derived      = "live";
       e.onHandFt   = live[k].onHandFt;
       e.locationId = live[k].locationId || e.locationId || "";
       if (!e.itemNumber  && live[k].itemNumber)  e.itemNumber  = live[k].itemNumber;
       if (!e.description && live[k].description) e.description = live[k].description;
       e.quantsAt   = stamp;
-      summary.live++;
     } else {
       // Absent from the new baseline. A reel COUNTED after this baseline is
       // physically here → keep it live (a floor scan outranks the baseline's
@@ -12137,9 +12255,19 @@ function reelSyncFromQuants() {
       // (archived, retrievable); a reference-only "unconfirmed" reel that quants
       // has never seen stays unconfirmed.
       var countedAfter = !!(e.lastCountedAt && e.lastCountedAt > (stamp || ""));
-      if (countedAfter)       { e.presence = "live"; summary.live++; }
-      else if (e.quantsAt)    { e.presence = "gone"; summary.gone++; }
+      derived = countedAfter ? "live" : (e.quantsAt ? "gone" : (e.presence || "unconfirmed"));
     }
+    // A MANUAL status override (reelApplyManualEdit) holds until a NEWER baseline
+    // supersedes it — same recency rule as footage/sequences. Once the baseline
+    // is newer, quants reality wins and the stale override is cleared.
+    if (e.presenceOverride && e.presenceOverrideAt && e.presenceOverrideAt > (stamp || "")) {
+      e.presence = e.presenceOverride;
+    } else {
+      if (e.presenceOverride) { e.presenceOverride = null; e.presenceOverrideAt = null; }
+      e.presence = derived;
+    }
+    if (e.presence === "live") summary.live++;
+    else if (e.presence === "gone") summary.gone++;
     reelRecomputeDerived(e);
   });
 
@@ -16730,7 +16858,8 @@ function _reelRowFromRegistry(r) {
     spanType:         r.spanType || "single",
     totalAvailableFt: ft, qty: ft,
     innerSeqA:        r.innerSeq, outerSeqA: r.outerSeq,
-    innerSeqB:        null, outerSeqB: null,
+    innerSeqB:        (r.spanType === "two_way" ? r.innerSeqB : null),
+    outerSeqB:        (r.spanType === "two_way" ? r.outerSeqB : null),
     location:         r.locationId || "",
     timestamp:        r.quantsAt || r.refCountDate || "",
     notes:            r.notes || "",
@@ -16919,7 +17048,7 @@ function reelLookupRender() {
     for (var d = 0; d < reels.length; d++) { if (reels[d].description) { desc = reels[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    units.push('<tr style="background:#f8fafc;"><td colspan="10" style="padding:8px 10px;">'
+    units.push('<tr style="background:#f8fafc;"><td colspan="11" style="padding:8px 10px;">'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + reels.length + ' reel' + (reels.length !== 1 ? 's' : '') + ')</span>'
@@ -16943,6 +17072,7 @@ function reelLookupRender() {
         + '<td>' + escapeHtml(loc) + '</td>'
         + '<td style="white-space:nowrap;">' + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : '') + '</td>'
         + '<td>' + escapeHtml(e.notes || "") + '</td>'
+        + '<td style="white-space:nowrap;"><button type="button" class="secondary" style="margin:0;padding:3px 10px;font-size:12px;" onclick="reelOpenEditModal(\'' + chkJsStr(e.reelNumber || "") + '\')">Edit</button></td>'
         + '</tr>');
     }
   }
@@ -16950,7 +17080,7 @@ function reelLookupRender() {
   body.innerHTML = _reelDirtyLotsNote()
     + '<div class="flow-table"><table><thead><tr>'
     + '<th>Reel #</th><th>Status</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
-    + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th>'
+    + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th><th></th>'
     + '</tr></thead><tbody id="reelLookupTbody"></tbody></table></div>';
   timLazyRender($("reelLookupTbody"), units);
 }

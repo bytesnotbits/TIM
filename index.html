@@ -1937,6 +1937,65 @@
     </div>
   </div>
 
+  <!-- Reel Edit Modal (manual sequence/notes/presence correction) -->
+  <div id="reelEditModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">Edit Reel</h2>
+          <p id="reelEditKeyDisplay" class="small" style="margin:4px 0 0;color:#64748b;font-family:monospace;font-size:12px;"></p>
+        </div>
+        <button onclick="reelCancelEdit()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="small" style="margin:0 0 12px;color:#64748b;">Manually set the inner/outer sequence markers, notes, and status for this reel. Footage stays owned by the Odoo quants baseline and floor counts — if your sequences imply a different length than the on-hand footage, the reel will show a <strong>Stale</strong> flag so you can re-verify.</p>
+        <div class="modal-grid two">
+          <label>Inner A
+            <input id="reelEditInnerA" type="number" inputmode="numeric" oninput="reelEditRecalcPreview()" placeholder="e.g. 16840" />
+          </label>
+          <label>Outer A
+            <input id="reelEditOuterA" type="number" inputmode="numeric" oninput="reelEditRecalcPreview()" placeholder="e.g. 16106" />
+          </label>
+        </div>
+        <div style="margin-top:10px;">
+          <label>Span Type
+            <select id="reelEditSpanType" onchange="reelEditSpanChanged()">
+              <option value="single">Single span</option>
+              <option value="two_way">Two-way</option>
+            </select>
+          </label>
+        </div>
+        <div id="reelEditSpanBWrap" class="modal-grid two" style="margin-top:10px;display:none;">
+          <label>Inner B
+            <input id="reelEditInnerB" type="number" inputmode="numeric" oninput="reelEditRecalcPreview()" placeholder="Inner B" />
+          </label>
+          <label>Outer B
+            <input id="reelEditOuterB" type="number" inputmode="numeric" oninput="reelEditRecalcPreview()" placeholder="Outer B" />
+          </label>
+        </div>
+        <p id="reelEditFtPreview" class="small" style="margin:10px 0 0;color:#0f172a;font-weight:600;"></p>
+        <div style="margin-top:12px;">
+          <label>Status
+            <select id="reelEditPresence">
+              <option value="live">Active (on hand)</option>
+              <option value="gone">Archived</option>
+            </select>
+          </label>
+          <p class="small" style="margin:4px 0 0;color:#94a3b8;">A newer Odoo quants baseline can re-assert status from Odoo.</p>
+        </div>
+        <div style="margin-top:12px;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Notes
+            <textarea id="reelEditNotes" rows="3" placeholder="Notes for this reel" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;"></textarea>
+          </label>
+        </div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="reelCancelEdit()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="reelSaveEdit()" style="margin:0;">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Product Upload Diff Modal -->
   <div id="invCsvImportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true"></div>
 
