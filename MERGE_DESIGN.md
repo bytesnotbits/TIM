@@ -35,10 +35,14 @@ diverged from and distinguish *added* from *deleted*. One uniform algorithm for 
 | `inventory_events` | array | `eventId` | no |
 | `recount_sessions` | array | `recountId` | no |
 | `recount_movements` | array | `movementId` | no |
-| `odoo_quants` | array | — | **not merged** — full Odoo snapshot; newest push wins |
+| `odoo_quants` | array | — | **not merged** — full Odoo snapshot; **newest baseline wins by max row `importedAt`** (v2.51.00) |
 
 `odoo_quants` is reference data replaced wholesale by whoever loads a fresh Odoo export; merging
-it row-by-row is meaningless, so it is excluded (last-writer-wins, documented).
+it row-by-row is meaningless, so it is excluded from the 3-way merge. **Newest-wins by the most
+recent row `importedAt`** (v2.51.00, was local-always-wins): a quants IMPORT auto-pushes
+(`scheduleQuantsPush`) and any device with an older/empty baseline adopts the newer shared one on
+sync — so "load once on one device, every device gets it." Ties favor local (no re-push churn);
+an empty baseline (ts 0) always yields. A local Clear stays local (doesn't push an empty wipe).
 
 ## 3-way algorithm (per key)
 
@@ -171,5 +175,5 @@ All three phases shipped. Remaining non-goals stand: no automatic resolution of 
 ## Open items / non-goals (v1)
 
 - No automatic resolution of true conflicts — a human always picks (by design).
-- `odoo_quants` not merged (newest push wins).
+- `odoo_quants` not merged (newest baseline wins by max row `importedAt`, v2.51.00 — auto-propagates on import).
 - Conflict-log pruning policy (when to drop resolved entries) deferred to a later pass.

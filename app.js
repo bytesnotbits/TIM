@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.50.00";
+const APP_VERSION = "v2.51.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -897,6 +897,9 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.odoo_quants) && parsed.odoo_quants.length) {
     appData.odoo_quants = parsed.odoo_quants;
     invQuantsBaseline = parsed.odoo_quants;
+    var _qts = invQuantsMaxImportedAt(parsed.odoo_quants);
+    if (_qts) invQuantsBaselineImportedAt = new Date(_qts).toISOString();
+    invSaveQuantsBaseline();   // persist to this device's baseline key so a pulled baseline survives reload
     invRenderQuantsBaselineStatus();
   }
   if (Array.isArray(parsed.recount_sessions))  appData.recount_sessions  = parsed.recount_sessions;
@@ -3302,8 +3305,12 @@ function ghMergeMasters(base, local, remote, ctx) {
       { name: pair[0], fieldMerge: false, keyFn: function(x) { return x ? x[field] : ""; } }, ctx, conflicts);
   });
 
-  // odoo_quants: full Odoo snapshot, not row-merged — newest push (local) wins.
-  merged.odoo_quants = (local.odoo_quants && local.odoo_quants.length) ? local.odoo_quants : (remote.odoo_quants || []);
+  // odoo_quants: full Odoo snapshot, not row-merged. Newest baseline wins by the
+  // most recent row importedAt, so "load once on one device" propagates to every
+  // device (one with a stale/empty baseline adopts the newer shared one). Ties
+  // favor local to avoid re-push churn; an empty baseline (ts 0) always yields.
+  merged.odoo_quants = (invQuantsMaxImportedAt(local.odoo_quants) >= invQuantsMaxImportedAt(remote.odoo_quants))
+    ? (local.odoo_quants || []) : (remote.odoo_quants || []);
 
   // Recount worklist source files: per-cycle snapshots, not row-merged — newest push (local) wins.
   merged.external_count    = (local.external_count    && local.external_count.length)    ? local.external_count    : (remote.external_count    || []);
@@ -11606,6 +11613,33 @@ function invSaveQuantsBaseline() {
   appData.odoo_quants = invQuantsBaseline;
 }
 
+// Freshness of a quants baseline = the most recent row importedAt. Drives the
+// newest-wins sync merge (ghMergeMasters) so "load once on one device" reaches
+// every device: a device with an older/empty baseline adopts the newer shared one.
+function invQuantsMaxImportedAt(arr) {
+  var m = 0;
+  (arr || []).forEach(function(r) {
+    var t = r && r.importedAt ? Date.parse(r.importedAt) : 0;
+    if (t && t > m) m = t;
+  });
+  return m;
+}
+
+// Debounced GitHub push after a quants IMPORT so the baseline propagates to the
+// shared PRIVATE data repo as quants.json (same machinery as boxes/pallets;
+// nothing goes to the public Pages site). Respects testing mode + config via the
+// guards inside ghPushToGitHub; retries while a sync is already in flight. Only a
+// deliberate import schedules this — a local Clear stays local.
+var _quantsPushTimer = null;
+function scheduleQuantsPush() {
+  if (typeof ghConfigured !== "function" || !ghConfigured()) return;
+  clearTimeout(_quantsPushTimer);
+  _quantsPushTimer = setTimeout(function() {
+    if (typeof ghSyncInFlight !== "undefined" && ghSyncInFlight) { scheduleQuantsPush(); return; }
+    ghPushToGitHub({ auto: true });
+  }, 4000);
+}
+
 function invLoadQuantsBaseline() {
   return TimDB.get(INV_QUANTS_BASELINE_KEY).then(function(saved) {
     if (saved && Array.isArray(saved.quants) && saved.quants.length) {
@@ -11745,6 +11779,7 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   invQuantsBaseline = kept.concat(newRows);
   invQuantsBaselineImportedAt = importedAt;
   invSaveQuantsBaseline();
+  scheduleQuantsPush();   // load once → propagate to every device via the private data repo
   invRenderQuantsBaselineStatus();
 
   // ── 2. Merge quant IDs into invOdooQuantMap ─────────────────────────
