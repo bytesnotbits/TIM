@@ -688,7 +688,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | Function | Purpose |
 |----------|---------|
 | `invImportQuantsBaseline(file)` | Load Quants CSV file |
-| `invProcessQuantsBaselineCsv(text, fileName)` | Parse Quants CSV → upsert `invQuantsBaseline` |
+| `invProcessQuantsBaselineCsv(text, fileName)` | Parse Quants CSV → REPLACES `invQuantsBaseline` (full Physical Inventory export; no merge) |
 | `invRenderQuantsBaselineStatus()` | Update Quants status chip in UI |
 | `invSaveQuantsBaseline()` | Persist quants to IDB + `appData.odoo_quants` (push-free; a Clear stays local) |
 | `invQuantsMaxImportedAt(arr)` | Baseline freshness = most recent row `importedAt`; drives the newest-wins quants sync merge (v2.51.00) |

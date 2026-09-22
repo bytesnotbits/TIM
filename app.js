@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.52.02";
+const APP_VERSION = "v2.52.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -10,7 +10,7 @@ const APP_VERSION = "v2.52.02";
 const DATA_SCHEMA_VERSION = 1;
 
 // Stamp version into title bar, app header, and schema docs heading
-document.title = document.title.replace(/v[\d.]+$/, APP_VERSION);
+document.title = document.title.replace(/v[\d.—]+$/, APP_VERSION);
 const _verSpan = document.querySelector('.app-version');
 if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
@@ -11800,15 +11800,12 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   if (!newRows.length)
     throw new Error("No valid rows found. Verify this is an Odoo Quants export with product, location, and quantity columns (technical names or the default 'Product' / 'Location' / 'Quantity' display headers).");
 
-  // ── 1. Upsert baseline ──────────────────────────────────────────────
-  var incomingKeys = {};
-  newRows.forEach(function(r) {
-    incomingKeys[r.itemNumber + "||" + r.locationId + "||" + r.lotId] = true;
-  });
-  var kept = invQuantsBaseline.filter(function(q) {
-    return !incomingKeys[q.itemNumber + "||" + q.locationId + "||" + q.lotId];
-  });
-  invQuantsBaseline = kept.concat(newRows);
+  // ── 1. Replace baseline ─────────────────────────────────────────────
+  // Each import is a FULL Physical Inventory export, so it replaces the whole
+  // baseline. The old item+location+lot upsert kept a lot's previous-location
+  // row when it moved (reel summed old + new footage) and never dropped
+  // consumed lots — v2.52.03.
+  invQuantsBaseline = newRows;
   invQuantsBaselineImportedAt = importedAt;
   invSaveQuantsBaseline();
   scheduleQuantsPush();   // load once → propagate to every device via the private data repo
