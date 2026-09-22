@@ -731,8 +731,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 |----------|---------|
 | `invActiveEventCount()` | Count of non-voided, non-`void_event` events — same filter `invBuildGapReport()` reads; used to detect a stale Gap Analysis run |
 | `invRunGapAnalysis()` | Entry point — validates prerequisites + calls build; records `invGapAnalysisLastRunSessionId`/`invGapAnalysisLastRunEventCount` so `invClearSession()` can warn if the loaded session hasn't been analyzed yet, or was analyzed before events were later added |
-| `invBuildGapReport()` | **Core**: compare active session events vs `invQuantsBaseline`; returns `{ serialized, bulk, reels }` |
+| `invBuildGapReport()` | **Core**: compare active session events vs `invQuantsBaseline`; returns `{ serialized, bulk, reels }`. Every gap row also carries `seq`/`seqLast`/`sessionName` (v2.54.00) so a variance can be placed back in the order material was counted; baseline-only gaps (missing / not counted) have no scan and carry `seq: null` |
 | `invRenderGapReport(report)` | Render gap report card with collapsible sections + summary chips |
+| `_invGapOrderCells(g)` | Shared **Seq** + **Session** cells appended to all three gap tables. No counted event → dash; a bulk row spanning several scans → `#12&ndash;#18`. Session always travels with Seq because `sequence` restarts at 1 each session |
 
 ---
 
@@ -832,10 +833,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 |----------|---------|
 | `exportInvEventLogCsv()` | Export event log to CSV |
 | `exportInvSummaryCsv()` | Export summary to CSV |
-| `exportInvEventLogXlsx()` | Export event log to XLSX |
-| `exportInvSummaryXlsx()` | Export summary to XLSX |
-| `exportRecountXlsx()` | Export recount results to XLSX |
-| `invMakeXlsx(headers, rows, sheet)` | Build XLSX workbook (returns wb; used by the inv event-log/summary/adjustment picker — cells typed by JS value, not force-text) |
+| `exportInvEventLogXlsx()` | Export event log to XLSX (force-text via `timDownloadXlsx` since v2.54.00) |
+| `exportInvSummaryXlsx()` | Export summary to XLSX (force-text via `timDownloadXlsx` since v2.54.00) |
+| `exportRecountXlsx()` | Export recount results to XLSX (builds its own sheet — **not** force-text; no long numeric IDs in its columns) |
 | `buildEventLogBaseRow(e)` | Build common CSV/XLSX fields for an event |
 | `buildInvSummaryMap(events)` | Aggregate events by item |
 | `buildExportPayload()` | Build full master JSON payload (10yr purge); includes `odoo_quants`, `recount_sessions`, `recount_movements` |

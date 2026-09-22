@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.53.03";
+const APP_VERSION = "v2.54.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -11500,16 +11500,6 @@ function exportRecountXlsx() {
 // PHASE 8 — XLSX EXPORTS (replaces CSV)
 // ===================================================================
 
-function invMakeXlsx(headers, rows, sheetName) {
-  var ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
-  ws["!cols"] = headers.map(function(h, i) {
-    return { wch: Math.max(h.length, rows.reduce(function(m, r) { return Math.max(m, String(r[i]||"").length); }, 0)) + 2 };
-  });
-  var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, sheetName || "Sheet1");
-  return wb;
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // GENERAL XLSX EXPORT — the single "download a spreadsheet" path so no export
 // hands the user a raw CSV anymore. Writing .xlsx (not .csv) is what stops
@@ -11613,8 +11603,7 @@ function exportInvEventLogXlsx() {
   var rows = invEvents.map(function(e) {
     return buildEventLogBaseRow(e).concat([e.flagged ? "Yes" : "", e.notes || ""]);
   });
-  var wb = invMakeXlsx(headers, rows, "Event Log");
-  XLSX.writeFile(wb, "inv-event-log-" + new Date().toISOString().slice(0,10) + ".xlsx");
+  timDownloadXlsx("inv-event-log-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Event Log");
 }
 
 function exportInvSummaryXlsx() {
@@ -11625,8 +11614,7 @@ function exportInvSummaryXlsx() {
     var r = map[k];
     return [r.item, r.description, r.countedQty, r.serializedCount, r.reelFootage || "", r.exceptions, r.flagged || "", r.lastCounted];
   });
-  var wb = invMakeXlsx(headers, rows, "Summary");
-  XLSX.writeFile(wb, "inv-summary-" + new Date().toISOString().slice(0,10) + ".xlsx");
+  timDownloadXlsx("inv-summary-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Summary");
 }
 
 // ===================================================================
@@ -11704,8 +11692,7 @@ function exportInvOdooAdjustmentXlsx() {
   var result = buildOdooAdjustmentRows(invEvents);
   if (!result.rows.length) { alert("No countable events to export."); return; }
   invWarnBlankLocations(result.rows);
-  var wb = invMakeXlsx(result.headers, result.rows, "Inventory Adjustment");
-  XLSX.writeFile(wb, "odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  timDownloadXlsx("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx", result.headers, result.rows, "Inventory Adjustment");
   invShowOdooImportReminder(result.rows.length);
 }
 
@@ -13583,6 +13570,13 @@ function invBuildGapReport() {
     return e.status !== "voided" && e.eventType !== "void_event";
   });
 
+  // Count-order provenance stamped onto every gap row. `sequence` restarts at 1
+  // each session, so it only identifies a scan when paired with the session --
+  // the two columns always travel together. Gaps that come from the quants
+  // baseline alone (missing / not counted) have no scan to point at and carry
+  // no seq; that blank is itself the finding.
+  var gapSession = (invSession && (invSession.sessionName || invSession.sessionId)) || "";
+
   // Counted reels: normKey(reelNumber) → event
   var countedReels = {};
   // Counted serialized units. A device is matched on IDENTITY (any of its
@@ -13622,9 +13616,13 @@ function invBuildGapReport() {
       // reconciled via the serialized index above.
       var bk = defCode + "||" + loc;
       if (!countedBulk[bk]) {
-        countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "" };
+        countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "", seq: null, seqLast: null };
       }
       countedBulk[bk].qty += (e.qty || 1);
+      // A bulk gap aggregates several scans, so keep the first and last sequence
+      // rather than one: the row then spans where in the count it happened.
+      if (countedBulk[bk].seq == null) countedBulk[bk].seq = e.sequence;
+      countedBulk[bk].seqLast = e.sequence;
     }
   });
 
@@ -13651,9 +13649,9 @@ function invBuildGapReport() {
       matchedBulk[bk] = true;
       var counted = countedBulk[bk];
       if (!counted) {
-        bulkGaps.push({ gapType: "not_counted", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: null });
+        bulkGaps.push({ gapType: "not_counted", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: null, seq: null, seqLast: null, sessionName: "" });
       } else if (counted.qty !== q.odooQty) {
-        bulkGaps.push({ gapType: "qty_mismatch", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: counted.qty });
+        bulkGaps.push({ gapType: "qty_mismatch", itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooQty: q.odooQty, countedQty: counted.qty, seq: counted.seq, seqLast: counted.seqLast, sessionName: gapSession });
       }
     } else {
       var lotNorm = normKey(q.lotId);
@@ -13663,13 +13661,13 @@ function invBuildGapReport() {
         var reelEvt  = countedReels[lotNorm];
         var countedFt = reelEvt.totalAvailableFt != null ? reelEvt.totalAvailableFt : 0;
         if (Math.abs(countedFt - q.odooQty) > 0.5) {
-          reelGaps.push({ gapType: "footage_diff", reelNumber: q.lotId, itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooFt: q.odooQty, countedFt: countedFt });
+          reelGaps.push({ gapType: "footage_diff", reelNumber: q.lotId, itemNumber: q.itemNumber, description: q.description, location: q.locationId, odooFt: q.odooQty, countedFt: countedFt, seq: reelEvt.sequence, seqLast: reelEvt.sequence, sessionName: gapSession });
         }
       } else {
         // ── Serialized quant (or uncounted reel) ── match on identity, any id
         var evtIdx = countedSerialIndex[lotNorm];
         if (evtIdx === undefined) {
-          serialGaps.push({ gapType: "missing", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId });
+          serialGaps.push({ gapType: "missing", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId, seq: null, seqLast: null, sessionName: "" });
         } else {
           matchedSerialIdx[evtIdx] = true;
           // Matched unit found — flag only if it was counted somewhere other
@@ -13677,7 +13675,7 @@ function invBuildGapReport() {
           var expectLoc = normKey(q.locationBarcode || q.locationId);
           var gotLoc    = normKey(countedSerialEvents[evtIdx].location || "");
           if (expectLoc && gotLoc && expectLoc !== gotLoc) {
-            serialGaps.push({ gapType: "moved", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId, countedLocation: countedSerialEvents[evtIdx].location || "" });
+            serialGaps.push({ gapType: "moved", itemNumber: q.itemNumber, description: q.description, serial: q.lotId, location: q.locationId, countedLocation: countedSerialEvents[evtIdx].location || "", seq: countedSerialEvents[evtIdx].sequence, seqLast: countedSerialEvents[evtIdx].sequence, sessionName: gapSession });
           }
         }
       }
@@ -13687,7 +13685,7 @@ function invBuildGapReport() {
   // Counted serialized units with no matching quant
   countedSerialEvents.forEach(function(e, i) {
     if (!matchedSerialIdx[i]) {
-      serialGaps.push({ gapType: "unexpected", itemNumber: e.itemNumber || "", description: e.description || "", serial: e.serial || e.fsan || e.scannedValue || "", location: e.location || "" });
+      serialGaps.push({ gapType: "unexpected", itemNumber: e.itemNumber || "", description: e.description || "", serial: e.serial || e.fsan || e.scannedValue || "", location: e.location || "", seq: e.sequence, seqLast: e.sequence, sessionName: gapSession });
     }
   });
 
@@ -13695,7 +13693,7 @@ function invBuildGapReport() {
   Object.keys(countedBulk).forEach(function(bk) {
     if (!matchedBulk[bk]) {
       var r = countedBulk[bk];
-      bulkGaps.push({ gapType: "not_in_quants", itemNumber: r.defCode, description: r.description, location: r.loc, odooQty: null, countedQty: r.qty });
+      bulkGaps.push({ gapType: "not_in_quants", itemNumber: r.defCode, description: r.description, location: r.loc, odooQty: null, countedQty: r.qty, seq: r.seq, seqLast: r.seqLast, sessionName: gapSession });
     }
   });
 
@@ -13703,11 +13701,24 @@ function invBuildGapReport() {
   Object.keys(countedReels).forEach(function(rn) {
     if (!matchedReels[rn]) {
       var e = countedReels[rn];
-      reelGaps.push({ gapType: "not_in_quants", reelNumber: e.reelNumber || e.scannedValue || rn, itemNumber: e.itemNumber || "", description: e.description || "", location: e.location || "", countedFt: e.totalAvailableFt });
+      reelGaps.push({ gapType: "not_in_quants", reelNumber: e.reelNumber || e.scannedValue || rn, itemNumber: e.itemNumber || "", description: e.description || "", location: e.location || "", countedFt: e.totalAvailableFt, seq: e.sequence, seqLast: e.sequence, sessionName: gapSession });
     }
   });
 
   return { serialGaps: serialGaps, bulkGaps: bulkGaps, reelGaps: reelGaps };
+}
+
+// Seq / Session cells for a gap row. A gap with no counted event (missing, not
+// counted) renders a dash -- nothing was scanned, so there is no position in the
+// count order to point at. Bulk rows aggregate several scans and show the span
+// they covered. Session travels with Seq because sequence numbers restart at 1
+// every session and mean nothing on their own.
+function _invGapOrderCells(g) {
+  var seq = (g.seq == null) ? "&mdash;"
+    : (g.seqLast != null && g.seqLast !== g.seq) ? ("#" + g.seq + "&ndash;#" + g.seqLast)
+    : ("#" + g.seq);
+  return '<td style="text-align:right;white-space:nowrap;color:#475569;">' + seq + '</td>' +
+         '<td style="white-space:nowrap;color:#475569;">' + (g.sessionName ? escapeHtml(g.sessionName) : "&mdash;") + '</td>';
 }
 
 function invRenderGapReport(report) {
@@ -13759,7 +13770,7 @@ function invRenderGapReport(report) {
     if (!report.serialGaps.length) {
       serialTbl.outerHTML = '<table id="invGapSerialTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No serialized gaps</td></tr></tbody></table>';
     } else {
-      var rows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Serial / FSAN</th><th>Location</th></tr></thead><tbody>' +
+      var rows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Serial / FSAN</th><th>Location</th><th>Seq</th><th>Session</th></tr></thead><tbody>' +
         report.serialGaps.map(function(g) {
           var typeLabel = g.gapType === "missing" ? '<span style="color:#b91c1c;font-weight:600;">Missing</span>'
             : g.gapType === "moved" ? '<span style="color:#2563eb;font-weight:600;">Moved</span>'
@@ -13767,7 +13778,7 @@ function invRenderGapReport(report) {
           var locCell = g.gapType === "moved"
             ? escapeHtml(g.location) + ' <span style="color:#64748b;">&rarr;</span> ' + escapeHtml(g.countedLocation || "")
             : escapeHtml(g.location);
-          return '<tr><td>' + typeLabel + '</td><td>' + escapeHtml(g.itemNumber) + '</td><td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td><td style="font-family:monospace;">' + escapeHtml(g.serial) + '</td><td>' + locCell + '</td></tr>';
+          return '<tr><td>' + typeLabel + '</td><td>' + escapeHtml(g.itemNumber) + '</td><td style="max-width:200px;white-space:normal;">' + escapeHtml(g.description) + '</td><td style="font-family:monospace;">' + escapeHtml(g.serial) + '</td><td>' + locCell + '</td>' + _invGapOrderCells(g) + '</tr>';
         }).join("") + '</tbody>';
       serialTbl.outerHTML = '<table id="invGapSerialTable">' + rows + '</table>';
     }
@@ -13782,7 +13793,7 @@ function invRenderGapReport(report) {
       bulkTbl.outerHTML = '<table id="invGapBulkTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No bulk gaps</td></tr></tbody></table>';
     } else {
       var bulkTypeLabel = { qty_mismatch: '<span style="color:#d97706;font-weight:600;">Qty mismatch</span>', not_counted: '<span style="color:#b91c1c;font-weight:600;">Not counted</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>' };
-      var brows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Qty</th><th>Counted Qty</th><th>Diff</th></tr></thead><tbody>' +
+      var brows = '<thead><tr><th>Type</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Qty</th><th>Counted Qty</th><th>Diff</th><th>Seq</th><th>Session</th></tr></thead><tbody>' +
         report.bulkGaps.map(function(g) {
           var diff = (g.odooQty != null && g.countedQty != null) ? (g.countedQty - g.odooQty) : "—";
           var diffStyle = (typeof diff === "number" && diff !== 0) ? (diff > 0 ? "color:#16a34a;" : "color:#b91c1c;") : "";
@@ -13795,6 +13806,7 @@ function invRenderGapReport(report) {
             '<td style="text-align:right;">' + (g.odooQty != null ? g.odooQty : "—") + '</td>' +
             '<td style="text-align:right;">' + (g.countedQty != null ? g.countedQty : "—") + '</td>' +
             '<td style="text-align:right;' + diffStyle + '">' + diffStr + '</td>' +
+            _invGapOrderCells(g) +
             '</tr>';
         }).join("") + '</tbody>';
       bulkTbl.outerHTML = '<table id="invGapBulkTable">' + brows + '</table>';
@@ -13810,7 +13822,7 @@ function invRenderGapReport(report) {
       reelTbl.outerHTML = '<table id="invGapReelTable"><tbody><tr><td style="color:#16a34a;padding:8px 0;font-size:13px;">&#10003; No reel gaps</td></tr></tbody></table>';
     } else {
       var reelTypeLabel = { footage_diff: '<span style="color:#d97706;font-weight:600;">Footage diff</span>', not_in_quants: '<span style="color:#7c3aed;font-weight:600;">Not in quants</span>' };
-      var rrows = '<thead><tr><th>Type</th><th>Reel #</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Ft</th><th>Counted Ft</th></tr></thead><tbody>' +
+      var rrows = '<thead><tr><th>Type</th><th>Reel #</th><th>Item</th><th>Description</th><th>Location</th><th>Odoo Ft</th><th>Counted Ft</th><th>Seq</th><th>Session</th></tr></thead><tbody>' +
         report.reelGaps.map(function(g) {
           return '<tr>' +
             '<td>' + (reelTypeLabel[g.gapType] || g.gapType) + '</td>' +
@@ -13820,6 +13832,7 @@ function invRenderGapReport(report) {
             '<td>' + escapeHtml(g.location) + '</td>' +
             '<td style="text-align:right;">' + (g.odooFt != null ? g.odooFt : "—") + '</td>' +
             '<td style="text-align:right;">' + (g.countedFt != null ? g.countedFt : "—") + '</td>' +
+            _invGapOrderCells(g) +
             '</tr>';
         }).join("") + '</tbody>';
       reelTbl.outerHTML = '<table id="invGapReelTable">' + rrows + '</table>';
