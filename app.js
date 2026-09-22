@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.52.00";
+const APP_VERSION = "v2.52.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -10462,7 +10462,10 @@ function invSubmitReelEntry(silent) {
   if (swapAudit.length) eventData.sequenceSwaps = swapAudit;
 
   eventData.qty = eventData.totalAvailableFt;
-  invCreateEvent("cable_reel_count", eventData);
+  var _reelEvt = invCreateEvent("cable_reel_count", eventData);
+  // Phase 3: write the count through to the reel registry — resurrects the reel,
+  // records count footage, and makes the floor reading the shared reference.
+  if (typeof reelUpsertFromCount === "function") reelUpsertFromCount(_reelEvt || eventData);
   invReelResetSwaps();
 
   if (!silent) {
@@ -11968,23 +11971,33 @@ function reelDirtyQuantLots() {
 }
 
 // Recompute all derived fields + provenance from the source-owned fields.
-// Called after every write to either source.
+// Called after every write to any source (quants / reference / count).
 function reelRecomputeDerived(e) {
   if (!e) return;
   e.refFt = (e.innerSeq != null && e.outerSeq != null) ? Math.abs(e.outerSeq - e.innerSeq) : null;
   var isLive = (e.presence === "live");
-  // Live, on-hand, but no reference sequences captured yet → capture at next scan.
+  // Effective footage: a floor count NEWER than the quants baseline is ground
+  // truth (Phase 3); otherwise the quants on-hand.
+  var ftFromCount = !!(e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || ""));
+  var effFt = ftFromCount ? e.lastCountedFt : e.onHandFt;
+  // When the current sequences AND the effective footage both came from the SAME
+  // count, they're consistent by construction (this also covers two-way reels,
+  // whose footage is a two-span sum the single refFt pair can't equal) → not stale.
+  var seqFromCount = !!(e.lastCountedAt && e.refCountDate && e.refCountDate === e.lastCountedAt);
+  var sameCount = seqFromCount && ftFromCount;
+  // Live, on-hand, but no sequences captured yet → capture at next scan.
   e.needsSequences = isLive && (e.innerSeq == null || e.outerSeq == null);
-  // Live footage no longer matches what the last-known sequences imply → re-verify
-  // the markers physically. Only meaningful when we have both a live footage and a
-  // reference pair. Blank-sequence reels (duct/plowduct) never flag.
-  e.sequenceStale = isLive && (e.refFt != null) && (e.onHandFt != null) &&
-                    Math.abs((e.onHandFt || 0) - e.refFt) > REEL_STALE_TOL_FT;
+  // Effective footage no longer matches what the current sequences imply → re-verify
+  // the markers physically. Blank-sequence reels (duct/plowduct) never flag.
+  e.sequenceStale = isLive && !sameCount && (e.refFt != null) && (effFt != null) &&
+                    Math.abs((effFt || 0) - e.refFt) > REEL_STALE_TOL_FT;
   var hasRef    = (e.innerSeq != null || e.outerSeq != null || !!e.refCountDate);
   var hasQuants = !!e.quantsAt;
+  var hasCount  = !!e.lastCountedAt;
   e.source = (hasRef && hasQuants) ? "quants+reels"
            : hasQuants ? "quants-only"
            : hasRef ? "reels-only"
+           : hasCount ? "count"
            : (e.source || "");
 }
 
@@ -12024,6 +12037,51 @@ function reelUpsertReference(row) {
   if (row.desc) e.description = row.desc;
   e.updatedAt = nowISO; e.updatedBy = reelWho();
   reelRecomputeDerived(e);
+  return e;
+}
+
+// Count writer (Phase 3, v2.52.01) — a live cable_reel_count scan. A physical
+// count is the freshest reading of a reel, so it: RESURRECTS the reel (presence
+// → "live", surviving reload/sync, not just the read-time display), records its
+// footage as the count-owned truth (lastCountedFt/At), and writes its span-A
+// sequences into the reference fields with refCountDate = the count time — so the
+// floor reading becomes the shared reference (propagates via reels.json) and an
+// OLDER Product Reels import can't overwrite it (analyze's skip_older path). The
+// same-count guard in reelRecomputeDerived keeps it from false-flagging Stale.
+// `ev` = the cable_reel_count event (post-invCreateEvent, carries `timestamp`).
+function reelUpsertFromCount(ev) {
+  if (!ev || !ev.reelNumber) return null;
+  if (!appData.reels) appData.reels = {};
+  var k = normKey(ev.reelNumber);
+  if (!k) return null;
+  var nowISO = new Date().toISOString();
+  var ts = ev.timestamp || nowISO;
+  var e = appData.reels[k];
+  if (!e) {
+    e = {
+      reelNumber:  ev.reelNumber, itemNumber: ev.itemNumber || "", description: ev.description || "",
+      onHandFt:    null, locationId: ev.location || "", presence: "live", quantsAt: "",
+      innerSeq:    null, outerSeq: null, refFt: null, notes: "", refCountDate: "",
+      spanType:    ev.spanType || "single", source: "count",
+      createdAt:   nowISO, createdBy: reelWho(), updatedAt: nowISO, updatedBy: reelWho()
+    };
+    appData.reels[k] = e;
+  }
+  e.presence      = "live";   // physically counted ⇒ here (resurrects a "gone" reel)
+  e.lastCountedFt = (ev.totalAvailableFt != null) ? ev.totalAvailableFt : (ev.qty != null ? ev.qty : null);
+  e.lastCountedAt = ts;
+  e.lastCountedBy = reelWho();
+  if (ev.innerSeqA != null && ev.innerSeqA !== "") e.innerSeq = Number(ev.innerSeqA);
+  if (ev.outerSeqA != null && ev.outerSeqA !== "") e.outerSeq = Number(ev.outerSeqA);
+  e.refCountDate  = ts;       // newest reference — blocks an older Product Reels overwrite
+  e.spanType      = ev.spanType || e.spanType || "single";
+  if (ev.location) e.locationId = ev.location;
+  if (!e.itemNumber && ev.itemNumber) e.itemNumber = ev.itemNumber;
+  if (ev.description) e.description = ev.description;
+  if (ev.notes) e.notes = ev.notes;
+  e.updatedAt = nowISO; e.updatedBy = reelWho();
+  reelRecomputeDerived(e);
+  reelSaveToStorage();        // real change → local + GitHub push (rides reels.json)
   return e;
 }
 
@@ -12073,9 +12131,14 @@ function reelSyncFromQuants() {
       e.quantsAt   = stamp;
       summary.live++;
     } else {
-      // Only reels we've actually confirmed via quants before can go "gone";
-      // a reference-only "unconfirmed" reel stays unconfirmed (never seen in quants).
-      if (e.quantsAt) { e.presence = "gone"; summary.gone++; }
+      // Absent from the new baseline. A reel COUNTED after this baseline is
+      // physically here → keep it live (a floor scan outranks the baseline's
+      // silence). Otherwise: reels we'd confirmed via quants before go "gone"
+      // (archived, retrievable); a reference-only "unconfirmed" reel that quants
+      // has never seen stays unconfirmed.
+      var countedAfter = !!(e.lastCountedAt && e.lastCountedAt > (stamp || ""));
+      if (countedAfter)       { e.presence = "live"; summary.live++; }
+      else if (e.quantsAt)    { e.presence = "gone"; summary.gone++; }
     }
     reelRecomputeDerived(e);
   });

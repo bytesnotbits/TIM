@@ -765,8 +765,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `reelSaveToStorage()` / `reelLoadFromStorage()` | Persist/load `appData.reels` (Phase 1: local only) |
 | `reelGet(reelNumber)` / `reelAll()` | Fetch one entry by reel number / all entries |
 | `reelItemIsReelTracked(itemNumber)` | Gate: is the item `tracking_type:"reel"` in PRODUCT_MAP? (which quant lots enter the registry) |
-| `reelRecomputeDerived(e)` | Recompute `refFt` / `needsSequences` / `sequenceStale` / `source` from the source-owned fields |
+| `reelRecomputeDerived(e)` | Recompute `refFt` / `needsSequences` / `sequenceStale` / `source`. Effective footage = `lastCountedFt` if a count is newer than `quantsAt`, else `onHandFt`; stale check SKIPPED when footage+sequences came from the same count (covers two-way) |
 | `reelUpsertReference(row)` | **Reference writer** — upsert inner/outer/notes/refCountDate from a parsed reel-CSV row (footage untouched) |
+| `reelUpsertFromCount(ev)` | **Count writer** (Phase 3, v2.52.01) — a live `cable_reel_count` event: sets `lastCountedFt`/`lastCountedAt`/`lastCountedBy`, resurrects (`presence:"live"`), writes span-A seq → `innerSeq`/`outerSeq` + `refCountDate` = count time. Hooked in `invSubmitReelEntry` after `invCreateEvent`. Pushes via `reelSaveToStorage` |
 | `reelSyncFromQuants()` | **Live-truth writer** — reconcile footage/presence against `invQuantsBaseline`; create new reels; archive (`gone`) / resurrect. Returns `{live,gone,created,resurrected}`. Called after every baseline change (import, load, boot, master-JSON adopt). Persists LOCAL only (`_reelPersistLocal`) — footage re-derives from synced `quants.json`, so it never schedules a GitHub push |
 | `_reelPersistLocal()` / `reelSaveToStorage()` | IDB write only / IDB write + `scheduleReelPush()`. Reference writes use the latter; the quants reconcile uses the former |
 | `scheduleReelPush()` / `_reelPushTimer` | Debounced `reels.json` push (v2.52.00 Phase 2), guarded by `ghConfigured` + `ghSyncInFlight` — mirrors `scheduleBoxPush` |
