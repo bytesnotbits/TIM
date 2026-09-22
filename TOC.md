@@ -754,13 +754,27 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 
 ---
 
-### Reel Lookup (Products tab)
+### Reel Registry (`appData.reels`, v2.52.00)
 
-> Read-only browse of last-known reel footage, in the Products tab — no inventory session required. Sources reel data straight from `cable_reel_count` events (master + active session), deduped to the latest non-voided event per item+reel. Searchable by item number or reel number; grouped by item; item links open `prodShowItemHistory`.
+> Durable per-reel record keyed by `normKey(reelNumber)` — the merged home for reels. **Two writers with NO field overlap** (so re-importing either is idempotent): `reelSyncFromQuants` owns live footage/location/presence (from the Odoo quants baseline); `reelUpsertReference` owns inner/outer sequences + notes (from the Odoo "Product Reels" standalone view). The derived `sequenceStale` flag surfaces when live footage no longer matches `|inner−outer|` — never auto-corrected. Footage precedence: live count event > quants > reference. A reel absent from quants is archived (`presence:"gone"`, retrievable), resurrecting to `live` when it reappears. Persisted under `tim_reels_v1` + carried in the master-JSON export (dedicated `reels.json` GitHub sync is Phase 2). See Data Dictionary → ReelEntry.
 
 | Function / Variable | Purpose |
 |---------------------|---------|
-| `reelLookupBuildList()` | Aggregate non-voided `cable_reel_count` events → latest per item+reel |
+| `REEL_STORAGE_KEY` / `REEL_STALE_TOL_FT` | IDB key `tim_reels_v1` / staleness tolerance in ft (2) |
+| `reelSaveToStorage()` / `reelLoadFromStorage()` | Persist/load `appData.reels` (Phase 1: local only) |
+| `reelGet(reelNumber)` / `reelAll()` | Fetch one entry by reel number / all entries |
+| `reelItemIsReelTracked(itemNumber)` | Gate: is the item `tracking_type:"reel"` in PRODUCT_MAP? (which quant lots enter the registry) |
+| `reelRecomputeDerived(e)` | Recompute `refFt` / `needsSequences` / `sequenceStale` / `source` from the source-owned fields |
+| `reelUpsertReference(row)` | **Reference writer** — upsert inner/outer/notes/refCountDate from a parsed reel-CSV row (footage untouched) |
+| `reelSyncFromQuants()` | **Live-truth writer** — reconcile footage/presence against `invQuantsBaseline`; create new reels; archive (`gone`) / resurrect. Returns `{live,gone,created,resurrected}`. Called after every baseline change (import, load, boot, master-JSON adopt) |
+
+### Reel Lookup (Products tab)
+
+> Read-only browse of every reel TIM knows, in the Products tab — no inventory session required. Unions the **reel registry** with live `cable_reel_count` events (a real count wins over registry footage). Searchable by item number or reel number; grouped by item; item links open `prodShowItemHistory`.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `reelLookupBuildList()` | Union: latest non-voided count event per item+reel, then registry entries for every reel WITHOUT a count event (footage = quants on-hand, else reference). Carries `_fromRegistry`/`presence`/`sequenceStale`/`needsSequences`/`source` for Phase 2 badges |
 | `reelLookupRender()` | Render the Reel Lookup card: filter by `#reelLookupSearch`, group by item, one row per reel. Flows with the page (`.flow-table`); rows lazy-render in chunks via `timLazyRender` (no hard cap) |
 
 ---
@@ -774,7 +788,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `_REEL_CSV_LEGACY` / `_REEL_CSV_FIELDS` | Legacy positional column order / accepted header-name synonyms per field |
 | `_reelCsvDetectCols(headerRow)` | Build `{field → colIndex}` from a header row by name; null if unrecognizable |
 | `_reelCsvParseDate(raw)` | Parse reel CSV date (ISO `YYYY-MM-DD HH:MM` **and** US `M/D/YYYY H:MM`); null if unparseable |
-| `_analyzeReelCsvRows(rows, colMap)` | Determine action per row (add / update / skip / skip_active); reads via `colMap`; tags each row with `reelKey`/`rawCols`/`dataRowIndex` |
+| `_analyzeReelCsvRows(rows, colMap)` | Determine action per row (add / update / skip_older / skip_equal / skip_active); reads via `colMap`; tags each row with `reelKey`/`rawCols`/`dataRowIndex`. **Compares against the registry REFERENCE (`reelGet`), not count events (v2.52.00)** — older Product Reels rows don't overwrite newer reference |
 | `_reelCsvImportMeta` / `_REEL_CSV_DUP_LIMIT` | Import session meta `{header,dataRows,colMap,dupSets,picks}` / max dup reels before report-only (10) |
 | `_reelCsvDuplicateSets(parsed)` | Group parsed rows by reel number; return sets with >1 row (within-file duplicates) |
 | `_reelCsvDefaultWinnerIdx(rows)` | Default winner of a dup set = most recent dated row, else last occurrence |
@@ -784,7 +798,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `invCsvResolvePick(reelKey, occIdx)` | Pick which row wins a duplicate set; re-renders the resolve modal |
 | `invCsvDownloadCorrectedSource()` | Re-emit the source rows minus dropped duplicates → `reels_corrected_source.xlsx` (XLSX via `timDownloadXlsx`; TIM reads XLSX on re-import) |
 | `invCsvDownloadDupReport()` | Duplicate report (grouped by reel, one row per occurrence) → `reels_duplicate_report.xlsx` |
-| `invConfirmCsvImport()` | Execute import: drop dup losers, create events + export master |
+| `invConfirmCsvImport()` | Execute import: drop dup losers, **upsert reel-registry REFERENCE (inner/outer + notes) via `reelUpsertReference` + reconcile footage via `reelSyncFromQuants` (v2.52.00 — no longer creates `cable_reel_count` events)**, then export master |
 | `invCancelCsvImport()` | Close modal; clear import meta |
 
 ---

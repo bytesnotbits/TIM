@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.51.01";
+const APP_VERSION = "v2.52.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -16,7 +16,7 @@ if (_verSpan) _verSpan.textContent = APP_VERSION;
 const _schemaH3 = document.getElementById('schema-version-heading');
 if (_schemaH3) _schemaH3.textContent = `Master JSON Schema (${APP_VERSION})`;
 
-let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, pallets: {}, external_count: [], product_movements: [], nisc_capture: [], nisc_catalog: {} };
+let appData = { product_map: {}, history: { records: [] }, inventory_sessions: [], inventory_events: [], barcode_map: {}, odoo_quants: [], boxes: {}, pallets: {}, reels: {}, external_count: [], product_movements: [], nisc_capture: [], nisc_catalog: {} };
 let PRODUCT_MAP = appData.product_map;
 // True once the UI has been rendered (by loadSourceData or timRenderRestored).
 // Lets a failed boot sync fall back to rendering the cached data instead of
@@ -911,6 +911,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
   if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); if (typeof invRenderBoxManager === "function") invRenderBoxManager(); }
   if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; palletSaveToStorage(); if (typeof palletRender === "function") palletRender(); }
+  if (parsed.reels && typeof parsed.reels === "object") { appData.reels = parsed.reels; reelSaveToStorage(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -929,6 +930,7 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (lastLoadedRows.length) processRows(lastLoadedRows);
   else renderAll();
   prodRenderList();
+  reelSyncFromQuants();   // reconcile reel registry now that quants + reels are both in memory
   reelLookupRender();
   checkReelItemConflicts();
   timSaveMasterCache();
@@ -11647,6 +11649,7 @@ function invLoadQuantsBaseline() {
       invQuantsBaselineImportedAt = saved.importedAt || null;
       appData.odoo_quants = invQuantsBaseline;
       invRenderQuantsBaselineStatus();
+      reelSyncFromQuants();   // reconcile reel registry against the loaded baseline
     }
   }).catch(function(){});
 }
@@ -11781,6 +11784,8 @@ function invProcessQuantsBaselineCsv(text, fileName) {
   invSaveQuantsBaseline();
   scheduleQuantsPush();   // load once → propagate to every device via the private data repo
   invRenderQuantsBaselineStatus();
+  reelSyncFromQuants();   // refresh reel-registry footage/presence from the new baseline
+  if (typeof reelLookupRender === "function") reelLookupRender();
 
   // ── 2. Merge quant IDs into invOdooQuantMap ─────────────────────────
   // Overwrites matching keys with fresh IDs; leaves unrelated entries intact.
@@ -11832,6 +11837,207 @@ function invProcessQuantsBaselineCsv(text, fileName) {
         " known to history · " + cov.unknown.toLocaleString() + " new (auto-count from Odoo).";
     }
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// REEL REGISTRY — durable per-reel record (appData.reels)  [v2.52.00]
+// ═══════════════════════════════════════════════════════════════════════
+// Keyed by normalized reel number. Two independent writers with NO field
+// overlap, so re-importing either source is idempotent and never clobbers the
+// other:
+//   • reelSyncFromQuants()   — owns onHandFt / locationId / presence / quantsAt
+//                              (the LIVE truth, from the Odoo quants baseline).
+//   • reelUpsertReference()  — owns innerSeq / outerSeq / notes / refCountDate
+//                              (last-known REFERENCE, from the Odoo "Product
+//                              Reels" standalone view, which doesn't track moves).
+// The only cross-source interaction is the DERIVED sequenceStale flag: when the
+// live footage no longer matches |inner-outer|, the sequences are flagged for
+// physical re-verify — we never fabricate a corrected pair (there's no reliable
+// consumption convention: inner is sometimes > outer, sometimes <).
+// Footage precedence in Reel Lookup: live count event > quants > reference.
+// A reel dropping out of quants is ARCHIVED (presence:"gone"), never deleted,
+// and resurrects to "live" the moment it reappears in a baseline or a scan.
+// Persisted under REEL_STORAGE_KEY + carried in the master-JSON export/import.
+// (Dedicated reels.json GitHub sync is Phase 2.) See the Data Dictionary for
+// the ReelEntry shape.
+// ═══════════════════════════════════════════════════════════════════════
+
+var REEL_STORAGE_KEY = "tim_reels_v1";
+var REEL_STALE_TOL_FT = 2;   // |onHandFt - refFt| within this ⇒ NOT stale (rounding slack)
+
+function reelWho() { return (typeof timGetUsername === "function" ? timGetUsername() : "") || ""; }
+
+function reelSaveToStorage() {
+  // Phase 1: local persistence + it rides in the master JSON via buildExportPayload.
+  // Phase 2 will add a dedicated reels.json GitHub push (scheduleReelPush).
+  TimDB.set(REEL_STORAGE_KEY, appData.reels || {}).catch(function(){});
+}
+function reelLoadFromStorage() {
+  return TimDB.get(REEL_STORAGE_KEY).then(function(saved) {
+    if (saved && typeof saved === "object") appData.reels = saved;
+  }).catch(function(){});
+}
+
+function reelGet(reelNumber) {
+  var k = normKey(reelNumber);
+  return (k && appData.reels) ? (appData.reels[k] || null) : null;
+}
+function reelAll() {
+  var reels = appData.reels || {};
+  return Object.keys(reels).map(function(k) { return reels[k]; }).filter(Boolean);
+}
+
+// Is this item number a reel-tracked product? Gates which quant lots enter the
+// registry from a quants sync (so we don't fold every lot-tracked bulk item in).
+function reelItemIsReelTracked(itemNumber) {
+  if (!itemNumber) return false;
+  var e = PRODUCT_MAP[normKey(itemNumber)];
+  if (!e && typeof findProductMapMatch === "function") {
+    var m = findProductMapMatch(itemNumber);
+    e = m && m.entry;
+  }
+  return !!(e && e.tracking_type === "reel");
+}
+
+// Recompute all derived fields + provenance from the source-owned fields.
+// Called after every write to either source.
+function reelRecomputeDerived(e) {
+  if (!e) return;
+  e.refFt = (e.innerSeq != null && e.outerSeq != null) ? Math.abs(e.outerSeq - e.innerSeq) : null;
+  var isLive = (e.presence === "live");
+  // Live, on-hand, but no reference sequences captured yet → capture at next scan.
+  e.needsSequences = isLive && (e.innerSeq == null || e.outerSeq == null);
+  // Live footage no longer matches what the last-known sequences imply → re-verify
+  // the markers physically. Only meaningful when we have both a live footage and a
+  // reference pair. Blank-sequence reels (duct/plowduct) never flag.
+  e.sequenceStale = isLive && (e.refFt != null) && (e.onHandFt != null) &&
+                    Math.abs((e.onHandFt || 0) - e.refFt) > REEL_STALE_TOL_FT;
+  var hasRef    = (e.innerSeq != null || e.outerSeq != null || !!e.refCountDate);
+  var hasQuants = !!e.quantsAt;
+  e.source = (hasRef && hasQuants) ? "quants+reels"
+           : hasQuants ? "quants-only"
+           : hasRef ? "reels-only"
+           : (e.source || "");
+}
+
+// Reference writer — Product Reels view. Writes ONLY sequence/notes/date fields.
+// `row` is a parsed reel-CSV row from _analyzeReelCsvRows
+// ({ itemNum, reelNum, desc, innerA, outerA, notes, dateRaw, csvDate }).
+function reelUpsertReference(row) {
+  if (!appData.reels) appData.reels = {};
+  var k = normKey(row.reelNum);
+  if (!k) return null;
+  var nowISO = new Date().toISOString();
+  var e = appData.reels[k];
+  if (!e) {
+    e = {
+      reelNumber:  row.reelNum,
+      itemNumber:  row.itemNum || "",
+      description: row.desc || "",
+      onHandFt:    null,           // quants owns this — unknown until a sync
+      locationId:  "",
+      presence:    "unconfirmed",  // becomes live/gone on the next reelSyncFromQuants
+      quantsAt:    "",
+      innerSeq:    null, outerSeq: null, refFt: null,
+      notes:       "", refCountDate: "",
+      spanType:    "single",
+      source:      "reels-only",
+      createdAt:   nowISO, createdBy: reelWho(),
+      updatedAt:   nowISO, updatedBy: reelWho()
+    };
+    appData.reels[k] = e;
+  }
+  // Reference-owned fields only:
+  e.innerSeq = (row.innerA != null && row.innerA !== "" && !isNaN(row.innerA)) ? Number(row.innerA) : null;
+  e.outerSeq = (row.outerA != null && row.outerA !== "" && !isNaN(row.outerA)) ? Number(row.outerA) : null;
+  e.notes    = row.notes || "";
+  e.refCountDate = row.csvDate ? row.csvDate.toISOString() : (row.dateRaw || "");
+  if (!e.itemNumber && row.itemNum) e.itemNumber = row.itemNum;
+  if (row.desc) e.description = row.desc;
+  e.updatedAt = nowISO; e.updatedBy = reelWho();
+  reelRecomputeDerived(e);
+  return e;
+}
+
+// Live-truth writer — the Odoo quants baseline. Writes ONLY footage/location/
+// presence. Reconciles the whole registry against the current baseline:
+//   • reel in baseline           → presence "live", footage refreshed
+//                                   (resurrects a prior "gone" reel)
+//   • reel absent from baseline   → presence "gone" (archived, retrievable)
+//   • baseline reel not yet known → created (source "quants-only", needsSequences)
+// Only reel-tracked items — or reels the registry already knows — are folded in.
+function reelSyncFromQuants() {
+  if (!appData.reels) appData.reels = {};
+  var reels = appData.reels;
+  var nowISO = new Date().toISOString();
+  var stamp  = invQuantsBaselineImportedAt || nowISO;
+
+  // 1. Aggregate live baseline reel lots (footage summed across locations).
+  var live = {};   // normKey(lot) → { reelNumber, onHandFt, itemNumber, description, locationId }
+  (invQuantsBaseline || []).forEach(function(q) {
+    if (!q) return;
+    var lotRaw = q.lotId || "";
+    var lot = normKey(lotRaw);
+    if (!lot) return;
+    if (!reelItemIsReelTracked(q.itemNumber) && !reels[lot]) return;
+    var acc = live[lot] || (live[lot] = {
+      reelNumber: lotRaw, onHandFt: 0,
+      itemNumber: q.itemNumber || "", description: q.description || "", locationId: q.locationId || ""
+    });
+    acc.onHandFt += (typeof q.odooQty === "number" ? q.odooQty : (parseFloat(q.odooQty) || 0));
+    if (!acc.itemNumber  && q.itemNumber)  acc.itemNumber  = q.itemNumber;
+    if (!acc.description && q.description) acc.description = q.description;
+    if (!acc.locationId  && q.locationId)  acc.locationId  = q.locationId;
+  });
+
+  var summary = { live: 0, gone: 0, created: 0, resurrected: 0 };
+
+  // 2. Reconcile existing entries against the live set.
+  Object.keys(reels).forEach(function(k) {
+    var e = reels[k]; if (!e) return;
+    if (live[k]) {
+      if (e.presence === "gone") summary.resurrected++;
+      e.presence   = "live";
+      e.onHandFt   = live[k].onHandFt;
+      e.locationId = live[k].locationId || e.locationId || "";
+      if (!e.itemNumber  && live[k].itemNumber)  e.itemNumber  = live[k].itemNumber;
+      if (!e.description && live[k].description) e.description = live[k].description;
+      e.quantsAt   = stamp;
+      summary.live++;
+    } else {
+      // Only reels we've actually confirmed via quants before can go "gone";
+      // a reference-only "unconfirmed" reel stays unconfirmed (never seen in quants).
+      if (e.quantsAt) { e.presence = "gone"; summary.gone++; }
+    }
+    reelRecomputeDerived(e);
+  });
+
+  // 3. Create entries for live reels not yet in the registry.
+  Object.keys(live).forEach(function(k) {
+    if (reels[k]) return;
+    var L = live[k];
+    var e = {
+      reelNumber:  L.reelNumber,
+      itemNumber:  L.itemNumber || "",
+      description: L.description || "",
+      onHandFt:    L.onHandFt,
+      locationId:  L.locationId || "",
+      presence:    "live",
+      quantsAt:    stamp,
+      innerSeq:    null, outerSeq: null, refFt: null,
+      notes:       "", refCountDate: "",
+      spanType:    "single",
+      source:      "quants-only",
+      createdAt:   nowISO, createdBy: reelWho(),
+      updatedAt:   nowISO, updatedBy: reelWho()
+    };
+    reelRecomputeDerived(e);
+    reels[k] = e;
+    summary.created++; summary.live++;
+  });
+
+  reelSaveToStorage();
+  return summary;
 }
 
 // -- Scan input keyboard handler -----------------------------------
@@ -12031,6 +12237,7 @@ function timLoadMasterCache() {
     if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
     if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); }
     if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; }
+    if (parsed.reels && typeof parsed.reels === "object") { appData.reels = parsed.reels; }
     if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
     if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
       Object.assign(BARCODE_MAP, parsed.barcode_map);
@@ -12057,6 +12264,12 @@ function timLoadMasterCache() {
   // is the GitHub merge's local base, not the possibly-staler cache snapshot.
   .then(function(hadData) {
     return palletLoadFromStorage().then(function() { return hadData; }, function() { return hadData; });
+  })
+  // Reels live in their own authoritative store (tim_reels_v1), same rationale
+  // as boxes/pallets — load after the master-cache restore so the authoritative
+  // set is in memory before any quants reconcile reads appData.reels.
+  .then(function(hadData) {
+    return reelLoadFromStorage().then(function() { return hadData; }, function() { return hadData; });
   })
   .catch(function() { return false; });
 }
@@ -12283,7 +12496,8 @@ function buildExportPayload() {
     product_movements: appData.product_movements || [],
     nisc_capture:      appData.nisc_capture      || [],
     boxes: appData.boxes || {},
-    pallets: appData.pallets || {}
+    pallets: appData.pallets || {},
+    reels: appData.reels || {}
   };
 }
 
@@ -15276,7 +15490,12 @@ timInitVoice();
 renderInvSessionUI();
 var _invRestoreP = invAutoRestoreSession();
 invLoadOdooQuantMap();
-invLoadQuantsBaseline();
+// Load the reel registry, THEN the quants baseline, then reconcile footage/
+// presence so a reload lands with the merged reel view already correct.
+reelLoadFromStorage()
+  .then(function() { return invLoadQuantsBaseline(); })
+  .then(function() { reelSyncFromQuants(); if (typeof reelLookupRender === "function") reelLookupRender(); })
+  .catch(function() {});
 invLoadLocationMap();
 // After both the session and the box registry have loaded, surface any box
 // left mid-capture (e.g. interrupted by a reload) in the blocking open-box gate.
@@ -16370,6 +16589,8 @@ var _csvImportPending = null;
 // master events + the active session so an in-progress count shows immediately.
 // Returns an array of latest events, deduped by item number + reel number.
 function reelLookupBuildList() {
+  // Footage precedence: live floor-count event > quants > reference.
+  // 1. Live count events win — strongest truth (also carry two-way sequences).
   var all = (appData.inventory_events || []).concat(invEvents || []);
   var byKey = {};
   all.forEach(function(e) {
@@ -16380,7 +16601,40 @@ function reelLookupBuildList() {
     var cur = byKey[k];
     if (!cur || (e.timestamp || "") > (cur.timestamp || "")) byKey[k] = e;
   });
-  return Object.keys(byKey).map(function(k) { return byKey[k]; });
+  var out = Object.keys(byKey).map(function(k) { return byKey[k]; });
+
+  // 2. Registry entries fill in every reel WITHOUT a live count event. Footage
+  //    is the quants on-hand (or reference footage if quants hasn't seen it yet).
+  //    "gone" reels are included so they stay retrievable (archived, not deleted).
+  var seen = {};
+  out.forEach(function(e) { seen[normKey(e.itemNumber || "") + "|" + normKey(e.reelNumber || "")] = true; });
+  var reels = appData.reels || {};
+  Object.keys(reels).forEach(function(rk) {
+    var r = reels[rk]; if (!r) return;
+    var k = normKey(r.itemNumber || "") + "|" + normKey(r.reelNumber || "");
+    if (seen[k]) return;   // a real count event already represents this reel
+    var ft = (r.onHandFt != null) ? r.onHandFt : (r.refFt != null ? r.refFt : null);
+    out.push({
+      itemNumber:       r.itemNumber || "",
+      reelNumber:       r.reelNumber || "",
+      description:      r.description || "",
+      spanType:         r.spanType || "single",
+      totalAvailableFt: ft, qty: ft,
+      innerSeqA:        r.innerSeq, outerSeqA: r.outerSeq,
+      innerSeqB:        null, outerSeqB: null,
+      location:         r.locationId || "",
+      timestamp:        r.quantsAt || r.refCountDate || "",
+      notes:            r.notes || "",
+      // Registry metadata — Phase 2 rendering (badges/filters) reads these; the
+      // current renderer ignores unknown fields.
+      _fromRegistry:    true,
+      presence:         r.presence,
+      sequenceStale:    r.sequenceStale,
+      needsSequences:   r.needsSequences,
+      source:           r.source
+    });
+  });
+  return out;
 }
 
 function reelLookupRender() {
@@ -16741,40 +16995,36 @@ function _analyzeReelCsvRows(rows, colMap) {
 
     var csvDate = _reelCsvParseDate(dateRaw);
 
-    // Find most recent existing master event for this reel
     var k1 = normKey(itemNum), k2 = normKey(reelNum);
-    var masterMatches = (appData.inventory_events || []).filter(function(e) {
-      return e.eventType === "cable_reel_count" &&
-             e.status    !== "voided"           &&
-             normKey(e.itemNumber || "") === k1  &&
-             normKey(e.reelNumber  || "") === k2;
-    }).sort(function(a, b) {
-      return (b.timestamp || "") > (a.timestamp || "") ? 1 : -1;
-    });
-    var existingEvent = masterMatches.length ? masterMatches[0] : null;
 
-    // Skip reels already in the active session — don't interfere
+    // Skip reels already being counted in the ACTIVE session — a live floor count
+    // outranks reference, so don't overwrite reference sequences under it mid-count.
     var hasActiveEvent = invEvents.some(function(e) {
       return e.eventType === "cable_reel_count" &&
              e.status    !== "voided"           &&
-             normKey(e.itemNumber || "") === k1  &&
-             normKey(e.reelNumber  || "") === k2;
+             normKey(e.reelNumber || "") === k2;
     });
+
+    // Compare against the reel's existing REFERENCE in the registry (not count
+    // events). Reference (inner/outer/notes) is now registry-owned; quants owns
+    // footage. Don't let an OLDER Product Reels row overwrite a newer reference.
+    var existingRef = (typeof reelGet === "function") ? reelGet(reelNum) : null;
+    var hasRef = !!(existingRef && (existingRef.innerSeq != null || existingRef.outerSeq != null || existingRef.refCountDate));
 
     var action;
     if (hasActiveEvent) {
       action = "skip_active";
-    } else if (!existingEvent) {
+    } else if (!hasRef) {
       action = "add";
     } else {
-      var existDate = new Date(existingEvent.timestamp);
-      var existQty  = existingEvent.totalAvailableFt || existingEvent.qty || 0;
-      if (csvDate && !isNaN(existDate.getTime())) {
+      var existDate  = existingRef.refCountDate ? new Date(existingRef.refCountDate) : null;
+      var existRefFt = existingRef.refFt != null ? existingRef.refFt : 0;
+      if (csvDate && existDate && !isNaN(existDate.getTime())) {
         if      (csvDate > existDate) { action = "update"; }
         else if (csvDate < existDate) { action = "skip_older"; }
-        else    { action = qty < existQty ? "update" : "skip_equal"; }
+        else    { action = (ftA !== existRefFt) ? "update" : "skip_equal"; }
       } else {
-        action = qty < existQty ? "update" : "skip_nodate";
+        action = "update";   // no comparable date — refresh the reference
       }
     }
 
@@ -16783,7 +17033,7 @@ function _analyzeReelCsvRows(rows, colMap) {
       innerA: innerA, outerA: outerA, ftA: ftA,
       spanType: spanType, totalFt: qty, qty: qty,
       csvDate: csvDate, dateRaw: dateRaw, notes: notes,
-      action: action, existingEvent: existingEvent,
+      action: action, existingRef: existingRef,
       reelKey: k2, rawCols: cols, dataRowIndex: idx + 1
     });
   });
@@ -17051,66 +17301,20 @@ function invConfirmCsvImport() {
   var toImport = surviving.filter(function(r) { return r.action === "add" || r.action === "update"; });
   if (!toImport.length) { invCancelCsvImport(); return; }
 
-  var now       = invNow();
-  var dateStr   = now.slice(0, 10);
-  var sessionId = "csv_import_" + Date.now();
-
-  var importSession = {
-    sessionId:       sessionId,
-    sessionName:     "Reel CSV Import " + dateStr,
-    createdAt:       now,
-    updatedAt:       now,
-    closedAt:        now,
-    status:          "closed",
-    sequenceCounter: toImport.length
-  };
-
-  // Void superseded events for "update" rows
-  toImport.filter(function(r) { return r.action === "update" && r.existingEvent; })
-    .forEach(function(r) {
-      var idx = appData.inventory_events.indexOf(r.existingEvent);
-      if (idx >= 0) appData.inventory_events[idx].status = "voided";
-    });
-
-  // Build and push new events
-  toImport.forEach(function(r, i) {
-    var ts  = r.csvDate ? r.csvDate.toISOString() : now;
-    var evt = {
-      eventId:          invGenerateId("evt"),
-      timestamp:        ts,
-      sequence:         i + 1,
-      eventType:        "cable_reel_count",
-      status:           "active",
-      sessionId:        sessionId,
-      notes:            r.notes || "",
-      messages:         [],
-      scanType:         "reel_number",
-      scannedValue:     r.reelNum,
-      itemNumber:       r.itemNum,
-      description:      r.desc,
-      reelNumber:       r.reelNum,
-      location:         "",
-      spanType:         r.spanType,
-      innerSeqA:        r.innerA,
-      outerSeqA:        r.outerA,
-      availableFtA:     r.ftA,
-      totalAvailableFt: r.totalFt,
-      qty:              r.totalFt
-    };
-    if (r.spanType === "two_way") {
-      evt.innerSeqB    = null;
-      evt.outerSeqB    = null;
-      evt.availableFtB = 0;
-    }
-    appData.inventory_events.push(evt);
-  });
-
-  appData.inventory_sessions.push(importSession);
+  // Product Reels is a REFERENCE source (inner/outer + notes), not a count.
+  // Upsert those fields into the reel registry — footage stays owned by the
+  // Odoo quants baseline. No cable_reel_count events are created (retired
+  // v2.52.00); a reel's footage/presence is reconciled from quants immediately
+  // after, so a stale inner/outer vs. live footage surfaces as sequenceStale.
+  toImport.forEach(function(r) { reelUpsertReference(r); });
+  reelSyncFromQuants();   // classify presence + refresh footage from the live baseline
+  reelSaveToStorage();
 
   // Persist + push like the history-commit actions so the import is durable
   // without a manual Step-1 file swap.
   appData.product_map = PRODUCT_MAP;
   timSaveMasterCache();
+  if (typeof reelLookupRender === "function") reelLookupRender();
 
   invCancelCsvImport();
 
@@ -17124,7 +17328,9 @@ function invConfirmCsvImport() {
   );
 
   alert(
-    "Import complete: " + toImport.length + " reel(s) imported.\n\n" +
+    "Reel reference updated: " + toImport.length + " reel(s) merged into the registry " +
+    "(inner/outer sequences + notes). Footage comes from the Odoo quants baseline; " +
+    "any reel whose live footage no longer matches its sequences is flagged to re-verify.\n\n" +
     (configured
       ? "Pushing the master file to GitHub now — watch the GitHub panel for status. A backup JSON was also downloaded."
       : "The updated master JSON has been downloaded.\nReplace your existing Step 1 file with it to make the import permanent.")
