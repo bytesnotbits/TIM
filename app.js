@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.51.00";
+const APP_VERSION = "v2.51.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
