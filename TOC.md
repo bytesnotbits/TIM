@@ -274,7 +274,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `_gh3MergeKeyed(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed object (add/edit/delete/edit-vs-delete logic) |
 | `_ghToMap(arr,keyFn)` | Index array by key; returns `{ map, keyless }` (keyless items never dropped) |
 | `_gh3MergeArray(base,l,r,cfg,ctx,out)` | 3-way merge of a keyed array; preserves local-then-remote order + keyless passthrough |
-| `ghMergeMasters(base,local,remote,ctx)` | **Orchestrator**: merges every collection → `{ merged, conflicts }`. `odoo_quants` not merged (newest wins); `boxes` via `_ghMergeBoxesLWW` |
+| `ghMergeMasters(base,local,remote,ctx)` | **Orchestrator**: merges every collection → `{ merged, conflicts }`. `odoo_quants` not merged (newest wins); `boxes` via `_ghMergeBoxesLWW`. **`inventory_events` is re-sorted ASCENDING by `timestamp` (ties: sessionId, then sequence) after the union** (v2.54.03) — `_gh3MergeArray` appends remote-only events as a block, so the stored array was not count order. Ascending because readers take the newest match as the LAST element of a filter. Sorts on `timestamp` (bare ISO UTC, no name in it); never on `sessionName`, which begins with the counter's name and would group by person first |
 | `_ghMergeBoxesLWW(local,remote)` | Union both box maps; on a shared box ID keep the newer `updatedAt` (last-writer-wins per box). Deletions don't propagate — the LWW tradeoff (v2.34.00) |
 
 ---

@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.54.02";
+const APP_VERSION = "v2.54.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -3307,6 +3307,30 @@ function ghMergeMasters(base, local, remote, ctx) {
     var field = pair[1];
     merged[pair[0]] = _gh3MergeArray(base[pair[0]], local[pair[0]], remote[pair[0]],
       { name: pair[0], fieldMerge: false, keyFn: function(x) { return x ? x[field] : ""; } }, ctx, conflicts);
+  });
+
+  // Put the merged event stream back in count order. _gh3MergeArray unions as
+  // "surviving local items in local order, then remote-only items appended", so
+  // without this a second device's whole session lands as a block after the
+  // first device's and the stored array is not an order anyone can read.
+  //
+  // Sorts on `timestamp`, which invNow() writes as a bare ISO-8601 UTC string
+  // ("2026-09-22T14:30:00.000Z") holding no user name -- so this orders purely
+  // by time. The field that DOES begin with a user name is `sessionName`
+  // ("joe_2026-09-22_0815"): sorting on that would group by counter first and
+  // time second, which is why nothing sorts on it. sessionId then sequence
+  // break ties deterministically -- sequence restarts at 1 each session, so it
+  // cannot order across sessions on its own.
+  //
+  // ASCENDING (oldest first) is deliberate: readers that want the newest match
+  // take the LAST element of a filtered list, so a descending array would flip
+  // their meaning.
+  merged.inventory_events.sort(function(a, b) {
+    var at = (a && a.timestamp) || "", bt = (b && b.timestamp) || "";
+    if (at !== bt) return at < bt ? -1 : 1;
+    var as = (a && a.sessionId) || "", bs = (b && b.sessionId) || "";
+    if (as !== bs) return as < bs ? -1 : 1;
+    return ((a && a.sequence) || 0) - ((b && b.sequence) || 0);
   });
 
   // odoo_quants: full Odoo snapshot, not row-merged. Newest baseline wins by the
@@ -15945,6 +15969,10 @@ function rcChainHistoryForItem(chain, item, type) {
                  normKey(e.reelNumber || "") === normKey(item.reelNumber || "");
         });
         if (!evts.length) return "—";
+        // Sort before taking the last: array order is not time order (see the
+        // sort note in ghMergeMasters). Mirrors the two reel lookups, which
+        // already sort by timestamp before reading the final element.
+        evts.sort(function(x, y) { return ((x.timestamp || "") < (y.timestamp || "")) ? -1 : 1; });
         var last = evts[evts.length - 1];
         return (last.totalAvailableFt != null ? last.totalAvailableFt + " ft" : "—");
       }
