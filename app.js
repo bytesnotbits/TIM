@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.56.04";
+const APP_VERSION = "v2.57.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2922,6 +2922,10 @@ function ghSyncNow(silent) {
         timBootStep("render", "running");
         return _nextPaint().then(function() {
           loadSourceData(res.merged, "GitHub merge: " + ghConfig.owner + "/" + ghConfig.repo + "@" + ghConfig.branch);
+          // Did the shared copy of my active session move? (finalized elsewhere,
+          // or its write lease claimed by another device) — v2.57.00.
+          invDetectLeaseChange();
+          renderInvProgress();
           timSaveMasterCache();
           return _bootMarkAndSettle("render", "done");
         });
@@ -3307,12 +3311,25 @@ function ghMergeMasters(base, local, remote, ctx) {
         keyFn: function(rec) { return normKey(rec.serial || rec.ref); } }, ctx, conflicts)
   };
 
-  [["inventory_sessions", "sessionId"], ["inventory_events", "eventId"],
+  [["inventory_events", "eventId"],
    ["recount_sessions", "recountId"], ["recount_movements", "movementId"]].forEach(function(pair) {
     var field = pair[1];
     merged[pair[0]] = _gh3MergeArray(base[pair[0]], local[pair[0]], remote[pair[0]],
       { name: pair[0], fieldMerge: false, keyFn: function(x) { return x ? x[field] : ""; } }, ctx, conflicts);
   });
+
+  // inventory_sessions is LWW per session, NOT the generic 3-way array merge the
+  // other three still use (v2.57.00). An active session is now rewritten every
+  // ~30s by whichever device holds its lease, and under fieldMerge:false the
+  // generic merge raises a user-facing CONFLICT whenever both sides moved since
+  // the common base — i.e. on every ordinary handoff. LWW resolves a takeover
+  // deterministically instead: the device that claimed the lease last stamped
+  // the newer updatedAt and takes the record whole.
+  //
+  // Events keep the generic union above, and must: they are append-only and
+  // keyed by eventId, so unioning is exactly right and loses nothing even when
+  // two devices wrote the same session concurrently.
+  merged.inventory_sessions = _ghMergeInvSessionsLWW(local.inventory_sessions, remote.inventory_sessions);
 
   // Put the merged event stream back in count order. _gh3MergeArray unions as
   // "surviving local items in local order, then remote-only items appended", so
@@ -3371,6 +3388,35 @@ function ghMergeMasters(base, local, remote, ctx) {
   merged.reels = _ghMergeReelsLWW(local.reels, remote.reels);
 
   return { merged: merged, conflicts: conflicts };
+}
+
+// Union two session arrays by sessionId, last-writer-wins on updatedAt
+// (createdAt as fallback). Local order first, then remote-only — matching
+// _gh3MergeArray, so the stored array still reads in a sane order.
+//
+// ONE OVERRIDE, and it outranks the timestamp entirely: a CLOSED session always
+// beats an ACTIVE one. Finalizing is terminal — it has already merged the events
+// into master — so a checkpoint still in flight from the other device (or an
+// offline device that reconnects hours later still holding "active") must never
+// reopen it. Without this rule a late checkpoint would silently resurrect a
+// finalized session and invite a second merge of the same events.
+function _ghMergeInvSessionsLWW(local, remote) {
+  local  = Array.isArray(local)  ? local  : [];
+  remote = Array.isArray(remote) ? remote : [];
+  var ts = function(s) { return (s && (s.updatedAt || s.createdAt)) || ""; };
+  var order = [], byId = {};
+  function take(s) {
+    if (!s || !s.sessionId) return;
+    var id = s.sessionId;
+    if (!(id in byId)) { byId[id] = s; order.push(id); return; }
+    var cur = byId[id];
+    var curClosed = cur.status === "closed", newClosed = s.status === "closed";
+    if (curClosed !== newClosed) { if (newClosed) byId[id] = s; return; }
+    if (ts(s) > ts(cur)) byId[id] = s;
+  }
+  local.forEach(take);
+  remote.forEach(take);
+  return order.map(function(id) { return byId[id]; });
 }
 
 // Union the two box maps; on a shared box ID keep whichever record has the
@@ -4008,6 +4054,39 @@ function timInitUsername() {
   if (inp) { inp.value = val; inp.classList.toggle("needs-value", !val); }
 }
 
+// -- Device identity -------------------------------------------------
+// A stable per-device id, generated once and kept in localStorage beside the
+// username.
+//
+// WHY NOT THE PAT: the GitHub token identifies nobody. It is pasted in by hand
+// on each device (ghSaveConfig) and is in practice ONE shared fine-grained token
+// handed to every device, so every device authenticates as the same GitHub
+// identity — nothing in the app ever calls /user, and ghTestConnection only
+// reads /repos/:owner/:repo. Scoping a view on it would make it read-only for
+// everyone or for no one.
+//
+// So ownership of a count keys on `createdBy` (the username, v2.54.04) and the
+// WRITE LEASE keys on this device id. That split is what lets one person carry a
+// session from the iPad to the laptop (same username, different device → claim
+// the lease) while everyone else sees it read-only (different username → never).
+// `ghConfig.deviceLabel` is for DISPLAY only — it comes from a shared dropdown
+// and is not unique.
+const TIM_DEVICE_ID_KEY = "tim_device_id";
+function timGetDeviceId() {
+  try {
+    var id = localStorage.getItem(TIM_DEVICE_ID_KEY);
+    if (!id) {
+      id = "dev_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem(TIM_DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch (e) { return "dev_unknown"; }
+}
+function timDeviceLabel() {
+  return (typeof ghConfig !== "undefined" && ghConfig && ghConfig.deviceLabel) ||
+         timGetUsername() || "this device";
+}
+
 // -- Audio + visual feedback ----------------------------------------
 // Scan feedback is SAFETY-CRITICAL on a noisy warehouse floor, so it is
 // mandatory (no in-app mute — only the tablet's volume/mute switch turns
@@ -4501,10 +4580,13 @@ function switchTab(name) {
 // card(s) and hide the rest. The Count view keeps the scan panel + recount
 // cards together.
 var invActiveSubview = "count";
-var INV_SUBVIEWS = ["count", "exceptions", "summary", "gap", "recount", "eventlog"];
+var INV_SUBVIEWS = ["count", "progress", "exceptions", "summary", "gap", "recount", "eventlog"];
 function invShowSubview(name) {
   if (INV_SUBVIEWS.indexOf(name) === -1) name = "count";
   invActiveSubview = name;
+  // Built from synced data, so it can be stale the moment it's opened — rebuild
+  // on entry rather than only on sync (v2.57.00).
+  if (name === "progress") renderInvProgress();
   // Mode/LOC controls only make sense while counting — collapse the toolbar to
   // just session/count info on the table sub-screens.
   var statusBar = $("invStatusBar");
@@ -4650,6 +4732,9 @@ function scheduleInvAutosave() {
   if (ind) { ind.textContent = "Unsaved"; ind.className = "inv-status-save unsaved"; }
   clearTimeout(invAutosaveTimer);
   invAutosaveTimer = setTimeout(invAutosave, 500);
+  // Every session mutation already funnels through here, so this is the single
+  // hook the checkpoint push needs (v2.57.00). It self-guards on lease/config.
+  scheduleInvCheckpoint();
 }
 
 function invAutosave() {
@@ -4678,6 +4763,413 @@ function invAutosave() {
     var ind = $("invStatusSave");
     if (ind) { ind.textContent = "Save failed"; ind.className = "inv-status-save unsaved"; }
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SESSION CHECKPOINT + WRITE LEASE (v2.57.00)
+//
+// THE PROBLEM: before this, an open session lived on exactly one device. The
+// only push was at the end of invFinalizeSession, and autosave wrote to local
+// IndexedDB. Walk inside mid-count and the count existed nowhere else — one
+// dropped iPad lost a day's counting, and no other device could see progress.
+//
+// THE FIX, two halves:
+//   1. CHECKPOINT — while a session is active, its session record + events ride
+//      the normal inventory.json push on a coalescing timer, so the shared repo
+//      is never more than INV_CHECKPOINT_MS behind the floor.
+//   2. WRITE LEASE — exactly one device may checkpoint a given session at a
+//      time. `holderDevice` names it. Everyone else reads.
+//
+// WHO MAY WRITE (two independent gates, both required):
+//   OWNER  — `createdBy` must equal your username. Someone else's count is
+//            read-only, full stop; there is no override in the UI.
+//   HOLDER — `holderDevice` must be this device id. The owner on a SECOND
+//            device sees "Continue here", which claims the lease.
+// That split is the whole feature: same person + different device = handoff;
+// different person = read-only.
+//
+// THE LEASE IS ADVISORY, and deliberately so — a git repo offers no locking, and
+// the warehouse is frequently offline. Two devices offline at once can both
+// believe they hold it. That is survivable because events union by eventId
+// (_gh3MergeArray) so no scan is ever lost; the real-world risk is a double
+// count if the same item is scanned on both, which is a floor-process problem,
+// not a data-loss one. What the lease buys is that the NORMAL case is
+// unambiguous and the losing device is told, loudly, that it stopped pushing.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Coalescing window. This is a FLOOR on push spacing, not a trailing debounce:
+// the timer is armed by the first change and is NOT reset by later ones, so a
+// continuous scanning run pushes once per window (~120 commits in a 1hr count)
+// instead of once per scan, while worst-case staleness stays bounded at one
+// window. A trailing debounce would have done the opposite of both.
+const INV_CHECKPOINT_MS = 30000;
+var invCheckpointTimer = null;
+// Set when a sync reveals another device took the lease. Latches the session
+// read-only on THIS device until the user explicitly takes it back.
+var invLeaseLost = false;
+
+function invSessionOwner(s) { return (((s && s.createdBy) || "") + "").trim().toLowerCase(); }
+
+// Is this session mine to write? Compares usernames case-insensitively. A blank
+// username owns nothing — otherwise every unnamed device would own every
+// pre-v2.54.04 session (those have no createdBy at all).
+function invIsMySession(s) {
+  var me = (timGetUsername() || "").trim().toLowerCase();
+  return !!me && invSessionOwner(s) === me;
+}
+
+// Does THIS device hold the write lease? A session with no holderDevice predates
+// v2.57.00 (or was made offline); treat it as held here so an upgrade doesn't
+// freeze a count that is already in progress on this device.
+function invHoldsLease(s) {
+  s = s || invSession;
+  if (!s) return false;
+  if (!s.holderDevice) return true;
+  return s.holderDevice === timGetDeviceId();
+}
+
+// Stamp this device as the lease holder. `updatedAt` moves with it because that
+// is the field _ghMergeInvSessionsLWW resolves on — the newest claim wins.
+function invClaimLease(s) {
+  s = s || invSession;
+  if (!s) return s;
+  s.holderDevice = timGetDeviceId();
+  s.holderLabel  = timDeviceLabel();
+  s.heldAt       = invNow();
+  s.updatedAt    = s.heldAt;
+  return s;
+}
+
+function invCancelCheckpoint() {
+  if (invCheckpointTimer) { clearTimeout(invCheckpointTimer); invCheckpointTimer = null; }
+}
+
+// Arm a checkpoint push. Called from scheduleInvAutosave — the one choke point
+// every session mutation already flows through, so there is no second list of
+// call sites to keep in sync. Every guard is re-checked when the timer fires,
+// because the lease can be lost during the window.
+function scheduleInvCheckpoint() {
+  if (!invCheckpointEligible()) return;
+  if (invCheckpointTimer) return;   // already armed — coalesce into it
+  invCheckpointTimer = setTimeout(function() {
+    invCheckpointTimer = null;
+    if (!invCheckpointEligible()) return;
+    // Let an in-flight sync finish rather than racing it; re-arm behind it.
+    if (typeof ghSyncInFlight !== "undefined" && ghSyncInFlight) { scheduleInvCheckpoint(); return; }
+    invSession.checkpointAt = invNow();
+    invSession.updatedAt    = invSession.checkpointAt;
+    ghPushToGitHub({ auto: true });
+  }, INV_CHECKPOINT_MS);
+}
+
+function invCheckpointEligible() {
+  if (typeof ghConfigured !== "function" || !ghConfigured()) return false;
+  if (!invSession || invSession.status !== "active") return false;
+  if (invLeaseLost || !invHoldsLease()) return false;
+  return true;
+}
+
+// Fold the LIVE (unfinalized) session + its events into an export payload so a
+// checkpoint carries work in progress. Only an ACTIVE session is folded: once
+// finalized, invFinalizeSession has already copied everything into appData and
+// folding again would duplicate every event. Events are stamped with sessionId
+// here because invCreateEvent does not set it — finalize used to be the only
+// place that did, and a checkpoint has to produce the same shape.
+function _invOverlayLiveSession(payload) {
+  if (!invSession || invSession.status !== "active") return payload;
+  var sid = invSession.sessionId;
+  var live = Object.assign({}, invSession, { sequenceCounter: invSequence });
+  payload.inventory_sessions = (payload.inventory_sessions || [])
+    .filter(function(s) { return !s || s.sessionId !== sid; })
+    .concat([live]);
+  payload.inventory_events = (payload.inventory_events || [])
+    .filter(function(e) { return !e || e.sessionId !== sid; })
+    .concat((invEvents || []).map(function(e) { return Object.assign({}, e, { sessionId: sid }); }));
+  return payload;
+}
+
+// Every event this device knows about — finalized (appData) plus the live
+// session — deduplicated by eventId, live copy winning.
+//
+// THE DEDUPE IS LOAD-BEARING as of v2.57.00. Before checkpointing, appData held
+// only FINALIZED events, so callers could plainly concat the two arrays and know
+// they were disjoint. Now a checkpoint pushes the live session, the next sync
+// merges it back, and loadSourceData writes those same events into appData while
+// they are still in invEvents — so a bare concat counts every scan of the open
+// session TWICE. Every caller that spans both arrays goes through here.
+function invAllEvents() {
+  var live = invEvents || [];
+  var liveIds = {};
+  live.forEach(function(e) { if (e && e.eventId) liveIds[e.eventId] = 1; });
+  var stored = (appData.inventory_events || []).filter(function(e) {
+    return !(e && e.eventId && liveIds[e.eventId]);
+  });
+  return stored.concat(live);
+}
+
+// A sync just replaced appData — did the shared copy of MY active session move
+// out from under me? Two ways it can:
+//   finalized elsewhere → nothing more to push here, and re-finalizing would
+//     double-merge, so stand down completely.
+//   lease taken → another device of mine claimed it. Stop checkpointing and say
+//     so; the events already pushed are safe, anything scanned from here would
+//     strand locally.
+function invDetectLeaseChange() {
+  if (!invSession || invSession.status !== "active") return;
+  var shared = (appData.inventory_sessions || []).filter(function(s) {
+    return s && s.sessionId === invSession.sessionId;
+  })[0];
+  if (!shared) return;
+
+  if (shared.status === "closed") {
+    invLeaseLost = true;
+    invCancelCheckpoint();
+    renderInvLeaseBanner("This session was finalized on " +
+      (shared.holderLabel || "another device") + ". It is now read-only here.");
+    return;
+  }
+  if (shared.holderDevice && shared.holderDevice !== timGetDeviceId()) {
+    invLeaseLost = true;
+    invSession.holderDevice = shared.holderDevice;
+    invSession.holderLabel  = shared.holderLabel || "";
+    invSession.heldAt       = shared.heldAt || "";
+    invCancelCheckpoint();
+    renderInvLeaseBanner("Counting moved to " + (shared.holderLabel || "another device") +
+      (shared.heldAt ? " at " + new Date(shared.heldAt).toLocaleTimeString() : "") +
+      ". Scanning is paused here so counts can't strand on this device.");
+  }
+}
+
+// Take the lease back on this device after losing it. Deliberately explicit —
+// the safe default after a takeover is to stay stopped.
+function invReclaimLease() {
+  if (!invSession) return;
+  if (!confirm("Take this session back on this device?\n\n" +
+               "Counting will resume here and stop on " +
+               (invSession.holderLabel || "the other device") +
+               " the next time it syncs.\n\nContinue?")) return;
+  invClaimLease(invSession);
+  invLeaseLost = false;
+  renderInvLeaseBanner("");
+  renderInvSessionUI();
+  invAutosave();
+  if (ghConfigured()) ghPushToGitHub({ auto: true });
+}
+
+function renderInvLeaseBanner(msg) {
+  var el = $("invLeaseBanner");
+  if (!el) return;
+  if (!msg) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  el.innerHTML = "<span>&#9888; " + escapeHtml(msg) + "</span>" +
+    '<button class="btn-compact" onclick="invReclaimLease()">Take it back</button>';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// COUNTS IN PROGRESS — the read-only cross-device view (v2.57.00)
+//
+// Reads the SHARED data (appData.inventory_sessions/_events, i.e. what has
+// actually been checkpointed to the repo), not the live invEvents array — which
+// is exactly why it shows other people's counts and the Inventory Summary
+// cannot. The live session is unioned in on top so this device's own count
+// appears immediately, before its first checkpoint lands.
+//
+// Write access is decided per row by the two gates in invIsMySession /
+// invHoldsLease: someone else's count offers no action at all.
+// ───────────────────────────────────────────────────────────────────────
+var invProgressSelectedId = "";
+
+// Every active session worth showing: shared copies + my live one on top.
+function invProgressSessions() {
+  var rows = (appData.inventory_sessions || []).filter(function(s) {
+    return s && s.status === "active";
+  }).map(function(s) { return s; });
+  if (invSession && invSession.status === "active") {
+    rows = rows.filter(function(s) { return s.sessionId !== invSession.sessionId; });
+    rows.unshift(Object.assign({}, invSession, { sequenceCounter: invSequence }));
+  }
+  return rows.sort(function(a, b) {
+    var at = a.checkpointAt || a.updatedAt || a.createdAt || "";
+    var bt = b.checkpointAt || b.updatedAt || b.createdAt || "";
+    return at > bt ? -1 : at < bt ? 1 : 0;   // most recently touched first
+  });
+}
+
+// Events for a session: the live array when it's the one open here (fresher than
+// the last checkpoint), otherwise the shared copy.
+function invProgressEvents(sessionId) {
+  if (invSession && invSession.sessionId === sessionId) {
+    return (invEvents || []).map(function(e) { return Object.assign({}, e, { sessionId: sessionId }); });
+  }
+  return (appData.inventory_events || []).filter(function(e) { return e && e.sessionId === sessionId; });
+}
+
+function invProgressSelect(sessionId) {
+  invProgressSelectedId = sessionId || "";
+  renderInvProgress();
+}
+
+function renderInvProgress() {
+  var tbody = $("invProgressBody");
+  if (!tbody) return;
+  var rows = invProgressSessions();
+  var me   = timGetDeviceId();
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">' +
+      "No counts in progress. Sync to pick up counting started on another device." + "</td></tr>";
+    var d0 = $("invProgressDetail");
+    if (d0) d0.innerHTML = "";
+    return;
+  }
+
+  tbody.innerHTML = rows.map(function(s) {
+    var mine     = invIsMySession(s);
+    var heldHere = (s.holderDevice || "") === me || !s.holderDevice;
+    var evCount  = invProgressEvents(s.sessionId).filter(function(e) {
+      return e.status !== "voided" && e.eventType !== "void_event" && e.eventType !== "box_scan";
+    }).length;
+    var stamp = s.checkpointAt || s.updatedAt || s.createdAt || "";
+
+    var status, cls;
+    if (heldHere && !invLeaseLost) { status = "Counting here"; cls = "ok"; }
+    else if (mine)                 { status = "Your count, elsewhere"; cls = "warn"; }
+    else                           { status = "Read-only"; cls = ""; }
+
+    // The action column is the whole permission model made visible: the owner on
+    // another device gets a handoff; everyone else gets a look and nothing more.
+    var action;
+    if (heldHere && !invLeaseLost) {
+      action = '<span class="small" style="color:#94a3b8;">—</span>';
+    } else if (mine) {
+      action = '<button class="btn-compact" onclick="invClaimRemoteSession(\'' +
+               escapeHtml(s.sessionId) + '\')">Continue here</button>';
+    } else {
+      action = '<span class="small" style="color:#94a3b8;">Read-only</span>';
+    }
+
+    return '<tr class="' + (s.sessionId === invProgressSelectedId ? "queue-row-selected" : "") + '">' +
+      "<td><a href=\"#\" onclick=\"invProgressSelect('" + escapeHtml(s.sessionId) + "');return false;\">" +
+        escapeHtml(s.sessionName || s.sessionId) + "</a></td>" +
+      "<td>" + escapeHtml(s.createdBy || "(unknown)") + "</td>" +
+      "<td>" + escapeHtml(s.holderLabel || "—") + "</td>" +
+      "<td style=\"text-align:right\">" + evCount + "</td>" +
+      "<td style=\"white-space:nowrap\">" + escapeHtml(stamp ? new Date(stamp).toLocaleString() : "—") + "</td>" +
+      '<td><span class="pill ' + cls + '">' + escapeHtml(status) + "</span></td>" +
+      "<td style=\"text-align:center\">" + action + "</td>" +
+      "</tr>";
+  }).join("");
+
+  renderInvProgressDetail();
+}
+
+// Read-only per-item rollup for the selected session — the same aggregation the
+// Inventory Summary does, but over shared data for any session, not the one open
+// on this device.
+function renderInvProgressDetail() {
+  var host = $("invProgressDetail");
+  if (!host) return;
+  if (!invProgressSelectedId) { host.innerHTML = ""; return; }
+
+  var sess = invProgressSessions().filter(function(s) {
+    return s.sessionId === invProgressSelectedId;
+  })[0];
+  if (!sess) { host.innerHTML = ""; invProgressSelectedId = ""; return; }
+
+  var map = {};
+  invProgressEvents(sess.sessionId).forEach(function(evt) {
+    if (evt.status === "voided")        return;
+    if (evt.eventType === "void_event") return;
+    if (evt.eventType === "box_scan")   return;   // audit marker; its devices carry the count
+    var key = evt.itemNumber || evt.scannedValue || "(unknown)";
+    if (!map[key]) map[key] = { item: key, description: evt.description || "", qty: 0, ft: 0, last: "" };
+    var r = map[key];
+    if (evt.description && !r.description) r.description = evt.description;
+    if (evt.timestamp && evt.timestamp > r.last) r.last = evt.timestamp;
+    if      (evt.eventType === "serialized_device_scan") r.qty += 1;
+    else if (evt.eventType === "bulk_quantity_count")    r.qty += (Number(evt.qty) || 1);
+    else if (evt.eventType === "cable_reel_count")       r.ft  += (Number(evt.totalAvailableFt != null ? evt.totalAvailableFt : evt.qty) || 0);
+  });
+
+  var items = Object.keys(map).map(function(k) { return map[k]; })
+    .sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
+
+  host.innerHTML =
+    '<h3 style="margin:16px 0 6px;font-size:14px;color:#166534;">' +
+      escapeHtml(sess.sessionName || sess.sessionId) + "</h3>" +
+    '<p class="small" style="margin:0 0 8px;">Counted by ' + escapeHtml(sess.createdBy || "(unknown)") +
+      " · read-only view of what has synced so far.</p>" +
+    '<div class="scroll"><table><thead><tr>' +
+      "<th>Item</th><th>Description</th><th>Counted Qty</th><th>Reel Footage</th><th>Last Counted</th>" +
+    "</tr></thead><tbody>" +
+    (items.length ? items.map(function(r) {
+      return "<tr><td>" + escapeHtml(r.item) + "</td>" +
+        "<td>" + escapeHtml(r.description) + "</td>" +
+        "<td style=\"text-align:right\">" + (r.qty || "") + "</td>" +
+        "<td style=\"text-align:right\">" + (r.ft ? r.ft.toLocaleString() : "") + "</td>" +
+        "<td style=\"white-space:nowrap\">" + escapeHtml(r.last ? new Date(r.last).toLocaleString() : "") + "</td></tr>";
+    }).join("")
+      : '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:12px;">Nothing counted yet in this session.</td></tr>') +
+    "</tbody></table></div>";
+}
+
+// "Continue here" — claim a session started on another of MY devices and carry
+// on counting. The owner gate is enforced here as well as in the UI, so a stale
+// rendered button can't hand someone else's count over.
+function invClaimRemoteSession(sessionId) {
+  var s = (appData.inventory_sessions || []).filter(function(x) {
+    return x && x.sessionId === sessionId;
+  })[0];
+  if (!s) { alert("That session isn't in the synced data. Sync and try again."); return; }
+  if (s.status === "closed") { alert("That session was already finalized."); return; }
+  if (!invIsMySession(s)) {
+    alert("This count belongs to " + (s.createdBy || "someone else") + ".\n\n" +
+          "You can view it, but only the person who started it can continue it. " +
+          "Ask them to finalize it, or start your own session.");
+    return;
+  }
+  if (invSession && invSession.status === "active" && invSession.sessionId !== sessionId) {
+    if (!confirm("You have an active session (\"" + (invSession.sessionName || invSession.sessionId) +
+                 "\") open here.\n\nContinuing this other session will replace it on this device. " +
+                 "Its scans are already checkpointed to GitHub and are not lost — you can continue it " +
+                 "again later from this same list.\n\nContinue?")) return;
+  }
+  if (!confirm("Continue \"" + (s.sessionName || s.sessionId) + "\" on this device?\n\n" +
+               "It is currently held by " + (s.holderLabel || "another device") + ". " +
+               "That device will stop counting this session the next time it syncs.\n\nContinue?")) return;
+
+  var events = (appData.inventory_events || []).filter(function(e) {
+    return e && e.sessionId === sessionId;
+  }).map(function(e) { return Object.assign({}, e); });
+
+  invSession = Object.assign({}, s, { status: "active" });
+  // Claim BEFORE resetting: invResetSessionState re-renders and touches scan
+  // mode / box / location, any of which can reach scheduleInvAutosave — which
+  // arms a checkpoint. Stamping the lease first means that checkpoint can only
+  // ever fire against a session this device legitimately holds.
+  invClaimLease(invSession);
+  invLeaseLost = false;
+  renderInvLeaseBanner("");
+  invResetSessionState();          // clears events/exceptions/box/location/feed
+  invEvents = events;
+  // Trust the events, not the stored counter: the counter is a per-device tally
+  // and a checkpoint from a device that scanned after its last push would leave
+  // it behind. Taking the max sequence actually present can't collide.
+  invSequence = events.reduce(function(m, e) { return Math.max(m, Number(e.sequence) || 0); }, 0);
+  invSession.sequenceCounter = invSequence;
+
+  invAutosave();
+  renderInvSessionUI();
+  renderInvActivityFeed();
+  renderInvSummary();
+  checkReelItemConflicts();
+  invShowSubview("count");
+  if (ghConfigured()) ghPushToGitHub({ auto: true });   // publish the claim now
+
+  alert("Continuing \"" + (invSession.sessionName || invSession.sessionId) + "\" — " +
+        invEvents.length + " event(s) carried over, sequence at #" + invSequence + ".\n\n" +
+        "Note: the scan-by-scan activity feed and the exceptions list stay on the " +
+        "original device — they aren't part of the synced data. Your counts are all here.");
 }
 
 // -- Event creation -------------------------------------------------
@@ -4769,6 +5261,9 @@ function invStartNewSession() {
     status:          "active",
     sequenceCounter: 0
   };
+  invClaimLease(invSession);   // this device starts as the write-lease holder
+  invLeaseLost = false;
+  renderInvLeaseBanner("");
   invResetSessionState();
 
   var nameInput = $("invSessionNameInput");
@@ -4814,6 +5309,12 @@ function invAutoRestoreSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    // Reopening on this device means counting continues here, so take the write
+    // lease back (v2.57.00) — otherwise a holder recorded before the session was
+    // last put down would leave it read-only on the very device resuming it.
+    invClaimLease(invSession);
+    invLeaseLost = false;
+    renderInvLeaseBanner("");
     if (saved.currentLocation) invSetLocation(saved.currentLocation);
     if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
       invActivityLog = saved.activityLog.map(function(e) {
@@ -4860,6 +5361,12 @@ function invResumeSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
+    // Reopening on this device means counting continues here, so take the write
+    // lease back (v2.57.00) — otherwise a holder recorded before the session was
+    // last put down would leave it read-only on the very device resuming it.
+    invClaimLease(invSession);
+    invLeaseLost = false;
+    renderInvLeaseBanner("");
     if (saved.currentLocation) invSetLocation(saved.currentLocation);
     if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
       invActivityLog = saved.activityLog.map(function(e) {
@@ -4979,6 +5486,9 @@ function invImportBackup(input) {
       invSettings   = (parsed.settings && typeof parsed.settings === "object") ? parsed.settings : {};
       invSequence   = invSession.sequenceCounter || 0;
       invSession.status = "active";
+      invClaimLease(invSession);   // restored here ⇒ counting continues here (v2.57.00)
+      invLeaseLost = false;
+      renderInvLeaseBanner("");
       invAutosave();
       renderInvSessionUI();
       checkReelItemConflicts();
@@ -9764,6 +10274,16 @@ function invProcessScan() {
     invSetScanFeedback("Start a session first.", "error");
     return;
   }
+  // Lease lost (taken over elsewhere, or finalized there): anything scanned here
+  // would never reach the shared repo, so stop at the door rather than let a
+  // counter fill a session that is silently stranded (v2.57.00).
+  if (invLeaseLost) {
+    invSetScanFeedback("Paused — this session is being counted on " +
+      ((invSession && invSession.holderLabel) || "another device") +
+      ". Use “Take it back” to resume here.", "error");
+    $("invScanInput").value = "";
+    return;
+  }
   var rawValue = sanitizeScannerValue($("invScanInput").value || "", { uppercase: true });
   if (!rawValue) { $("invScanInput").focus(); return; }
 
@@ -10140,7 +10660,7 @@ function checkReelItemConflicts() {
     return;
   }
   var usedAsReel = {};
-  (invEvents || []).concat(appData.inventory_events || []).forEach(function(e) {
+  invAllEvents().forEach(function(e) {
     if (e.eventType === "cable_reel_count" && e.reelNumber) {
       usedAsReel[normKey(e.reelNumber)] = true;
     }
@@ -10601,7 +11121,7 @@ function invReelUpdateHistoryPanel(itemNum, reelNum, currentFt) {
 function invFindReelMaster(reelNum) {
   var k2 = normKey(reelNum || "");
   if (!k2) return null;
-  var all = (appData.inventory_events || []).concat(invEvents);
+  var all = invAllEvents();
   var matches = all.filter(function(e) {
     return e.eventType === "cable_reel_count" &&
            e.status    !== "voided"           &&
@@ -10620,7 +11140,7 @@ function invFindReelMaster(reelNum) {
 function invReelDistinctItems(reelNum) {
   var k2 = normKey(reelNum || "");
   if (!k2) return [];
-  var all = (appData.inventory_events || []).concat(invEvents || []);
+  var all = invAllEvents();
   var seen = {}, out = [];
   all.forEach(function(e) {
     if (e.eventType === "cable_reel_count" && e.status !== "voided" &&
@@ -10690,7 +11210,7 @@ function invReelReverseFillItem() {
 function invGetReelHistory(itemNum, reelNum) {
   var k1 = normKey(itemNum || "");
   var k2 = normKey(reelNum || "");
-  var all = (appData.inventory_events || []).concat(invEvents);
+  var all = invAllEvents();
   var matches = all.filter(function(e) {
     return e.eventType === "cable_reel_count" &&
            e.status    !== "voided"           &&
@@ -10793,7 +11313,7 @@ function invReelDetectConflict(itemNum, reelNum) {
   var ik = normKey(itemNum || "");
 
   if (ik) {
-    var all = (appData.inventory_events || []).concat(invEvents || []);
+    var all = invAllEvents();
     var cross = all.find(function(e) {
       return e.eventType === "cable_reel_count" && e.status !== "voided"
           && normKey(e.reelNumber || "") === rk
@@ -13485,7 +14005,10 @@ function buildExportPayload() {
   var cutoff = new Date();
   cutoff.setFullYear(cutoff.getFullYear() - PURGE_YEARS);
   var cutoffISO = cutoff.toISOString();
-  return {
+  // _invOverlayLiveSession folds the in-progress session in (v2.57.00) so a
+  // checkpoint push — and any master JSON downloaded mid-count — carries work
+  // that hasn't been finalized yet. No-op unless a session is active.
+  return _invOverlayLiveSession({
     product_map: PRODUCT_MAP,
     history: history,
     inventory_sessions: appData.inventory_sessions || [],
@@ -13502,7 +14025,7 @@ function buildExportPayload() {
     boxes: appData.boxes || {},
     pallets: appData.pallets || {},
     reels: appData.reels || {}
-  };
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -13800,12 +14323,22 @@ function prodShowItemHistory(itemNumber) {
       }).join("")
     : '<tr><td colspan="6" style="color:#94a3b8;text-align:center;padding:12px;">No receiving records.</td></tr>';
 
-  // Finalized inventory events
-  var invEvts = (appData.inventory_events || []).filter(function(e) {
-    return normalizeProductKey(e.itemNumber || "") === target;
-  });
   var sessionMap = {};
   (appData.inventory_sessions || []).forEach(function(s) { sessionMap[s.sessionId] = s; });
+
+  // Finalized inventory events — and FINALIZED is now something we have to
+  // enforce rather than assume. Since v2.57.00 appData.inventory_events also
+  // carries checkpointed events from sessions still being counted, and a count
+  // in progress is not a settled fact about this product: it can still be
+  // voided, recounted or abandoned before anyone finalizes. Letting those rows
+  // sit unlabelled in this history would quietly invite a decision on numbers
+  // that nobody has committed to. In-progress counts belong to the "In Progress"
+  // sub-view, which says plainly that that's what they are.
+  var invEvts = (appData.inventory_events || []).filter(function(e) {
+    if (normalizeProductKey(e.itemNumber || "") !== target) return false;
+    var sess = sessionMap[e.sessionId];
+    return !sess || sess.status === "closed";
+  });
 
   // Raw array order is NOT chronological once two devices sync: ghMergeMasters
   // unions events as "surviving local items in local order, then remote-only
@@ -15270,7 +15803,7 @@ function boxReconcileGatherCounts(session) {
   var scoped = Object.keys(sessIds).length > 0;
 
   var loose = {}, sealed = {}, countStart = null;
-  var allEvents = (appData.inventory_events || []).concat(invEvents || []);
+  var allEvents = invAllEvents();
   allEvents.forEach(function(e) {
     if (!e || e.status === "voided") return;
     if (e.eventType !== "serialized_device_scan") return;
@@ -16459,6 +16992,12 @@ function invFinalizeSession() {
   invSession.status    = "closed";
   invSession.closedAt  = now;
   invSession.updatedAt = now;
+  // Release the write lease and kill any armed checkpoint — the closed record is
+  // about to be pushed, and _ghMergeInvSessionsLWW makes "closed" beat any
+  // active checkpoint still in flight from another device (v2.57.00).
+  invCancelCheckpoint();
+  invSession.holderDevice = "";
+  invSession.holderLabel  = "";
 
   appData.inventory_sessions = appData.inventory_sessions || [];
   var existingIdx = appData.inventory_sessions.findIndex(function(s) {
@@ -17699,7 +18238,7 @@ function _reelRowFromEvent(ev, r) {
 function reelLookupBuildList() {
   // Latest non-voided count event per reel (keyed by reel number).
   var evByReel = {};
-  (appData.inventory_events || []).concat(invEvents || []).forEach(function(e) {
+  invAllEvents().forEach(function(e) {
     if (!e || e.eventType !== "cable_reel_count" || e.status === "voided") return;
     var reel = normKey(e.reelNumber || ""); if (!reel) return;
     var cur = evByReel[reel];

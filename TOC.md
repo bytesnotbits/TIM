@@ -59,7 +59,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `tim_nisc_catalog_v1` | NISC catalog master layer `{ item → {name,long_desc,group,status,class,class_source,…} }` (device-local; feeds dup-check + numbering) |
 | `tim_numbering_db_v1` | AABBCC-N numbering legend, seeded from bundled `numbering_db.json` (occupancy computed live) |
 
-`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`, `tim_inv_subview`, `tim_prod_subview`.
+`localStorage` stores only UI state: `tim_active_tab`, `tim_sidebar_collapsed`, `tim_username`, `tim_voice_enabled`, `tim_inv_subview`, `tim_prod_subview`, `tim_device_id` (stable per-device id — the write-lease key, v2.57.00).
 
 ---
 
@@ -159,8 +159,35 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `_bootSettle(ms)` / `_bootMarkAndSettle(id,status,frac)` / `BOOT_STEP_SETTLE_MS` / `BOOT_FINAL_HOLD_MS` | Brief deliberate pauses (boot only) so the fast final steps (merge/render/finalize) are visibly seen ticking to done, plus a hold at 100% before the overlay leaves. `_bootMarkAndSettle` is a no-op delay post-boot (`_bootProg` null) so a manual Sync is never slowed |
 | `invLoadStorageRaw()` | Raw IDB read for current session |
 | `invStorageAvailable()` | Check IndexedDB availability |
-| `scheduleInvAutosave()` | Debounced (500ms) autosave trigger |
+| `scheduleInvAutosave()` | Debounced (500ms) autosave trigger. Also the single hook for `scheduleInvCheckpoint()` (v2.57.00) — every session mutation already funnels through here |
 | `invAutosave()` | Write session snapshot to IDB |
+
+### Session checkpoint + write lease (`inv*Lease*`, `inv*Checkpoint*`, v2.57.00)
+
+> An open session used to live on exactly ONE device: the only push was at the end of `invFinalizeSession`, so a day's counting existed nowhere else until it was finalized, and no other device could see progress. Now an active session's record + events ride the normal `inventory.json` push on a coalescing timer, and exactly one device at a time holds its **write lease**. Two independent gates decide who may write: **owner** (`createdBy` = your username — someone else's count is read-only with no override) and **holder** (`holderDevice` = this device id — the owner on a second device gets "Continue here"). That split is the feature: same person + different device = handoff; different person = read-only. **The lease is advisory** (a git repo has no locking and the warehouse is often offline) — two devices offline at once can both think they hold it, which is survivable because events union by `eventId` so no scan is lost; the residual risk is a double count, a floor-process problem. **The PAT is NOT and cannot be the identity** — it's pasted per device, nothing calls `/user`, and it's one shared token, so every device authenticates as the same GitHub identity.
+
+| Function | Purpose |
+|---|---|
+| `timGetDeviceId()` | Stable per-device id, generated once into `localStorage` `tim_device_id`. The lease key |
+| `timDeviceLabel()` | Display-only device name (`ghConfig.deviceLabel` → username → "this device"); NOT unique, never used as a key |
+| `invSessionOwner(s)` / `invIsMySession(s)` | Owner gate — case-insensitive `createdBy` vs `timGetUsername()`. A blank username owns nothing (otherwise every unnamed device would own every pre-v2.54.04 session) |
+| `invHoldsLease(s)` | Holder gate. A session with no `holderDevice` predates v2.57.00 → treated as held here, so upgrading can't freeze a count already in progress |
+| `invClaimLease(s)` | Stamp this device as holder; moves `updatedAt` with `heldAt` because that's what `_ghMergeInvSessionsLWW` resolves on |
+| `INV_CHECKPOINT_MS` / `scheduleInvCheckpoint()` / `invCancelCheckpoint()` / `invCheckpointEligible()` | 30s coalescing push. A **floor on spacing, not a trailing debounce** — the timer is armed by the first change and NOT reset by later ones, so continuous scanning pushes once per window instead of once per scan while worst-case staleness stays bounded. All guards re-checked when it fires |
+| `_invOverlayLiveSession(payload)` | Folds the ACTIVE session + events into `buildExportPayload` so a checkpoint carries work in progress. No-op once closed — finalize already copied everything into `appData` and folding again would duplicate every event |
+| `invAllEvents()` | **Load-bearing dedupe.** Finalized + live events unioned by `eventId`, live winning. Before v2.57.00 `appData.inventory_events` held only finalized events so callers could plainly concat; now a checkpoint round-trips the live session back into `appData` while it's still in `invEvents`, and a bare concat counts every open-session scan TWICE. Every caller spanning both arrays goes through here |
+| `invDetectLeaseChange()` | Post-sync check: was my active session finalized elsewhere, or its lease claimed by another device? Latches `invLeaseLost`, stops checkpoints, raises the banner |
+| `invReclaimLease()` / `renderInvLeaseBanner(msg)` | "Take it back" + the red banner. After a takeover the safe default is to stay stopped, so reclaiming is explicit |
+| `_ghMergeInvSessionsLWW(local, remote)` | `inventory_sessions` merge — LWW per session, NOT the generic 3-way array merge the other three collections still use. A checkpointed session is rewritten every ~30s, and `fieldMerge:false` would raise a user-facing CONFLICT on every ordinary handoff. **One override outranks the timestamp: CLOSED always beats ACTIVE** — finalizing is terminal, so a late checkpoint (or an offline device reconnecting hours later) must never resurrect a finalized session and invite a second merge |
+
+**Counts In Progress view** (`invShowSubview('progress')`) — the read-only cross-device panel. Reads the SHARED data (`appData.inventory_sessions/_events`, i.e. what has actually been checkpointed), which is exactly why it shows other people's counts and the Inventory Summary cannot (that one renders from the live `invEvents` array — the session open on THIS device).
+
+| Function | Purpose |
+|---|---|
+| `invProgressSessions()` | Active sessions from shared data + this device's live one unioned on top (so it appears before its first checkpoint lands); most recently touched first |
+| `invProgressEvents(sessionId)` | Live array when it's the session open here (fresher than the last checkpoint), otherwise the shared copy |
+| `renderInvProgress()` / `renderInvProgressDetail()` / `invProgressSelect(id)` | Session list + read-only per-item rollup. The Action column is the permission model made visible: "Continue here" only when owner-and-not-holder, otherwise "Read-only" |
+| `invClaimRemoteSession(id)` | "Continue here" — carries the events over and claims the lease. Re-checks the owner gate (a stale rendered button can't hand someone else's count over) and takes `invSequence` from the **max sequence actually present**, not the stored counter, which lags when a device scanned after its last push. The activity feed + exceptions list are NOT synced and stay behind; the alert says so |
 
 ---
 
@@ -204,7 +231,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 
 ### GitHub Data Sync (`gh*`)
 
-> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json`, `boxes.json`, `pallets.json`, `conflicts.json`, `device_labels.json`, `meta.json` (writer version-stamp `{appVersion, schemaVersion}` — byte-stable so it doesn't churn; read on pull to raise the update banner / gate a future breaking schema), `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files) and is atomic in memory (current data is only replaced after every fetch succeeds). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit (a drop mid-push leaves the repo untouched); unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing. Conflicts (repo changed since last pull) require explicit overwrite confirmation in a **manual** push and are **blocked** in an **auto** push. The three history-commit actions (Mark as Imported / Append to History, Add Batch to History Only, Merge Existing Records) fire an auto push; offline / timed-out pushes are deferred via `GH_PENDING_KEY` and flushed on the `online` event. All fetches are timeout-bounded (`ghFetch`). The service worker bypasses `api.github.com` so responses are never cached. **Planned next:** union auto-merge of concurrent changes (keep both sides; escalate only same-record edits).
+> Pull + push of shared master data against a private GitHub repo's `data/` folder, authorized by a fine-grained PAT stored in IndexedDB. Files: `product_map.json`, `barcode_map.json`, `quants.json`, `recounts.json`, `inventory.json` (as of v2.57.00 this carries ACTIVE sessions too, checkpointed every ~30s while counting — not just finalized ones), `boxes.json`, `pallets.json`, `conflicts.json`, `device_labels.json`, `meta.json` (writer version-stamp `{appVersion, schemaVersion}` — byte-stable so it doesn't churn; read on pull to raise the update banner / gate a future breaking schema), `history-<year>.json` shards. **Pull** uses the REST Contents API (raw media type for >1 MB files) and is atomic in memory (current data is only replaced after every fetch succeeds). **Push** uses the Git Data API — blobs → tree → commit → ref — so all changed files land in one atomic commit (a drop mid-push leaves the repo untouched); unchanged files are skipped by comparing locally computed git blob SHAs against the repo listing. Conflicts (repo changed since last pull) require explicit overwrite confirmation in a **manual** push and are **blocked** in an **auto** push. The three history-commit actions (Mark as Imported / Append to History, Add Batch to History Only, Merge Existing Records) fire an auto push; offline / timed-out pushes are deferred via `GH_PENDING_KEY` and flushed on the `online` event. All fetches are timeout-bounded (`ghFetch`). The service worker bypasses `api.github.com` so responses are never cached. **Planned next:** union auto-merge of concurrent changes (keep both sides; escalate only same-record edits).
 
 | Function / Variable | Purpose |
 |---------------------|---------|
@@ -376,7 +403,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `invStartNewSession()` | Create fresh session + autosave |
 | `invResumeSession()` | Manual "Resume Session" button (shows alert) |
 | `invClearSession()` | Clear session from memory + IDB; confirm wording branches on closed (already durably merged — safe) vs. active (real data-loss risk); if closed and Gap Analysis hasn't been run for this session — or was run but is now stale because events were added since (`invActiveEventCount()` mismatch) — an extra warning fires first, since clearing empties `invEvents`, which Gap Analysis/`rcOpenCreateFromGaps` read |
-| `invFinalizeSession()` | Close session + merge events into master data; persists via `timSaveMasterCache()`/`scheduleInvAutosave()` immediately and auto-pushes to GitHub when configured (same durability pattern as the reel-importer/history-commit actions), falling back to the manual "replace your master file" download only when GitHub sync isn't set up |
+| `invFinalizeSession()` | Close session + merge events into master data; **releases the write lease and cancels any armed checkpoint** (v2.57.00 — `_ghMergeInvSessionsLWW` then makes "closed" beat a checkpoint still in flight from another device); persists via `timSaveMasterCache()`/`scheduleInvAutosave()` immediately and auto-pushes to GitHub when configured (same durability pattern as the reel-importer/history-commit actions), falling back to the manual "replace your master file" download only when GitHub sync isn't set up |
 | `invGoToRecountManager()` | Sidebar "Recount Manager" button target (enabled once session is closed) — navigates to the Recount subview instead of launching the legacy walkthrough |
 | `invResetSessionState()` | Zero out events/exceptions/recounts/sequence |
 | `invExportBackup()` | Export session JSON to file |
@@ -396,7 +423,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `renderInvSidebarSession()` | Update sidebar session indicator + stats |
 | `renderInvStatusBar()` | Keep sticky toolbar visible; update session name + event count (mode/loc shown by their own controls) |
 | `renderInvEventLog()` | Render event log table (filterable) |
-| `renderInvSummary()` | Render per-item summary (qty, footage) |
+| `renderInvSummary()` | Render per-item summary (qty, footage) for the session open on THIS device — it reads the live `invEvents`, so it is deliberately not a cross-device view; that's `renderInvProgress()` |
 | `renderInvExceptions()` | Render exceptions panel |
 | `renderInvActivityFeed()` | Fill the always-visible last-action bar + render the full list (in the history overlay) |
 | `invAddActivity(type, msg, detail, beepType)` | Append to activity feed + fire `timFeedback` (tone + flash) |
