@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.05";
+const APP_VERSION = "v2.57.06";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5465,12 +5465,32 @@ function invAutoRestoreSession() {
     invSequence   = invSession.sequenceCounter || 0;
     invSession.status    = "active";
     invSession.updatedAt = invNow();
-    // Reopening on this device means counting continues here, so take the write
-    // lease back (v2.57.00) — otherwise a holder recorded before the session was
-    // last put down would leave it read-only on the very device resuming it.
-    invClaimLease(invSession);
-    invLeaseLost = false;
-    renderInvLeaseBanner("");
+    // A PAGE LOAD IS NOT A CLAIM (v2.57.06). This used to call invClaimLease,
+    // which was wrong in the worst way: invAutoRestoreSession is the SILENT
+    // restore that fires on EVERY load, so merely opening TIM - or reloading it
+    // to take an update - stamped a fresh heldAt and stole the session back from
+    // whichever device legitimately held it. Found 2026-09-23 by the two-device
+    // smoke test: the session was handed to the PC, then updating the iPad
+    // silently re-took it without anyone asking.
+    //
+    // Claiming belongs to DELIBERATE acts only: Start New, the Resume button,
+    // "Continue here", and "Take it back". Restoring preserves whatever holder
+    // was recorded and lets the next sync's invDetectLeaseChange decide.
+    //
+    // A session saved before v2.57.00 has no holderDevice at all; invHoldsLease
+    // treats that as held locally, so an upgrade still cannot freeze a count
+    // already in progress on this device.
+    if (invSession.holderDevice && invSession.holderDevice !== timGetDeviceId()) {
+      // We already knew we'd been handed off before this reload - a reload must
+      // not quietly reset that back to "mine".
+      invLeaseLost = true;
+      renderInvLeaseBanner("Counting moved to " + (invSession.holderLabel || "another device") +
+        (invSession.heldAt ? " at " + new Date(invSession.heldAt).toLocaleTimeString() : "") +
+        ". Scanning is paused here so counts can't strand on this device.");
+    } else {
+      invLeaseLost = false;
+      renderInvLeaseBanner("");
+    }
     if (saved.currentLocation) invSetLocation(saved.currentLocation);
     if (Array.isArray(saved.activityLog) && saved.activityLog.length) {
       invActivityLog = saved.activityLog.map(function(e) {
