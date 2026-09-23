@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.04";
+const APP_VERSION = "v2.57.05";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -3482,11 +3482,48 @@ function _ghMergeInvSessionsLWW(local, remote) {
     var cur = byId[id];
     var curClosed = cur.status === "closed", newClosed = s.status === "closed";
     if (curClosed !== newClosed) { if (newClosed) byId[id] = s; return; }
-    if (ts(s) > ts(cur)) byId[id] = s;
+    var winner = (ts(s) > ts(cur)) ? s : cur;
+    var loser  = (winner === s) ? cur : s;
+    byId[id] = _invMergeLease(winner, loser);
   }
   local.forEach(take);
   remote.forEach(take);
   return order.map(function(id) { return byId[id]; });
+}
+
+// A CHECKPOINT IS NOT A CLAIM (v2.57.05).
+//
+// The record body is resolved by updatedAt above — newest write wins, which is
+// right for content. But the LEASE must follow `heldAt`, the moment someone
+// actually claimed it, or the old holder silently steals it back:
+//
+//   T0  A claims           (heldAt T0, updatedAt T0, holder A)
+//   T1  B "Continue here"  (heldAt T1, updatedAt T1, holder B)   ← the handoff
+//   T2  A scans, not having synced. Its checkpoint stamps updatedAt T2 while
+//       heldAt is still T0. Resolving the whole record on updatedAt hands the
+//       lease BACK to A, which never intended to claim it — and then B gets the
+//       "you lost the lease" banner. Both devices ping-pong and the lease means
+//       nothing.
+//
+// So: take the body from the newer write, but the holder from the newer CLAIM.
+// A's late checkpoint still contributes its events (they union by eventId and
+// are never lost); it just can't repossess the session. Taking it back stays
+// possible, but only deliberately, through invReclaimLease, which stamps a
+// fresh heldAt and therefore legitimately wins.
+//
+// Not reached for a closed session: finalize clears the holder, and
+// closed-beats-active returns above before this runs.
+function _invMergeLease(winner, loser) {
+  var wh = (winner && winner.heldAt) || "";
+  var lh = (loser  && loser.heldAt)  || "";
+  if (lh > wh) {
+    return Object.assign({}, winner, {
+      holderDevice: loser.holderDevice || "",
+      holderLabel:  loser.holderLabel  || "",
+      heldAt:       loser.heldAt
+    });
+  }
+  return winner;
 }
 
 // Union the two box maps; on a shared box ID keep whichever record has the
@@ -4030,6 +4067,12 @@ function ghPushToGitHub(opts) {
             };
             var res = ghMergeMasters(base || {}, buildExportPayload(), remote, ctx);
             loadSourceData(res.merged, "GitHub merge (push rebase)");
+            // A rebase pulls in the other device's session record, so this is the
+            // earliest moment the old holder can learn it was handed off — without
+            // it, a device that lost the lease keeps checkpointing until someone
+            // happens to hit Sync manually (v2.57.05).
+            invDetectLeaseChange();
+            renderInvProgress();
             timSaveMasterCache();
             ghMergeConflictEntries(asm.conflicts);
             ghMergeConflictEntries(res.conflicts);
