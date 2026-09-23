@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.02";
+const APP_VERSION = "v2.57.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2587,38 +2587,47 @@ function ghRenderTestingBanner() {
   ghApplyButtonGating();
 }
 
-// SINGLE OWNER of the Sync/Push buttons' enabled state (v2.57.02).
+// SINGLE OWNER of the Sync/Push buttons' enabled state.
 //
-// Testing mode DISABLES Sync. Turning the mode off has to be a deliberate act by
-// the person at the device — not a side effect of clicking Sync, and not
-// something they can click past without noticing. This is the forcing function
-// the amber banner alone wasn't: it sits in the way at the exact moment someone
-// goes looking for their data, which is when the 2026-09-23 iPad incident would
-// have been caught within seconds instead of after a day of counting.
+// THE RULE (v2.57.03, and it is the right way round): testing mode blocks
+// EGRESS ONLY. Nothing leaves the device; pulling in is untouched.
 //
-// The AUTOMATIC boot pull (ghInit → ghSyncNow(true)) is deliberately NOT gated.
-// Testing mode's whole purpose is to work against live, real, current data while
-// suppressing push-back; blocking pulls would defeat the feature and leave the
-// device drifting. So a reload still refreshes shared data — only the manual
-// button is held, and only to force the conscious decision.
+//   PUSH  — disabled. Testing means this device's data must not reach the shared
+//           repo, so the button that publishes it is greyed out and says why.
+//   PULL  — enabled. Testing mode exists precisely to work against live, real,
+//           current data. Blocking pulls defeats the feature and leaves the
+//           device drifting; refreshing costs nobody anything because a pull
+//           sends nothing.
+//
+// v2.57.02 had this backwards — it gated Sync (which is a PULL in TIM) and left
+// Push clickable. Corrected here.
+//
+// The button state is COSMETIC. The actual guarantee is structural and sits
+// elsewhere: every GitHub write goes ghPushToGitHub → _ghWriteCommit →
+// ghApiWrite, both _ghWriteCommit call sites are inside ghPushToGitHub, and the
+// testing-mode guard is that function's first statement. All ~17 push call sites
+// funnel through that one door. Greying the button tells the truth about what
+// the code already enforces — it is not what enforces it.
 //
 // Everything that enables these buttons routes through here, because a second
-// owner is exactly how the indicator drifted from the behaviour last time: both
-// ghSyncNow and ghPushToGitHub used to re-enable unconditionally in .finally(),
-// which would silently un-gate the button the moment a boot sync completed.
+// owner is exactly how the indicator drifted from the behaviour on 2026-09-23:
+// both ghSyncNow and ghPushToGitHub used to re-enable unconditionally in
+// .finally(), which would silently un-gate a button a moment after boot set it.
 function ghApplyButtonGating() {
   var testing = ghTestingMode();
   var busy    = (typeof ghSyncInFlight !== "undefined") && ghSyncInFlight;
+  // Pull: only ever blocked by an in-flight operation, never by testing mode.
   ["ghSyncNowBtn", "invProgressSyncBtn"].forEach(function(id) {
     var b = $(id);
-    if (b) b.disabled = testing || busy;
+    if (b) b.disabled = busy;
   });
+  // Push: the egress door.
   var pushBtn = $("ghPushBtn");
-  if (pushBtn) pushBtn.disabled = busy;
+  if (pushBtn) pushBtn.disabled = testing || busy;
   var note = $("ghSyncGateNote");
   if (note) {
     if (testing) {
-      note.textContent = "⚠ Sync is disabled while testing mode is on. Turn testing mode off above before syncing — nothing from this device reaches the shared repo until you do.";
+      note.textContent = "⚠ Testing mode is on, so nothing can leave this device — Push is disabled and every automatic push (including count checkpoints) is suppressed. Pulling is still allowed: Sync Now will bring in other people's changes without sending any of yours. Turn testing mode off above when you're ready to publish.";
       note.style.color = "#b45309";
     } else {
       note.textContent = "";
@@ -5098,7 +5107,7 @@ function renderInvProgress() {
     if (ghTestingMode()) {
       note.className = "small";
       note.style.cssText = "background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;color:#78350f;margin-bottom:10px;";
-      note.textContent = "⚠ Testing mode is ON — this device is not checkpointing. Counts made here stay on this device only, and this list can't show them to anyone else.";
+      note.textContent = "⚠ Testing mode is ON — this device is not checkpointing. Counts made here stay on this device only, and nobody else can see them. Syncing still works and will pull in other devices' counts; it just won't send yours.";
     } else if (!ghConfigured()) {
       note.className = "small";
       note.style.cssText = "background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;color:#475569;margin-bottom:10px;";
