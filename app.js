@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.00";
+const APP_VERSION = "v2.57.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2536,11 +2536,27 @@ function ghConfigured() {
 // the shared GitHub repo so feature testing can't leak test artifacts upstream.
 // Reads/ingest are unaffected (those are separate fns) — only ghPushToGitHub is
 // gated, and it's the single choke point every push (auto + manual) goes through.
-// Failure-mode design: the SAFE failure is "stuck ON" (my changes just don't
-// sync). The DANGEROUS one is "OFF when I think it's ON" → test junk pushes. So
-// ON is made impossible to miss (persistent amber header banner); the ABSENCE of
-// the banner is the reliable "you are live and pushing" signal. UI-state only
-// (localStorage), never part of synced master data.
+// Failure-mode design, CORRECTED 2026-09-23 (v2.57.01). The original note here
+// read: "the SAFE failure is 'stuck ON' (my changes just don't sync); the
+// DANGEROUS one is 'OFF when I think it's ON' → test junk pushes." That threat
+// model was wrong, and the field proved it: an iPad sat in testing mode with the
+// banner absent and the button reading "Off", and a day of real warehouse
+// counting stayed on that one device. Polluting the shared repo is recoverable —
+// you can revert a commit. Silently isolating work that exists nowhere else is
+// not. BOTH directions are dangerous; "stuck ON while displayed OFF" is the
+// worse of the two, and it is precisely the data-loss exposure the v2.57.00
+// checkpoint feature exists to close — which testing mode can reopen, because
+// the single guard in ghPushToGitHub suppresses checkpoints too.
+//
+// So the indicator is no longer trusted to a one-shot render at boot:
+//   1. ghRenderTestingBanner runs FIRST in boot restore, in its own try/catch
+//      (a throw in tab restoration used to skip it silently).
+//   2. The button's markup no longer hard-codes "Off" — an un-run render now
+//      reads as unknown, not as a reassurance.
+//   3. ghPushToGitHub RE-ASSERTS the banner every time it suppresses, so the
+//      code doing the suppressing is the code raising the warning and the two
+//      cannot drift.
+// UI-state only (localStorage), never part of synced master data.
 const TIM_TESTING_MODE_KEY = "tim_testing_mode";
 function ghTestingMode() {
   try { return localStorage.getItem(TIM_TESTING_MODE_KEY) === "1"; } catch(e) { return false; }
@@ -3846,8 +3862,21 @@ function ghPushToGitHub(opts) {
   // Testing mode: suppress EVERY push (auto + manual). Local saves already
   // happened upstream of here; we just skip the write to the shared repo.
   if (ghTestingMode()) {
-    ghSetStatus("Testing mode is ON — GitHub push suppressed (data saved locally only). Turn it off to push.",
-      opts.auto ? "info" : "err");
+    // SELF-HEALING INDICATOR (v2.57.01). The code that does the suppressing is
+    // now the code that raises the warning, so the two cannot drift apart. They
+    // did once: boot failed to render the banner, the button's markup says "Off"
+    // until JS says otherwise, and an iPad spent a day silently not pushing
+    // while the UI claimed it was live. Re-asserting here means the very first
+    // suppressed push repaints the truth, whatever happened at load.
+    ghRenderTestingBanner();
+    // A suppressed push during an ACTIVE COUNT is not the same event as one
+    // during idle feature testing — it is the data-isolation case: real counting
+    // that exists on this device and nowhere else. Say so in those words.
+    var counting = (typeof invSession !== "undefined" && invSession && invSession.status === "active");
+    ghSetStatus(counting
+      ? "⚠ Testing mode is ON — this count is NOT syncing. Its scans exist only on this device. Turn testing mode off to publish them."
+      : "Testing mode is ON — GitHub push suppressed (data saved locally only). Turn it off to push.",
+      counting ? "err" : (opts.auto ? "info" : "err"));
     return;
   }
   if (ghSyncInFlight) return;
@@ -5014,6 +5043,26 @@ function renderInvProgress() {
   if (!tbody) return;
   var rows = invProgressSessions();
   var me   = timGetDeviceId();
+
+  // Say why this panel is lying, when it is (v2.57.01). Testing mode suppresses
+  // checkpoints along with every other push, so without this the view just looks
+  // quiet — which is indistinguishable from "nobody is counting" and is exactly
+  // how a suppressed count goes unnoticed.
+  var note = $("invProgressSyncNote");
+  if (note) {
+    if (ghTestingMode()) {
+      note.className = "small";
+      note.style.cssText = "background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;color:#78350f;margin-bottom:10px;";
+      note.textContent = "⚠ Testing mode is ON — this device is not checkpointing. Counts made here stay on this device only, and this list can't show them to anyone else.";
+    } else if (!ghConfigured()) {
+      note.className = "small";
+      note.style.cssText = "background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;color:#475569;margin-bottom:10px;";
+      note.textContent = "GitHub sync isn't configured on this device, so counts here are local only and nothing from other devices appears.";
+    } else {
+      note.textContent = "";
+      note.style.cssText = "";
+    }
+  }
 
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">' +
@@ -17039,22 +17088,45 @@ function invFinalizeSession() {
   if (configured) ghPushToGitHub({ auto: true });
 }
 
-// Restore sidebar + tab state (runs after all variables are declared)
-try {
+// Restore sidebar + tab state (runs after all variables are declared).
+//
+// EACH STEP GETS ITS OWN try/catch (v2.57.01). These used to share one, and the
+// shared catch was silent — so a throw anywhere in switchTab (a moved element, a
+// sub-view that no longer exists after an update) skipped everything after it,
+// including the testing-mode indicator. That is how an iPad ended up suppressing
+// every push while the UI said testing mode was off. A cosmetic failure in tab
+// restoration must never be able to take a safety indicator down with it.
+function _timBootRestoreStep(label, fn) {
+  try { fn(); }
+  catch (e) { try { console.error("[TIM] boot restore step failed: " + label, e); } catch (_) {} }
+}
+
+// FIRST, before anything that can throw: the testing-mode indicator. It is the
+// only signal that pushes are being suppressed, so it is restored ahead of the
+// merely cosmetic state, not after it.
+_timBootRestoreStep("testing-mode indicator", function() { ghRenderTestingBanner(); });
+
+_timBootRestoreStep("sidebar", function() {
   if (localStorage.getItem("tim_sidebar_collapsed") === "1") {
     var _sb = document.getElementById("appSidebar");
     if (_sb) _sb.classList.add("collapsed");
   }
+});
+_timBootRestoreStep("active tab", function() {
   var _savedTab = localStorage.getItem("tim_active_tab");
   if (_savedTab && ["receiving","inventory","products","mapping","barcodes","boxes","pallets"].includes(_savedTab)) {
     switchTab(_savedTab);
   }
-  ghRenderTestingBanner();   // reflect persisted testing-mode state on load
+});
+_timBootRestoreStep("update check", function() {
   // Non-blocking "newer version available" banner: check the deployed build a few
   // seconds after load (don't compete with boot fetches), and again on reconnect.
   setTimeout(timAutoUpdateCheck, 3000);
   window.addEventListener("online", timAutoUpdateCheck);
-} catch(e) {}
+});
+// And again after the tab restore, in case switchTab's rendering replaced the
+// button's markup. Cheap, idempotent, and the cost of it being wrong is high.
+_timBootRestoreStep("testing-mode indicator (recheck)", function() { ghRenderTestingBanner(); });
 
 // Boot: show the loading overlay with a step checklist, restore the cached
 // dataset into memory (no render), then let ghInit either auto-sync (which

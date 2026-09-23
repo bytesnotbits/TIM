@@ -283,7 +283,7 @@
           <button class="secondary" style="margin:0;" onclick="ghOpenConfig()">&#9881; Configure</button>
           <button id="ghSyncNowBtn" class="secondary" style="margin:0;" onclick="ghSyncNow()">&#8635; Sync Now</button>
           <button id="ghPushBtn" class="secondary" style="margin:0;" onclick="ghPushToGitHub()" title="Commit this device's current data to the repo (requires a token with Contents: Read and write)">&#8593; Push to GitHub</button>
-          <button id="ghTestingToggleBtn" class="secondary" style="margin:0;" onclick="ghToggleTestingMode()" title="Work with live data but suppress ALL pushes to GitHub while testing new features. Local saves still happen; nothing syncs to the shared repo until you turn it off.">&#129514; Testing mode: Off</button>
+          <button id="ghTestingToggleBtn" class="secondary" style="margin:0;" onclick="ghToggleTestingMode()" title="Work with live data but suppress ALL pushes to GitHub while testing new features. Local saves still happen; nothing syncs to the shared repo until you turn it off.">&#129514; Testing mode&#8230;</button>
           <button class="secondary" style="margin:0;" onclick="ghDownloadSeedFiles()" title="Download the current local data as split JSON files to commit into the repo's data/ folder">&#8595; Download Seed Files</button>
         </div>
       </div>
@@ -864,6 +864,7 @@
         <div style="margin-bottom:10px;">
           <button class="btn-compact" onclick="ghSyncNow()">Sync now</button>
         </div>
+        <div id="invProgressSyncNote" class="small"></div>
         <div class="scroll">
           <table>
             <thead>
