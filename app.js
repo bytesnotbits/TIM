@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.56.01";
+const APP_VERSION = "v2.56.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -17855,11 +17855,19 @@ function reelBatchSelectedEntries() {
 }
 
 // Which selected reels would AGREE with the markers being typed, and which would
-// not. "Full reel = these two numbers" only holds for the reels that are actually
-// full — within item 1502 alone the floor holds 16 ft, 168 ft and 4,870 ft reels —
-// so the batch has to show the disagreement BEFORE it writes, not as a row of
-// Stale badges afterwards. Reels with no known footage can't be judged; they are
-// counted separately rather than lumped in with the mismatches.
+// not.
+//
+// There is NO built-in notion of a "full" reel and there must not be: the operator
+// decides what they are typing, and 0 → 10,000 is checked exactly the same way as
+// 0 → 5,000, or 16,840 → 15,090 on a part reel. The only question asked is whether
+// |outer − inner| (+ span B) agrees with what Odoo says that reel holds.
+//
+// It earns its place because the selection affordances — tick a whole item group,
+// select all in view — make a broad selection one click, and a group is rarely
+// uniform: within item 1502 alone the floor holds 16 ft, 168 ft and 4,870 ft reels
+// beside the 5,000 ft ones. Better to show the disagreement BEFORE the write than
+// as a row of Stale badges to unpick afterwards. Reels with no known footage can't
+// be judged and are counted separately, never lumped in with the mismatches.
 function reelBatchMatchSplit(refFt) {
   var match = [], off = [], unknown = [];
   reelBatchSelectedEntries().forEach(function(e) {
@@ -17953,8 +17961,11 @@ function reelBatchRecalcPreview() {
   });
   warn.classList.remove("hidden");
   warn.style.background = "#fffbeb"; warn.style.borderColor = "#fde047"; warn.style.color = "#92400e";
+  var one = (split.off.length === 1);
   warn.innerHTML = "⚠ <strong>" + split.off.length + " of " + (split.match.length + split.off.length)
-    + " selected reels don't hold " + ft.toLocaleString() + " ft</strong> — they aren't full, so these markers would be wrong for them and they'd all flag Stale:"
+    + (one ? " selected reels doesn't hold " : " selected reels don't hold ") + ft.toLocaleString()
+    + " ft on hand</strong> — " + (one ? "these markers imply a different length than Odoo has for it, so it'd flag Stale:"
+                                       : "these markers imply a different length than Odoo has for them, so they'd flag Stale:")
     + "<div style=\"margin:6px 0 0;font-family:monospace;font-size:12px;line-height:1.7;\">"
     + names.slice(0, 20).join(", ") + (names.length > 20 ? ", …and " + (names.length - 20) + " more" : "") + "</div>"
     + (split.match.length
@@ -17983,8 +17994,9 @@ function reelBatchApply() {
   // showed while the fields were being filled (cf. invReelCheckDuplicate).
   var refFt = _reelBatchRefFt();
   var off = (refFt != null) ? reelBatchMatchSplit(refFt).off : [];
-  if (off.length && !confirm(off.length + " of the " + keys.length + " selected reels don't hold "
-      + refFt.toLocaleString() + " ft on hand — they aren't full, so these markers are wrong for them:\n\n"
+  if (off.length && !confirm(off.length + " of the " + keys.length
+      + (off.length === 1 ? " selected reels doesn't hold " : " selected reels don't hold ")
+      + refFt.toLocaleString() + " ft on hand — these markers disagree with Odoo's footage:\n\n"
       + off.slice(0, 12).map(function(e) { return "  " + (e.reelNumber || "") + " — " + Number(reelEffectiveFt(e)).toLocaleString() + " ft"; }).join("\n")
       + (off.length > 12 ? "\n  …and " + (off.length - 12) + " more" : "")
       + "\n\nAssign anyway?")) return;
