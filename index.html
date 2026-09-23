@@ -286,6 +286,9 @@
           <button id="ghTestingToggleBtn" class="secondary" style="margin:0;" onclick="ghToggleTestingMode()" title="Work with live data but suppress ALL pushes to GitHub while testing new features. Local saves still happen; nothing syncs to the shared repo until you turn it off.">&#129514; Testing mode&#8230;</button>
           <button class="secondary" style="margin:0;" onclick="ghDownloadSeedFiles()" title="Download the current local data as split JSON files to commit into the repo's data/ folder">&#8595; Download Seed Files</button>
         </div>
+        <!-- Why Sync is greyed out. Visible text, not a tooltip — the warehouse
+             device is an iPad, where there is no hover to reveal a title. -->
+        <div id="ghSyncGateNote" class="small" style="margin-top:8px;"></div>
       </div>
 
       <!-- 2. Receiving Source File -->
@@ -862,7 +865,7 @@
       <div id="invProgressCollapse" class="collapsible-body">
         <p class="small">Unfinalized sessions from every device, as of the last sync. Counts checkpoint automatically every 30 seconds while scanning. You can continue a session you started yourself on another device; everyone else's is read-only.</p>
         <div style="margin-bottom:10px;">
-          <button class="btn-compact" onclick="ghSyncNow()">Sync now</button>
+          <button id="invProgressSyncBtn" class="btn-compact" onclick="ghSyncNow()">Sync now</button>
         </div>
         <div id="invProgressSyncNote" class="small"></div>
         <div class="scroll">

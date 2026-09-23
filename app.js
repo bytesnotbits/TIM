@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.01";
+const APP_VERSION = "v2.57.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2582,6 +2582,49 @@ function ghRenderTestingBanner() {
     btn.style.color      = on ? "#1c1917" : "";
     btn.style.fontWeight = on ? "800" : "";
   }
+  // The gate rides with the indicator, so the buttons can never say something
+  // different from the banner (v2.57.02).
+  ghApplyButtonGating();
+}
+
+// SINGLE OWNER of the Sync/Push buttons' enabled state (v2.57.02).
+//
+// Testing mode DISABLES Sync. Turning the mode off has to be a deliberate act by
+// the person at the device — not a side effect of clicking Sync, and not
+// something they can click past without noticing. This is the forcing function
+// the amber banner alone wasn't: it sits in the way at the exact moment someone
+// goes looking for their data, which is when the 2026-09-23 iPad incident would
+// have been caught within seconds instead of after a day of counting.
+//
+// The AUTOMATIC boot pull (ghInit → ghSyncNow(true)) is deliberately NOT gated.
+// Testing mode's whole purpose is to work against live, real, current data while
+// suppressing push-back; blocking pulls would defeat the feature and leave the
+// device drifting. So a reload still refreshes shared data — only the manual
+// button is held, and only to force the conscious decision.
+//
+// Everything that enables these buttons routes through here, because a second
+// owner is exactly how the indicator drifted from the behaviour last time: both
+// ghSyncNow and ghPushToGitHub used to re-enable unconditionally in .finally(),
+// which would silently un-gate the button the moment a boot sync completed.
+function ghApplyButtonGating() {
+  var testing = ghTestingMode();
+  var busy    = (typeof ghSyncInFlight !== "undefined") && ghSyncInFlight;
+  ["ghSyncNowBtn", "invProgressSyncBtn"].forEach(function(id) {
+    var b = $(id);
+    if (b) b.disabled = testing || busy;
+  });
+  var pushBtn = $("ghPushBtn");
+  if (pushBtn) pushBtn.disabled = busy;
+  var note = $("ghSyncGateNote");
+  if (note) {
+    if (testing) {
+      note.textContent = "⚠ Sync is disabled while testing mode is on. Turn testing mode off above before syncing — nothing from this device reaches the shared repo until you do.";
+      note.style.color = "#b45309";
+    } else {
+      note.textContent = "";
+      note.style.color = "";
+    }
+  }
 }
 
 function ghSetStatus(msg, state) {
@@ -2987,7 +3030,9 @@ function ghSyncNow(silent) {
     if (!_timRendered) timRenderRestored();
   }).finally(function() {
     ghSyncInFlight = false;
-    if (btn) btn.disabled = false;
+    // Re-enable via the gate, never unconditionally: a boot auto-sync completing
+    // while testing mode is on must NOT un-grey the Sync button (v2.57.02).
+    ghApplyButtonGating();
   });
 }
 
@@ -4054,8 +4099,7 @@ function ghPushToGitHub(opts) {
     }
   }).finally(function() {
     ghSyncInFlight = false;
-    if (syncBtn) syncBtn.disabled = false;
-    if (pushBtn) pushBtn.disabled = false;
+    ghApplyButtonGating();   // gate-aware re-enable (v2.57.02)
   });
 }
 
@@ -5048,6 +5092,7 @@ function renderInvProgress() {
   // checkpoints along with every other push, so without this the view just looks
   // quiet — which is indistinguishable from "nobody is counting" and is exactly
   // how a suppressed count goes unnoticed.
+  ghApplyButtonGating();   // this panel has its own Sync button to gate
   var note = $("invProgressSyncNote");
   if (note) {
     if (ghTestingMode()) {
