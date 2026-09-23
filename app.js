@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.03";
+const APP_VERSION = "v2.57.04";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4605,12 +4605,22 @@ function invStorageAvailable() {
 }
 
 // -- Tab switching --------------------------------------------------
+// THE canonical tab list (v2.57.04). switchTab paints from it and the boot
+// restore validates against it, so a tab cannot be navigable but not restorable.
+// It was exactly that drift — a second, hand-maintained copy in the boot restore
+// that omitted "dataimport" — which made a reload from the Data Import tab land
+// silently on Receiving, i.e. bounced you off the GitHub panel at the one moment
+// (just after an update) you'd most want to be looking at it.
+// "mapping" is NOT here: it's a legacy alias switchTab translates to
+// products + the Mapping sub-view, so it's accepted as input but is not a tab.
+const TIM_TABS = ["dataimport", "receiving", "inventory", "products", "barcodes", "boxes", "pallets"];
+
 function switchTab(name) {
   // Product Mapping was folded into Products as a sub-tab (v2.48.00). Any legacy
   // nav to "mapping" (e.g. a restored tim_active_tab) lands on Products' Mapping sub-view.
   var _forceProdSub = null;
   if (name === "mapping") { name = "products"; _forceProdSub = "mapping"; }
-  ["dataimport", "receiving", "inventory", "products", "barcodes", "boxes", "pallets"].forEach(function(t) {
+  TIM_TABS.forEach(function(t) {
     var panel = $("tab" + t.charAt(0).toUpperCase() + t.slice(1));
     var btn   = $("sideNav" + t.charAt(0).toUpperCase() + t.slice(1));
     if (panel) panel.classList.toggle("active", t === name);
@@ -17168,7 +17178,9 @@ _timBootRestoreStep("sidebar", function() {
 });
 _timBootRestoreStep("active tab", function() {
   var _savedTab = localStorage.getItem("tim_active_tab");
-  if (_savedTab && ["receiving","inventory","products","mapping","barcodes","boxes","pallets"].includes(_savedTab)) {
+  // Validate against the canonical list + the legacy "mapping" alias, rather
+  // than a second hand-kept copy that can drift out of step with switchTab.
+  if (_savedTab && (TIM_TABS.includes(_savedTab) || _savedTab === "mapping")) {
     switchTab(_savedTab);
   }
 });

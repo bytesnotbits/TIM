@@ -1123,6 +1123,7 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 
 | Function | Purpose |
 |----------|---------|
+| `TIM_TABS` | **The canonical tab list** (v2.57.04). `switchTab` paints from it and the boot restore validates against it, so a tab can't be navigable but not restorable. That drift — a second hand-kept copy in the boot restore missing `"dataimport"` — silently bounced a reload from Data Import onto Receiving, i.e. off the GitHub panel right after an update. `"mapping"` is deliberately NOT in it: it's a legacy alias `switchTab` rewrites to products + the Mapping sub-view (and it self-heals, since the rewritten name is what gets persisted) |
 | `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory **and** Products sub-nav + applies their sub-views. Legacy `switchTab("mapping")` (removed top-level tab) redirects to Products → Mapping sub-view |
 | `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
 | `prodShowSubview(name)` / `PROD_SUBVIEWS` | Switch Products sub-screen (catalog/mapping/serial/reel/health/newitem/notes) by toggling `[data-prod-subview]` cards; persists to `tim_prod_subview`. `mapping` = the folded-in Mapping Editor + Unknown-Products cards; `notes` = Architecture & Data Model Notes (own sub-tab, shown expanded — the old Show/Hide collapsible + `prodToggleNotes` were removed) |
