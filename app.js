@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.56.02";
+const APP_VERSION = "v2.56.03";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -17848,10 +17848,75 @@ function _reelBatchRefreshSelectionUi() {
       + "<br /><span style=\"color:#64748b;\">" + names.slice(0, 20).map(escapeHtml).join(", ")
       + (names.length > 20 ? " …and " + (names.length - 20) + " more" : "") + "</span>";
   }
+
+  _reelBatchRenderSpread();
 }
 
 function reelBatchSelectedEntries() {
   return reelBatchSelectedKeys().map(function(k) { return (appData.reels || {})[k]; }).filter(Boolean);
+}
+
+// Group the SELECTED reels by the footage they hold. Answers a different question
+// from the agreement check, which is why both exist:
+//   • agreement check → "do the numbers I typed fit these reels?"  (needs numbers)
+//   • this            → "is this selection even uniform?"          (needs nothing)
+// So an odd reel picked up by accident is visible the moment the modal opens,
+// before a single digit is typed — and it stays visible if the typed number happens
+// to match the outlier rather than the majority, where the agreement check alone
+// would report the majority as the problem.
+// Clustered with the same REEL_STALE_TOL_FT the agreement check uses, so the two
+// can never disagree about whether two reels hold "the same" footage.
+function reelBatchFootageClusters() {
+  var known = [], unknown = 0;
+  reelBatchSelectedEntries().forEach(function(e) {
+    var ft = reelEffectiveFt(e);
+    if (ft == null) { unknown++; return; }
+    known.push({ e: e, ft: ft });
+  });
+  known.sort(function(a, b) { return a.ft - b.ft; });
+  var clusters = [];
+  known.forEach(function(r) {
+    var c = clusters[clusters.length - 1];
+    if (c && Math.abs(r.ft - c.ft) <= REEL_STALE_TOL_FT) { c.reels.push(r.e); return; }
+    clusters.push({ ft: r.ft, reels: [r.e] });
+  });
+  // Biggest group first — that's the one the batch is presumably FOR.
+  clusters.sort(function(a, b) { return b.reels.length - a.reels.length || a.ft - b.ft; });
+  return { clusters: clusters, unknown: unknown };
+}
+
+// Purely a notice, never a gate (Joe, 2026-09-23): a mixed selection is sometimes
+// exactly what you meant — several duct SKUs whose reels genuinely differ, or a
+// deliberate re-marking — so it states the spread and offers the one-click fix for
+// the case it is actually aimed at: one reel swept up by mistake.
+function _reelBatchRenderSpread() {
+  var el = $("reelBatchSpread"); if (!el) return;
+  var g = reelBatchFootageClusters();
+  if (g.clusters.length <= 1) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  var parts = g.clusters.slice(0, 6).map(function(c) {
+    return "<strong>" + Number(c.ft).toLocaleString() + " ft</strong> (" + c.reels.length + ")";
+  });
+  if (g.clusters.length > 6) parts.push("…and " + (g.clusters.length - 6) + " more");
+  var top = g.clusters[0];
+  el.classList.remove("hidden");
+  el.innerHTML = "The selected reels don't all hold the same footage: " + parts.join(" · ")
+    + (g.unknown ? " · " + g.unknown + " with no known footage" : "")
+    + ". That's fine if you meant it — but if one was swept up by accident, drop it before assigning."
+    + '<div style="margin:6px 0 0;"><button type="button" class="secondary" style="margin:0;padding:4px 11px;font-size:12px;" onclick="reelBatchKeepLargestFootageGroup()">Keep only the '
+    + top.reels.length + " at " + Number(top.ft).toLocaleString() + ' ft</button></div>';
+}
+
+// Narrow to the biggest footage group — the "one reel got picked up by mistake" fix.
+function reelBatchKeepLargestFootageGroup() {
+  var g = reelBatchFootageClusters();
+  if (!g.clusters.length) return;
+  var keep = {};
+  g.clusters[0].reels.forEach(function(e) { keep[normKey(e.reelNumber)] = true; });
+  reelBatchSel = keep;
+  _reelBatchRefreshSelectionUi();
+  reelBatchRecalcPreview();
+  reelBatchUpdateBar();
+  if (typeof reelLookupRender === "function") reelLookupRender();
 }
 
 // Which selected reels would AGREE with the markers being typed, and which would
