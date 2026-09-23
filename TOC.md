@@ -788,7 +788,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `_reelSnapshotSeq(e, by)` | Save the last known-good marker set to `e.seqPrev` `{innerSeq,outerSeq,innerSeqB,outerSeqB,spanType,refCountDate,at,by}` before any overwrite or clear — the in-app undo, so recovery never means digging through the data repo's git history |
 | `reelUpsertReference(row)` | **Reference writer** — upsert inner/outer/notes/refCountDate from a parsed reel-CSV row (footage untouched). Goes through `reelSetSequences`, so a blank Inner/Outer column REFRESHES nothing rather than wiping; a blank notes column likewise. Returns `{entry, seq}` so the importer can report what it preserved |
 | `reelUpsertFromCount(ev)` | **Count writer** (Phase 3, v2.52.01) — a live `cable_reel_count` event: sets `lastCountedFt`/`lastCountedAt`/`lastCountedBy`, resurrects (`presence:"live"`), writes span-A/B seq (via `reelSetSequences`) + `refCountDate` = count time. Hooked in `invSubmitReelEntry` after `invCreateEvent`. Pushes via `reelSaveToStorage` |
-| `reelApplyManualEdit(reelNumber, fields)` | **Manual-edit writer** (v2.52.02) — Reel Lookup → Edit. Owns sequences (A+B) + notes as newest reference (`refCountDate`=now); optional recency-guarded `presenceOverride`. Never sets footage (mismatch → Stale). Stamps `editedBy`/`editedAt`. `fields.clearSequences` is the ONLY authorized wipe (v2.55.00). Returns `{entry, seq}` |
+| `reelApplyManualEdit(reelNumber, fields, opts)` | **Manual-edit writer** (v2.52.02) — Reel Lookup → Edit, and the batch assign. Owns sequences (A+B) + notes as newest reference (`refCountDate`=now); optional recency-guarded `presenceOverride`. Never sets footage (mismatch → Stale). Stamps `editedBy`/`editedAt`. `fields.clearSequences` is the ONLY authorized wipe (v2.55.00). `opts.deferPersist` skips the storage write so a batch persists once at the end instead of once per reel — the caller must then call `reelSaveToStorage()`. Returns `{entry, seq}` |
+| `reelSkuDirection(itemNumber)` | `"two_way"`/`"single"` from the SKU's `reel_direction` in PRODUCT_MAP, or null when the catalog doesn't say. Reel direction is a PRODUCT fact (only item 1502 is two-way today) |
+| `reelResolveSpanType(e)` | Span Type for a reel about to be edited — **same precedence as the scan panel's `_invReelResolveSpanType`** (v2.56.00): this reel's own `spanType` when it already holds sequences → the SKU's `reel_direction` → the stored value. Rule 1 first so an explicit past save is never silently flipped; the help is therefore aimed exactly at the un-entered reels, which is the backlog. Fixes having to re-toggle Two-way on every 1502 reel — `reelSyncFromQuants` creates every new reel as `single`. `#reelEditSpanHint` says when the default came from the catalog |
 | `reelOpenEditModal(reelNumber)` / `reelSaveEdit()` / `reelCancelEdit()` | Edit-modal open (`#reelEditModal`) / save (calls `reelApplyManualEdit`, only overrides presence when changed; confirms a sequence clear by reel number) / close |
 | `reelEditSpanChanged()` / `reelEditRecalcPreview()` | Show/hide span-B inputs / live "sequences imply N ft · on hand M ft ✓/⚠" preview — which also states, when the fields are blank, whether the save will KEEP or CLEAR stored markers, so Save is never a surprise |
 | `reelEditRenderSeqPrev(e)` / `reelEditRestorePrev()` | Render the "Previous reading: X / Y (replaced when, by whom)" line from `seqPrev` with a Restore button / load that snapshot back into the form (not saved until Save Changes) |
@@ -799,6 +801,21 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `reelLookupFilter` / `reelSetLookupFilter(f)` | Reel Lookup view: `active` (default, non-archived) / `stale` / `needseq` / `archived` / `all` |
 | `_reelBadges(e)` / `_reelDirtyLotsNote()` | Status-cell badges (Archived/Stale/Need seq/Unconfirmed) / amber dirty-lot warning above the table |
 
+### Reel Lookup — Batch Sequence Assign (v2.56.00)
+
+> A FULL plowduct reel is the same two numbers every time (0 → 5,000 single span; 0 → 2,500 twice on a two-way), so the list selects and writes in one sweep instead of one modal per reel. **Not a fourth sequence writer** — every reel still goes through `reelApplyManualEdit` → `reelSetSequences`, so the sticky-sequence rule, the `seqPrev` snapshot and the per-reel Restore apply exactly as for a single edit. The only concession to volume is `opts.deferPersist`: one registry write for the whole sweep.
+
+| Function / Variable | Purpose |
+|---------------------|---------|
+| `reelBatchSel` / `_reelLookupVisible` | `normKey(reelNumber) → true` selection map / the batch-eligible rows currently in view (post filter + search), stashed by `reelLookupRender` |
+| `reelBatchSelectedKeys()` / `reelBatchEligible(row)` | Selected keys / can this row be batch-assigned? Only reels with a REGISTRY entry — `reelApplyManualEdit` writes the registry, and a count-only row has nothing to write to (its checkbox renders as a dash) |
+| `reelBatchToggle(reelNumber)` | One row's checkbox — deliberately does NOT re-render (the table is long + lazy-rendered, so a rebuild would throw scroll away); the native checkbox holds its own state and only the bar refreshes |
+| `reelBatchSelectVisible(item)` / `reelBatchDeselectVisible(item)` / `_reelGroupAllSelected(item)` | Tick/untick everything in view or in one item group, and the group header's tick-all state. Works off `_reelLookupVisible`, **not the DOM** — rows below the lazy-render fold aren't there to query |
+| `reelBatchClear()` / `reelBatchUpdateBar()` | Drop the selection / refresh `#reelBatchBar`. The selection deliberately survives a filter or search change, so the bar always states the count out loud |
+| `reelBatchOpenModal()` / `reelBatchCancel()` | Open `#reelBatchModal` with the span type pre-set from the selection's SKUs (unanimous → use it; mixed → amber `#reelBatchMixNote` telling you to assign one item group at a time, since Span B means nothing on a one-way) / close |
+| `reelBatchSpanChanged()` / `reelBatchRecalcPreview()` | Show/hide the span-B inputs / live "each selected reel becomes N ft · K reels · M already have markers that will be replaced". **A batch is only safe to offer if it can say what it is about to overwrite** |
+| `reelBatchApply()` | Confirm (restating the overwrite count), then `reelApplyManualEdit(..., {deferPersist:true})` per reel + one `reelSaveToStorage()`. Blank Notes is left `undefined` so each reel keeps its own note rather than being blanked by an empty batch field |
+
 ### Reel Lookup (Products tab)
 
 > Read-only browse of every reel TIM knows, in the Products tab — no inventory session required. **Registry-primary**, with `cable_reel_count` events overriding footage/sequences only when a count is **NEWER** than the quants baseline that set it (recency-aware: a fresh floor scan is ground truth; a stale historical count must not shadow the current baseline or hide the staleness flag). Filter chips (Active/Stale/Need seq/Archived/All) + Status-cell badges. Searchable; grouped by item; item links open `prodShowItemHistory`.
@@ -807,7 +824,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 |---------------------|---------|
 | `reelLookupBuildList()` | Registry-primary union. Per reel: use the count event only if `ev.timestamp > r.quantsAt`, else the registry row (quants footage + reference sequences + flags); count-only reels (never in quants/reference) appended. Rows carry `_fromRegistry`/`_fromCount`/`presence`/`sequenceStale`/`needsSequences`/`source` |
 | `_reelRowFromRegistry(r)` / `_reelRowFromEvent(ev,r)` | Build a display row from a registry entry / from a (fresh) count event (never stale/needs-seq — a count reconciles both) |
-| `reelLookupRender()` | Render the card: filter chips + `#reelLookupSearch`, group by item, Status badges, archived rows dimmed. `.flow-table`; rows lazy-render via `timLazyRender` |
+| `reelLookupRender()` | Render the card: filter chips + `#reelLookupSearch`, group by item, Status badges, archived rows dimmed. `.flow-table`; rows lazy-render via `timLazyRender`. Also owns the batch-select column + per-item-group tick-all, and stashes `_reelLookupVisible` (v2.56.00) |
 
 ---
 

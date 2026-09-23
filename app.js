@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.55.00";
+const APP_VERSION = "v2.56.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -12697,10 +12697,13 @@ function reelUpsertFromCount(ev) {
 // innerB,outerB,notes, presence?, clearSequences?}. presence is applied only when
 // provided. Returns { entry, seq } — `seq.kept` is how many stored markers the
 // blank-never-wipes rule preserved, so the modal can say so out loud.
-function reelApplyManualEdit(reelNumber, fields) {
+// `opts.deferPersist` skips the storage write so a batch can rewrite the registry
+// once at the end instead of once per reel — the caller MUST then call
+// reelSaveToStorage() itself.
+function reelApplyManualEdit(reelNumber, fields, opts) {
   var e = reelGet(reelNumber);
   if (!e) return null;
-  fields = fields || {};
+  fields = fields || {}; opts = opts || {};
   var nowISO = new Date().toISOString();
   // Sticky-sequence rule: blanking the fields does NOT clear stored markers —
   // only ticking "Clear stored sequences" does (fields.clearSequences), and that
@@ -12720,8 +12723,35 @@ function reelApplyManualEdit(reelNumber, fields) {
   e.editedAt = nowISO; e.editedBy = reelWho();
   e.updatedAt = nowISO; e.updatedBy = reelWho();
   reelRecomputeDerived(e);
-  reelSaveToStorage();        // local + GitHub push (rides reels.json)
+  if (!opts.deferPersist) reelSaveToStorage();   // local + GitHub push (rides reels.json)
   return { entry: e, seq: seqRes };
+}
+
+// "two_way" / "single" from the SKU's reel_direction in PRODUCT_MAP, or null when
+// the catalog doesn't say. Reel direction is a PRODUCT fact — today only item 1502
+// is two-way — so it should never have to be re-stated reel by reel.
+function reelSkuDirection(itemNumber) {
+  if (!itemNumber || typeof findProductMapMatch !== "function") return null;
+  var mm = findProductMapMatch(itemNumber);
+  var rd = mm && mm.entry ? mm.entry.reel_direction : null;
+  if (rd === "two_way") return "two_way";
+  if (rd === "one_way") return "single";
+  return null;
+}
+
+// Span Type for a reel about to be edited — same precedence the scan panel uses
+// (_invReelResolveSpanType), so a reel reads the same way on the floor and in Reel
+// Lookup:
+//   1. sequences already stored on THIS reel → its own spanType (a fact about it)
+//   2. the SKU's reel_direction — a product fact
+//   3. whatever the record carries (a reel born from a quants sync is "single")
+// Rule 1 comes first so an explicit past save is never silently flipped; it is also
+// why this only helps the un-entered reels — which is exactly the backlog.
+function reelResolveSpanType(e) {
+  if (!e) return "single";
+  var stored = e.spanType === "two_way" ? "two_way" : "single";
+  if (e.innerSeq != null || e.outerSeq != null) return stored;
+  return reelSkuDirection(e.itemNumber) || stored;
 }
 
 // ── Reel Edit modal (Reel Lookup → Edit) ──────────────────────────────────
@@ -12737,7 +12767,19 @@ function reelOpenEditModal(reelNumber) {
   if (disp) disp.textContent = (e.reelNumber || "") + (e.itemNumber ? "  ·  item " + e.itemNumber : "") + (e.description ? "  ·  " + e.description : "");
   if ($("reelEditInnerA")) $("reelEditInnerA").value = e.innerSeq != null ? e.innerSeq : "";
   if ($("reelEditOuterA")) $("reelEditOuterA").value = e.outerSeq != null ? e.outerSeq : "";
-  if ($("reelEditSpanType")) $("reelEditSpanType").value = (e.spanType === "two_way") ? "two_way" : "single";
+  if ($("reelEditSpanType")) $("reelEditSpanType").value = reelResolveSpanType(e);
+  // Say WHY the span type is pre-set when it came from the catalog rather than from
+  // this reel's own record — a default you can't see the reason for is a default you
+  // stop trusting.
+  var spanHint = $("reelEditSpanHint");
+  if (spanHint) {
+    var sku = (e.innerSeq == null && e.outerSeq == null) ? reelSkuDirection(e.itemNumber) : null;
+    spanHint.textContent = sku
+      ? ("Pre-set from item " + (e.itemNumber || "") + " — the catalog has this SKU as a "
+         + (sku === "two_way" ? "two-way" : "one-way") + " reel.")
+      : "";
+    spanHint.classList.toggle("hidden", !sku);
+  }
   if ($("reelEditInnerB")) $("reelEditInnerB").value = e.innerSeqB != null ? e.innerSeqB : "";
   if ($("reelEditOuterB")) $("reelEditOuterB").value = e.outerSeqB != null ? e.outerSeqB : "";
   var pres = $("reelEditPresence");
@@ -17683,6 +17725,180 @@ function _reelBadges(e) {
   return b.join(" ");
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// REEL LOOKUP — multi-select + batch sequence assign (v2.56.00)
+// ═══════════════════════════════════════════════════════════════════════
+// A FULL plowduct reel is the same two numbers every time: 0 → 5,000 on a single
+// span, 0 → 2,500 twice on a two-way. Re-typing that reel by reel through the edit
+// modal was the bulk of a sequence-entry session, so the list selects and writes in
+// one sweep.
+//
+// This is NOT a fourth sequence writer — every reel still goes through
+// reelApplyManualEdit → reelSetSequences, so the STICKY-SEQUENCE RULE, the seqPrev
+// snapshot and the per-reel Restore button all apply exactly as for a single edit.
+// The only concession to volume is opts.deferPersist: one registry write for the
+// whole sweep instead of one per reel.
+var reelBatchSel = {};        // normKey(reelNumber) → true
+var _reelLookupVisible = [];  // batch-eligible rows currently shown (post filter + search)
+
+function reelBatchSelectedKeys() { return Object.keys(reelBatchSel).filter(function(k) { return reelBatchSel[k]; }); }
+
+// Only a reel with a REGISTRY entry can be batch-assigned: reelApplyManualEdit
+// writes the registry, and a count-only row has nothing to write to.
+function reelBatchEligible(row) { return !!(row && row.reelNumber && reelGet(row.reelNumber)); }
+
+// Toggling one row does NOT re-render — the list is long and lazy-rendered, so a
+// rebuild would throw scroll position away. The native checkbox holds its own
+// visual state; only the bar refreshes.
+function reelBatchToggle(reelNumber) {
+  var k = normKey(reelNumber); if (!k) return;
+  if (reelBatchSel[k]) delete reelBatchSel[k]; else reelBatchSel[k] = true;
+  reelBatchUpdateBar();
+}
+function reelBatchClear() { reelBatchSel = {}; reelLookupRender(); }
+
+// Select/deselect every reel in view, or every reel in one item group. Works off
+// the stashed visible rows, NOT the DOM — the table lazy-renders, so the rows below
+// the fold aren't there to query.
+function reelBatchSelectVisible(itemNumber) {
+  _reelLookupVisible.forEach(function(r) {
+    if (itemNumber && (r.itemNumber || "(no item)") !== itemNumber) return;
+    reelBatchSel[normKey(r.reelNumber)] = true;
+  });
+  reelLookupRender();
+}
+function reelBatchDeselectVisible(itemNumber) {
+  _reelLookupVisible.forEach(function(r) {
+    if (itemNumber && (r.itemNumber || "(no item)") !== itemNumber) return;
+    delete reelBatchSel[normKey(r.reelNumber)];
+  });
+  reelLookupRender();
+}
+function _reelGroupAllSelected(itemNumber) {
+  var rows = _reelLookupVisible.filter(function(r) { return (r.itemNumber || "(no item)") === itemNumber; });
+  return rows.length > 0 && rows.every(function(r) { return !!reelBatchSel[normKey(r.reelNumber)]; });
+}
+
+// The selection survives a filter or search change (you may well narrow twice
+// before assigning), so the bar always states the count out loud and offers Clear.
+function reelBatchUpdateBar() {
+  var bar = $("reelBatchBar"); if (!bar) return;
+  var n = reelBatchSelectedKeys().length;
+  bar.classList.toggle("hidden", n === 0);
+  var cnt = $("reelBatchCount");
+  if (cnt) cnt.textContent = n + " reel" + (n !== 1 ? "s" : "") + " selected";
+}
+
+// ── Batch sequence modal ──────────────────────────────────────────────────
+function reelBatchOpenModal() {
+  var keys = reelBatchSelectedKeys();
+  if (!keys.length) { alert("Select some reels first — tick the boxes in the list."); return; }
+  var entries = keys.map(function(k) { return (appData.reels || {})[k]; }).filter(Boolean);
+  if (!entries.length) { alert("None of the selected reels are in the reel registry."); return; }
+
+  // Default the span type from the selection's SKUs. Unanimous → use it; mixed →
+  // say so rather than guess, because Span B means nothing on a one-way reel.
+  var dirs = {};
+  entries.forEach(function(e) { var d = reelSkuDirection(e.itemNumber); if (d) dirs[d] = true; });
+  var known = Object.keys(dirs);
+  if ($("reelBatchSpanType")) $("reelBatchSpanType").value = (known.length === 1) ? known[0] : "single";
+  ["reelBatchInnerA", "reelBatchOuterA", "reelBatchInnerB", "reelBatchOuterB"].forEach(function(id) { if ($(id)) $(id).value = ""; });
+  if ($("reelBatchNotes")) $("reelBatchNotes").value = "";
+
+  var mix = $("reelBatchMixNote");
+  if (mix) {
+    var mixed = known.length > 1;
+    mix.classList.toggle("hidden", !mixed);
+    if (mixed) mix.textContent = "⚠ This selection mixes one-way and two-way SKUs. The span type below is applied to ALL of them — assign one item group at a time instead.";
+  }
+
+  var list = $("reelBatchTargets");
+  if (list) {
+    var names = entries.map(function(e) { return e.reelNumber || ""; });
+    list.innerHTML = "<strong>" + entries.length + " reel" + (entries.length !== 1 ? "s" : "") + ":</strong> "
+      + names.slice(0, 24).map(escapeHtml).join(", ")
+      + (names.length > 24 ? " <span style=\"color:#94a3b8;\">…and " + (names.length - 24) + " more</span>" : "");
+  }
+  reelBatchSpanChanged();
+  var m = $("reelBatchModal"); if (m) m.classList.remove("hidden");
+}
+function reelBatchCancel() { var m = $("reelBatchModal"); if (m) m.classList.add("hidden"); }
+function reelBatchSpanChanged() {
+  var two = $("reelBatchSpanType") && $("reelBatchSpanType").value === "two_way";
+  var wrap = $("reelBatchSpanBWrap"); if (wrap) wrap.style.display = two ? "" : "none";
+  reelBatchRecalcPreview();
+}
+
+// State the outcome before it happens: the footage the markers imply, how many
+// reels get it, and how many already hold markers this will replace. A batch is
+// only safe to offer if it can say what it is about to overwrite.
+function reelBatchRecalcPreview() {
+  var el = $("reelBatchPreview"); if (!el) return;
+  var keys = reelBatchSelectedKeys();
+  var num = function(id) { var v = $(id) ? parseFloat($(id).value) : NaN; return isNaN(v) ? null : v; };
+  var iA = num("reelBatchInnerA"), oA = num("reelBatchOuterA");
+  var two = $("reelBatchSpanType") && $("reelBatchSpanType").value === "two_way";
+  var ftA = (iA != null && oA != null) ? Math.abs(oA - iA) : null;
+  var ftB = 0;
+  if (two) { var iB = num("reelBatchInnerB"), oB = num("reelBatchOuterB"); if (iB != null && oB != null) ftB = Math.abs(oB - iB); }
+  var overwrite = keys.filter(function(k) {
+    var e = (appData.reels || {})[k];
+    return !!(e && (e.innerSeq != null || e.outerSeq != null));
+  }).length;
+  if (ftA == null) {
+    el.style.color = "#94a3b8";
+    el.textContent = "Enter Inner A and Outer A. Blank fields write nothing — stored markers are kept, never cleared.";
+    return;
+  }
+  var ft = ftA + ftB;
+  el.style.color = "#0f172a";
+  el.textContent = "Each selected reel becomes " + ft.toLocaleString() + " ft"
+    + (two ? " (" + ftA.toLocaleString() + " + " + ftB.toLocaleString() + ")" : "")
+    + " · " + keys.length + " reel" + (keys.length !== 1 ? "s" : "")
+    + (overwrite ? " · " + overwrite + (overwrite !== 1 ? " already have markers" : " already has markers")
+                  + " that will be replaced (each keeps a one-click Restore)" : "");
+}
+
+function reelBatchApply() {
+  var keys = reelBatchSelectedKeys();
+  if (!keys.length) { reelBatchCancel(); return; }
+  var val = function(id) { return $(id) ? String($(id).value || "").trim() : ""; };
+  var innerA = val("reelBatchInnerA"), outerA = val("reelBatchOuterA");
+  if (innerA === "" || outerA === "") { alert("Enter both Inner A and Outer A — a batch that writes nothing isn't worth confirming."); return; }
+  var span   = $("reelBatchSpanType") ? $("reelBatchSpanType").value : "single";
+  var innerB = val("reelBatchInnerB"), outerB = val("reelBatchOuterB");
+  if (span === "two_way" && (innerB === "" || outerB === "")) {
+    if (!confirm("Span B is blank on a two-way batch.\n\nAny span-B markers these reels already hold will be KEPT, not overwritten — and the reels with none will still have no span B.\n\nContinue?")) return;
+  }
+  var notes = val("reelBatchNotes");
+  var overwrite = keys.filter(function(k) {
+    var e = (appData.reels || {})[k];
+    return !!(e && (e.innerSeq != null || e.outerSeq != null));
+  }).length;
+  if (!confirm("Assign inner " + innerA + " / outer " + outerA
+      + (span === "two_way" && innerB !== "" ? "  ·  B " + innerB + " / " + outerB : "")
+      + " to " + keys.length + " reel" + (keys.length !== 1 ? "s" : "") + "?"
+      + (overwrite ? "\n\n" + overwrite + (overwrite !== 1 ? " of them already have sequences" : " of them already has sequences")
+                   + " — those readings are replaced. Each one keeps its previous reading for one-click Restore in Reel Lookup → Edit." : ""))) return;
+
+  var done = 0;
+  keys.forEach(function(k) {
+    var e = (appData.reels || {})[k]; if (!e) return;
+    // Same writer as a single edit; notes left undefined when blank so each reel
+    // keeps its own note rather than having it blanked by an empty batch field.
+    if (reelApplyManualEdit(e.reelNumber, {
+          innerA: innerA, outerA: outerA, spanType: span,
+          innerB: innerB, outerB: outerB,
+          notes: notes !== "" ? notes : undefined
+        }, { deferPersist: true })) done++;
+  });
+  reelSaveToStorage();      // one registry write + one debounced push for the sweep
+  reelBatchCancel();
+  reelBatchSel = {};
+  reelLookupRender();
+  if (typeof prodShowSaveToast === "function") prodShowSaveToast("\u2713 " + done + " reel" + (done !== 1 ? "s" : "") + " updated");
+}
+
 function reelLookupRender() {
   var body = $("reelLookupBody");
   if (!body) return;
@@ -17734,6 +17950,10 @@ function reelLookupRender() {
     });
   }
 
+  // Batch selection works off this stash, not the DOM (the table lazy-renders).
+  _reelLookupVisible = list.filter(reelBatchEligible);
+  reelBatchUpdateBar();
+
   // Group surviving reels by item number
   var groups = {};
   list.forEach(function(e) {
@@ -17769,7 +17989,11 @@ function reelLookupRender() {
     for (var d = 0; d < reels.length; d++) { if (reels[d].description) { desc = reels[d].description; break; } }
     if (!desc) { var mm = findProductMapMatch(item); if (mm && mm.entry) desc = getMapDescription(mm.entry) || ""; }
 
-    units.push('<tr style="background:#f8fafc;"><td colspan="11" style="padding:8px 10px;">'
+    var grpAll = _reelGroupAllSelected(item);
+    units.push('<tr style="background:#f8fafc;"><td colspan="12" style="padding:8px 10px;">'
+      + '<label title="Select every reel of this item currently in view" style="display:inline-flex;align-items:center;gap:5px;margin-right:10px;font-size:12px;color:#475569;font-weight:600;cursor:pointer;vertical-align:middle;">'
+      +   '<input type="checkbox" style="width:auto;margin:0;"' + (grpAll ? ' checked' : '')
+      +   ' onchange="this.checked ? reelBatchSelectVisible(\'' + chkJsStr(item) + '\') : reelBatchDeselectVisible(\'' + chkJsStr(item) + '\')" />all</label>'
       + '<a href="#" onclick="prodShowItemHistory(\'' + chkJsStr(item) + '\');return false;" style="color:#1d4ed8;text-decoration:none;font-weight:700;">' + escapeHtml(item) + '</a>'
       + (desc ? ' <span style="color:#64748b;">— ' + escapeHtml(desc) + '</span>' : '')
       + ' <span style="color:#94a3b8;">(' + reels.length + ' reel' + (reels.length !== 1 ? 's' : '') + ')</span>'
@@ -17782,7 +18006,13 @@ function reelLookupRender() {
       var loc = e.location ? (invLocationBarcodeToCompleteName(e.location) || e.location) : "";
       var num = function(v) { return v != null && v !== "" ? Number(v).toLocaleString() : "—"; };
       var dim = (e.presence === "gone") ? ' style="opacity:.55;"' : '';
+      var rk = normKey(e.reelNumber || "");
       units.push('<tr' + dim + '>'
+        + '<td style="width:26px;">' + (reelBatchEligible(e)
+            ? '<input type="checkbox" data-rk="' + escapeHtml(rk) + '" style="width:auto;margin:0;"'
+              + (reelBatchSel[rk] ? ' checked' : '')
+              + ' onchange="reelBatchToggle(\'' + chkJsStr(e.reelNumber || "") + '\')" />'
+            : '<span title="Counted, but not in the reel registry — nothing to assign sequences to." style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="font-weight:600;">' + escapeHtml(e.reelNumber || "") + '</td>'
         + '<td>' + _reelBadges(e) + '</td>'
         + '<td style="font-weight:700;">' + (ft != null ? Number(ft).toLocaleString() + ' ft' : '—') + '</td>'
@@ -17800,7 +18030,7 @@ function reelLookupRender() {
 
   body.innerHTML = _reelDirtyLotsNote()
     + '<div class="flow-table"><table><thead><tr>'
-    + '<th>Reel #</th><th>Status</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
+    + '<th style="width:26px;"></th><th>Reel #</th><th>Status</th><th>Footage</th><th>Inner A</th><th>Outer A</th>'
     + '<th>Inner B</th><th>Outer B</th><th>Location</th><th>Last Updated</th><th>Notes</th><th></th>'
     + '</tr></thead><tbody id="reelLookupTbody"></tbody></table></div>';
   timLazyRender($("reelLookupTbody"), units);

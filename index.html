@@ -1181,8 +1181,16 @@
       <div class="prod-search-row">
         <input type="search" id="reelLookupSearch" placeholder="Search by item number or reel number…" oninput="reelLookupRender()" style="padding:9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;" />
         <button class="secondary" onclick="reelLookupRender()">Refresh</button>
+        <button class="secondary" onclick="reelBatchSelectVisible()">Select all in view</button>
       </div>
       <div id="reelLookupFilters" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px;"></div>
+      <!-- Batch bar: appears only when reels are ticked. Selection survives filter
+           and search changes, so the count is always stated out loud. -->
+      <div id="reelBatchBar" class="hidden" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 4px;padding:8px 12px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;">
+        <strong id="reelBatchCount" style="font-size:13px;color:#312e81;"></strong>
+        <button onclick="reelBatchOpenModal()" style="margin:0;padding:5px 12px;font-size:13px;">Batch set sequences…</button>
+        <button class="secondary" onclick="reelBatchClear()" style="margin:0;padding:5px 12px;font-size:13px;">Clear selection</button>
+      </div>
       <div id="reelLookupBody"><p class="small" style="color:#94a3b8;margin:0;">Open this tab to load reels, or import a reel CSV first.</p></div>
     </div>
 
@@ -1970,6 +1978,7 @@
               <option value="two_way">Two-way</option>
             </select>
           </label>
+          <p id="reelEditSpanHint" class="small hidden" style="margin:4px 0 0;color:#1e40af;"></p>
         </div>
         <div id="reelEditSpanBWrap" class="modal-grid two" style="margin-top:10px;display:none;">
           <label>Inner B
@@ -2007,6 +2016,60 @@
       <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
         <button onclick="reelCancelEdit()" class="secondary" style="margin:0;">Cancel</button>
         <button onclick="reelSaveEdit()" style="margin:0;">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Batch Sequence Assign (Reel Lookup → tick reels → Batch set sequences) -->
+  <div id="reelBatchModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:560px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;font-size:18px;">Batch Set Sequences</h2>
+          <p class="small" style="margin:4px 0 0;color:#64748b;">Write the same inner/outer markers to every selected reel.</p>
+        </div>
+        <button onclick="reelBatchCancel()" style="background:none;border:none;font-size:24px;color:#94a3b8;cursor:pointer;padding:0;margin:0;line-height:1;">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="reelBatchTargets" class="small" style="margin:0 0 12px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;color:#475569;font-family:monospace;font-size:12px;"></p>
+        <p class="small" style="margin:0 0 12px;color:#64748b;">For full reels this is the same reading every time — 0 → 5,000 on a single span, 0 → 2,500 twice on a two-way. Footage stays owned by the Odoo quants baseline, so any reel that isn't actually full will light up <strong>Stale</strong> for you to re-verify.</p>
+        <p id="reelBatchMixNote" class="small hidden" style="margin:0 0 12px;padding:8px 10px;background:#fffbeb;border:1px solid #fde047;border-radius:8px;color:#92400e;font-weight:600;"></p>
+        <div class="modal-grid two">
+          <label>Inner A
+            <input id="reelBatchInnerA" type="number" inputmode="numeric" oninput="reelBatchRecalcPreview()" placeholder="e.g. 0" />
+          </label>
+          <label>Outer A
+            <input id="reelBatchOuterA" type="number" inputmode="numeric" oninput="reelBatchRecalcPreview()" placeholder="e.g. 5000" />
+          </label>
+        </div>
+        <div style="margin-top:10px;">
+          <label>Span Type
+            <select id="reelBatchSpanType" onchange="reelBatchSpanChanged()">
+              <option value="single">Single span</option>
+              <option value="two_way">Two-way</option>
+            </select>
+          </label>
+          <p class="small" style="margin:4px 0 0;color:#94a3b8;">Pre-set from the selected items' reel direction in the product catalog.</p>
+        </div>
+        <div id="reelBatchSpanBWrap" class="modal-grid two" style="margin-top:10px;display:none;">
+          <label>Inner B
+            <input id="reelBatchInnerB" type="number" inputmode="numeric" oninput="reelBatchRecalcPreview()" placeholder="e.g. 0" />
+          </label>
+          <label>Outer B
+            <input id="reelBatchOuterB" type="number" inputmode="numeric" oninput="reelBatchRecalcPreview()" placeholder="e.g. 2500" />
+          </label>
+        </div>
+        <p id="reelBatchPreview" class="small" style="margin:10px 0 0;color:#0f172a;font-weight:600;"></p>
+        <div style="margin-top:12px;">
+          <label style="font-size:13px;color:#475569;font-weight:700;">Notes (optional)
+            <textarea id="reelBatchNotes" rows="2" placeholder="Leave blank to keep each reel's own notes" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #cbd5e1;border-radius:8px;margin-top:4px;font-size:13px;"></textarea>
+          </label>
+          <p class="small" style="margin:4px 0 0;color:#94a3b8;">Anything typed here replaces the notes on every selected reel.</p>
+        </div>
+      </div>
+      <div style="padding:14px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button onclick="reelBatchCancel()" class="secondary" style="margin:0;">Cancel</button>
+        <button onclick="reelBatchApply()" style="margin:0;">Assign to Selected Reels</button>
       </div>
     </div>
   </div>
