@@ -613,6 +613,14 @@ textarea { width: 100%; min-height: 180px; font-family: monospace; font-size: 12
 .inv-key-focus:hover { background:#1d4ed8; }
 .inv-key-focus:active { background:#2563eb; }
 .inv-key-focus.targeted { background:#2563eb; color:white; border-color:#93c5fd; box-shadow:0 0 0 2px rgba(147,197,253,.5); }
+/* Span B keys on a single-span reel: there is no second span to enter, and a
+   live-looking key says otherwise. Matches the Span B section being hidden. */
+.inv-key-focus:disabled,
+.inv-key-focus:disabled:hover,
+.inv-key-focus:disabled:active { background:#e2e8f0; color:#94a3b8; border-color:#cbd5e1; cursor:not-allowed; box-shadow:none; }
+/* Table cell for a value that CANNOT exist (vs. one merely not filled in yet):
+   a hatched grey reads as "nothing goes here", a bare em-dash reads as "empty". */
+td.reel-na { background:repeating-linear-gradient(135deg,#f8fafc,#f8fafc 5px,#eceff4 5px,#eceff4 10px); color:#cbd5e1; }
 /* Display row */
 .inv-qty-display-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .inv-qty-display-label { font-size:12px; font-weight:700; color:#475569; white-space:nowrap; }

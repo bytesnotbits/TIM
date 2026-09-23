@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.56.03";
+const APP_VERSION = "v2.56.04";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5285,9 +5285,11 @@ function renderInvSummary() {
           '<td style="text-align:right">' + (e.innerSeqA != null ? e.innerSeqA : "") + "</td>" +
           '<td style="text-align:right">' + (e.outerSeqA != null ? e.outerSeqA : "") + "</td>" +
           '<td style="text-align:right;color:#1d4ed8;font-weight:700">' + (e.availableFtA != null ? e.availableFtA.toLocaleString() : "") + "</td>" +
-          '<td style="text-align:right">' + (isTwoWay && e.innerSeqB != null ? e.innerSeqB : "—") + "</td>" +
-          '<td style="text-align:right">' + (isTwoWay && e.outerSeqB != null ? e.outerSeqB : "—") + "</td>" +
-          '<td style="text-align:right;color:#16a34a;font-weight:700">' + (isTwoWay && e.availableFtB != null ? e.availableFtB.toLocaleString() : "—") + "</td>" +
+          _reelNaCell(isTwoWay, e.innerSeqB, null, "text-align:right") +
+          _reelNaCell(isTwoWay, e.outerSeqB, null, "text-align:right") +
+          _reelNaCell(isTwoWay, e.availableFtB,
+                      function(v) { return v != null ? v.toLocaleString() : "—"; },
+                      "text-align:right;color:#16a34a;font-weight:700") +
           '<td style="text-align:right;font-weight:800;color:#1d4ed8">' + ((e.totalAvailableFt || 0).toLocaleString()) + " ft</td>" +
           "<td>" + escapeHtml(e.location || "") + "</td>" +
           '<td style="white-space:nowrap">' + invFormatDateTime(e.timestamp) + "</td>" +
@@ -9546,8 +9548,8 @@ function invQtyKeypadRefreshReelTarget() {
     // Highlight matching focus-jump button
     var focusMap = {
       invReelNumber: "reel", invReelItemNumber: "item",
-      invReelInnerA: "inner", invReelInnerB: "inner",
-      invReelOuterA: "outer", invReelOuterB: "outer"
+      invReelInnerA: "innerA", invReelInnerB: "innerB",
+      invReelOuterA: "outerA", invReelOuterB: "outerB"
     };
     var targetType = focusMap[invKeypadTargetEl.id];
     if (targetType) {
@@ -9596,15 +9598,37 @@ function invQtyKeySign() {
   invQtyRefreshDisplay();
 }
 
+// Focus-jump buttons on the soft keypad. Target names mirror the panel's own
+// Span A / Span B naming (v2.56.04) -- the old "inner2"/"outer2" spelling was
+// the last place in the app that called span B "2". Old names still resolve so
+// nothing that remembers them breaks.
 function invKeyFocusField(target) {
   var el = null;
   if (target === "reel")   { el = $("invReelNumber"); }
   else if (target === "item")   { el = $("invReelItemNumber"); }
-  else if (target === "inner")  { el = $("invReelInnerA"); }
-  else if (target === "outer")  { el = $("invReelOuterA"); }
-  else if (target === "inner2") { el = $("invReelInnerB"); }
-  else if (target === "outer2") { el = $("invReelOuterB"); }
+  else if (target === "innerA" || target === "inner")  { el = $("invReelInnerA"); }
+  else if (target === "outerA" || target === "outer")  { el = $("invReelOuterA"); }
+  else if (target === "innerB" || target === "inner2") { el = $("invReelInnerB"); }
+  else if (target === "outerB" || target === "outer2") { el = $("invReelOuterB"); }
+  // Span B belongs to two-way reels only. The buttons are disabled in that case
+  // (invReelSyncSpanBKeys), so this is the belt to that suspenders -- a keyboard
+  // or programmatic call can't land the ring on a hidden field either.
+  if (el && (el.id === "invReelInnerB" || el.id === "invReelOuterB")
+         && !($("invReelSpanType") && $("invReelSpanType").value === "two_way")) return;
   invReelSetRing(el);
+}
+
+// Grey out the Span B focus keys unless this reel actually has a span B. Same
+// signal the panel gives by hiding the Span B section -- without it the keys sat
+// there fully live, looking like a field the reel would accept (v2.56.04).
+function invReelSyncSpanBKeys() {
+  var twoWay = !!($("invReelSpanType") && $("invReelSpanType").value === "two_way");
+  ["invKeyFocusInnerB", "invKeyFocusOuterB"].forEach(function(id) {
+    var b = $(id); if (!b) return;
+    b.disabled = !twoWay;
+    b.title = twoWay ? "" : "Single-span reel — no Span B to enter";
+    if (!twoWay) b.classList.remove("targeted");
+  });
 }
 
 function invQtyKeyBackspace() {
@@ -10450,6 +10474,7 @@ function invReelKeypadEngage() {
   var signBtn  = $("invQtyKeySignMinus"); if (signBtn) signBtn.style.display = "none";
   var title = $("invQtyKeypadTitle"); if (title) title.textContent = "Reel Entry";
   var lbl   = $("invQtyDisplayLabel"); if (lbl) lbl.textContent = "→";
+  invReelSyncSpanBKeys();
   invReelRefreshApplyLabel();
 }
 
@@ -10502,6 +10527,7 @@ function invReelSpanTypeChange() {
   var spanType = $("invReelSpanType") ? $("invReelSpanType").value : "single";
   var spanB = $("invReelSpanBSection");
   if (spanB) spanB.style.display = spanType === "two_way" ? "block" : "none";
+  invReelSyncSpanBKeys();
   invCalcReelFt();
 }
 
@@ -10973,6 +10999,7 @@ function invClearReelFields() {
   var st = $("invReelSpanType"); if (st) st.value = invReelStickySpanType;
   var sb = $("invReelSpanBSection");
   if (sb) sb.style.display = (invReelStickySpanType === "two_way") ? "block" : "none";
+  invReelSyncSpanBKeys();
   var notes = $("invReelNotes"); if (notes) notes.value = "";
   var hist  = $("invReelHistoryPanel"); if (hist) hist.style.display = "none";
   var total = $("invReelTotalFt"); if (total) total.textContent = "—";
@@ -18089,6 +18116,19 @@ function reelBatchApply() {
   if (typeof prodShowSaveToast === "function") prodShowSaveToast("\u2713 " + done + " reel" + (done !== 1 ? "s" : "") + " updated");
 }
 
+// One cell of a Span B column. A single-span reel has no span B at all, so the
+// cell is hatched grey and says "n/a" instead of showing the same em-dash a
+// two-way reel shows while its span B is still un-entered (v2.56.04). Joe: the
+// dash "looks like it would accept one". `fmt` formats the value when it applies;
+// `style` is any per-column styling (alignment, colour) the caller already had.
+function _reelNaCell(applies, val, fmt, style) {
+  var st = style ? ' style="' + style + '"' : '';
+  if (!applies) {
+    return '<td class="reel-na" title="Single-span reel — no Span B"' + st + '>n/a</td>';
+  }
+  return '<td' + st + '>' + (fmt ? fmt(val) : (val != null ? val : '—')) + '</td>';
+}
+
 function reelLookupRender() {
   var body = $("reelLookupBody");
   if (!body) return;
@@ -18208,8 +18248,8 @@ function reelLookupRender() {
         + '<td style="font-weight:700;">' + (ft != null ? Number(ft).toLocaleString() + ' ft' : '—') + '</td>'
         + '<td>' + num(e.innerSeqA) + '</td>'
         + '<td>' + num(e.outerSeqA) + '</td>'
-        + '<td>' + (two ? num(e.innerSeqB) : '—') + '</td>'
-        + '<td>' + (two ? num(e.outerSeqB) : '—') + '</td>'
+        + _reelNaCell(two, e.innerSeqB, num)
+        + _reelNaCell(two, e.outerSeqB, num)
         + '<td>' + escapeHtml(loc) + '</td>'
         + '<td style="white-space:nowrap;">' + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : '') + '</td>'
         + '<td>' + escapeHtml(e.notes || "") + '</td>'

@@ -664,8 +664,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `invQtyKeyClear()` | Reset to 1 |
 | `invQtyKeySkip()` | Skip item |
 | `invQtyKeyApply()` | Apply quantity to event |
-| `invKeyFocusField(target)` | Focus specific reel input for keypad entry |
-| `invQtyKeypadRefreshReelTarget()` | Highlight active reel field |
+| `invKeyFocusField(target)` | Focus a reel field from the keypad's jump row. Targets are `reel`/`item`/`innerA`/`outerA`/`innerB`/`outerB` (**A/B, not "2"** — v2.56.04 made the keypad match the panel's Span A/Span B and the Reel Lookup columns; the old `inner2`/`outer2` names still resolve). Refuses a Span B jump on a single-span reel, matching `invReelFieldOrder`, so no path lands the ring on a hidden field |
+| `invReelSyncSpanBKeys()` | Enable/disable the Inner B + Outer B jump keys from the current Span Type. Called from `invReelSpanTypeChange`, `invReelKeypadEngage` and `invClearReelFields` — every place span type or the panel's state can move. A live-looking key on a single-span reel read as a field the reel would accept (v2.56.04) |
+| `invQtyKeypadRefreshReelTarget()` | Highlight active reel field. Its `focusMap` gives Inner B / Outer B their OWN buttons (v2.56.04); it used to map both spans' Inner to the one `inner` key, so tapping Inner B lit the Inner A button |
 | `invQtyRefreshDisplay()` | Update numeric display |
 
 ---
@@ -777,6 +778,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 >
 > **THE STICKY-SEQUENCE RULE (v2.55.00, standing):** a blank NEVER overwrites a known inner/outer marker, from any automated writer. Sequences go stale between inventories and that is fine — a stale pair beats no pair, because a counter holding a stale marker *verifies* a number while a counter holding a blank *derives* it. The only way a stored sequence leaves the registry is an explicit human clear (Reel Lookup → Edit → "Clear stored sequences", confirmed by name), and even that snapshots the old pair to `seqPrev` for one-click Restore. Enforced in ONE place — `reelSetSequences` — which all three writers call; the GitHub merge enforces the same rule via `_reelCarrySequences`. Imports that keep markers must SAY so (the reel-CSV import reports its kept count). **Do not add a fourth writer that touches `innerSeq`/`outerSeq` directly.**
 
+> **SPANS ARE NAMED A AND B, EVERYWHERE (v2.56.04, standing):** the two spans of a reel are Span A and Span B in the scan panel, the keypad jump keys, the Reel Lookup columns, the edit modal and the batch modal — never "1/2", never "Inner 2". Joe asked for one name because two names for one field is a counting error waiting to happen on the warehouse floor. The field ids (`invReelInnerA`/`invReelInnerB`, `innerSeq`/`innerSeqB`) and the `ReelEntry` keys already spoke A/B; the keypad was the last holdout.
+
 | Function / Variable | Purpose |
 |---------------------|---------|
 | `REEL_STORAGE_KEY` / `REEL_STALE_TOL_FT` | IDB key `tim_reels_v1` / staleness tolerance in ft (2) |
@@ -800,6 +803,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `scheduleReelPush()` / `_reelPushTimer` | Debounced `reels.json` push (v2.52.00 Phase 2), guarded by `ghConfigured` + `ghSyncInFlight` — mirrors `scheduleBoxPush` |
 | `reelDirtyQuantLots()` | Detect quant reel lots with notes typed into the lot field (`288R02 (2 REELS)`, `432R04BIG`) → `[{lot,item,clean}]`. REPORTS, never strips (fix at source in Odoo) |
 | `reelLookupFilter` / `reelSetLookupFilter(f)` | Reel Lookup view: `active` (default, non-archived) / `stale` / `needseq` / `archived` / `all` |
+| `_reelNaCell(applies,val,fmt,style)` | One Span B table cell. A single-span reel gets a hatched grey `n/a` (`td.reel-na`) instead of the em-dash a two-way reel shows while span B is un-entered — the dash made an impossible cell and an empty one look identical (v2.56.04). Used by both reel tables: Reel Lookup and the session's Cable Reel Detail |
 | `_reelBadges(e)` / `_reelDirtyLotsNote()` | Status-cell badges (Archived/Stale/Need seq/Unconfirmed) / amber dirty-lot warning above the table |
 
 ### Reel Lookup — Batch Sequence Assign (v2.56.00)
