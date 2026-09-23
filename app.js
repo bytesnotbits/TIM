@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.54.01";
+const APP_VERSION = "v2.54.02";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -13509,18 +13509,41 @@ function prodShowItemHistory(itemNumber) {
   var sessionMap = {};
   (appData.inventory_sessions || []).forEach(function(s) { sessionMap[s.sessionId] = s; });
 
+  // Raw array order is NOT chronological once two devices sync: ghMergeMasters
+  // unions events as "surviving local items in local order, then remote-only
+  // items appended", so a second iPad's session arrives as a block after the
+  // first device's rather than interleaved by time. Sort explicitly, newest
+  // first, so the 300-row cap keeps the 300 most RECENT events instead of
+  // whichever 300 the merge happened to place first. Ties fall back to
+  // sessionId then sequence -- sequence restarts at 1 every session, so it
+  // can't order across sessions on its own. (invEvts is already a fresh array
+  // from .filter(), so this never reorders appData.inventory_events itself.)
+  invEvts.sort(function(a, b) {
+    var at = a.timestamp || "", bt = b.timestamp || "";
+    if (at !== bt) return at < bt ? 1 : -1;
+    var as = a.sessionId || "", bs = b.sessionId || "";
+    if (as !== bs) return as < bs ? 1 : -1;
+    return (b.sequence || 0) - (a.sequence || 0);
+  });
+
+  var INV_HIST_CAP = 300;
   $("prodHistoryInvCount").textContent = invEvts.length + " event" + (invEvts.length !== 1 ? "s" : "") +
-    " across " + new Set(invEvts.map(function(e) { return e.sessionId; })).size + " session(s)";
+    " across " + new Set(invEvts.map(function(e) { return e.sessionId; })).size + " session(s)" +
+    (invEvts.length > INV_HIST_CAP ? " — showing the " + INV_HIST_CAP + " most recent" : "");
 
   $("prodHistoryInvBody").innerHTML = invEvts.length
-    ? invEvts.slice(0, 300).map(function(e) {
+    ? invEvts.slice(0, INV_HIST_CAP).map(function(e) {
         var sess = sessionMap[e.sessionId] || {};
         var qtyDisplay = e.eventType === "cable_reel_count" && e.totalAvailableFt != null
           ? e.totalAvailableFt.toLocaleString() + " ft"
           : (e.qty != null ? String(e.qty) : "");
         return "<tr>" +
           "<td style='white-space:nowrap;'>" + escapeHtml(sess.sessionName || e.sessionId || "") + "</td>" +
-          "<td style='white-space:nowrap;'>" + escapeHtml(sess.closedAt ? invFormatDateTime(sess.closedAt) : "") + "</td>" +
+          // The event's OWN timestamp + sequence, not the session's close date:
+          // every event in a session shared one close date, which said nothing
+          // about when the item was actually counted or in what order.
+          "<td style='text-align:right;color:#64748b;'>" + (e.sequence != null ? e.sequence : "") + "</td>" +
+          "<td style='white-space:nowrap;'>" + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : "") + "</td>" +
           "<td>" + escapeHtml(e.location || "") + "</td>" +
           "<td><span class='event-type-pill'>" + escapeHtml(e.eventType || "") + "</span></td>" +
           "<td style='text-align:right;font-weight:700;'>" + escapeHtml(qtyDisplay) + "</td>" +
@@ -13528,7 +13551,7 @@ function prodShowItemHistory(itemNumber) {
           "<td>" + escapeHtml(e.notes || "") + "</td>" +
           "</tr>";
       }).join("")
-    : '<tr><td colspan="7" style="color:#94a3b8;text-align:center;padding:12px;">No finalized inventory events. Finalize a session to see history here.</td></tr>';
+    : '<tr><td colspan="8" style="color:#94a3b8;text-align:center;padding:12px;">No finalized inventory events. Finalize a session to see history here.</td></tr>';
 
   // Current session events (not yet finalized)
   var currentEvts = invSession ? invEvents.filter(function(e) {

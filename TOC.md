@@ -963,7 +963,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `prodSaveEdit()` | Save product edits to `PRODUCT_MAP` |
 | `prodCancelEdit()` | Close edit modal |
 | `prodShowSaveToast(msg)` | Temporary save confirmation |
-| `prodShowItemHistory(itemNum)` | Show receiving + inventory history modal |
+| `prodShowItemHistory(itemNum)` | Show receiving + inventory history modal. The finalized-events table is **sorted newest-first by event timestamp** (ties: sessionId, then sequence) before the 300-row cap — raw `appData.inventory_events` order is not chronological after a sync, since `ghMergeMasters` appends remote-only events as a block (v2.54.02). Columns show the event's own **Seq + Counted timestamp**, not the session close date; the count line says when rows were capped |
 | `prodCloseHistoryModal()` | Close history modal |
 | `prodDownloadTemplate()` | Download bulk-upload template → `product-upload-template.xlsx` |
 | `prodBulkUpload(file)` | Process bulk product upload |
