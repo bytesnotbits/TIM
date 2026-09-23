@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.54.04";
+const APP_VERSION = "v2.55.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -909,9 +909,14 @@ function loadSourceData(parsed, fileName = "selected JSON") {
   if (Array.isArray(parsed.product_movements)) { appData.product_movements = parsed.product_movements; rcMoveMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (Array.isArray(parsed.nisc_capture))      { appData.nisc_capture      = parsed.nisc_capture;      rcNiscMeta  = { importedAt: null, fileName: "(from master JSON)" }; }
   if (parsed.external_count || parsed.product_movements || parsed.nisc_capture) rcRenderCard();
-  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); boxSaveToStorage(); if (typeof invRenderBoxManager === "function") invRenderBoxManager(); }
-  if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; palletSaveToStorage(); if (typeof palletRender === "function") palletRender(); }
-  if (parsed.reels && typeof parsed.reels === "object") { appData.reels = parsed.reels; reelSaveToStorage(); }
+  // Registries MERGE, never replace (v2.55.00). A master JSON is a snapshot from
+  // whenever it was exported; assigning it wholesale silently discarded every
+  // edit made since — which is how a day of reel sequences disappeared behind a
+  // routine "load the new file". Same last-writer-wins-per-record rule the
+  // GitHub sync uses, so loading a file and pulling a sync agree.
+  if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = _ghMergeBoxesLWW(appData.boxes, parsed.boxes); boxMigrateDevices(); boxSaveToStorage(); if (typeof invRenderBoxManager === "function") invRenderBoxManager(); }
+  if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = _ghMergePalletsLWW(appData.pallets, parsed.pallets); palletSaveToStorage(); if (typeof palletRender === "function") palletRender(); }
+  if (parsed.reels && typeof parsed.reels === "object") { appData.reels = _ghMergeReelsLWW(appData.reels, parsed.reels); reelSaveToStorage(); }
   if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
     Object.assign(BARCODE_MAP, parsed.barcode_map);
     appData.barcode_map = BARCODE_MAP;
@@ -3398,10 +3403,20 @@ function _ghMergePalletsLWW(local, remote) {
 }
 
 // Union the two reel maps; on a shared reel number keep whichever record has the
-// newer updatedAt (createdAt as fallback, then remote). Order-independent.
-// Mirrors _ghMergeBoxesLWW (see the tradeoff note at the call site). Because only
-// reference imports bump updatedAt, the sequence-bearing record wins and footage
-// re-derives locally from the quants baseline.
+// newer updatedAt (createdAt as fallback, then remote) — but NEVER let the win
+// cost a sequence (v2.55.00).
+//
+// The old rule leaned on "only reference imports bump updatedAt", so the record
+// holding inner/outer would always be the newer one. That invariant was false:
+// reelSyncFromQuants stamps a freshly CREATED (sequence-less) reel, so a device
+// that had only ever loaded quants published blank reels dated today, and they
+// beat another device's hand-entered markers from yesterday — whole record,
+// sequences included. That is the bug that ate a day of reel edits (2026-09-22).
+//
+// Now the timestamp only decides the record; sequences are carried across from
+// the loser when the winner has none. A blank can never win a marker, whatever
+// the clocks say — the same sticky-sequence rule reelSetSequences enforces
+// locally, applied to the sync.
 function _ghMergeReelsLWW(local, remote) {
   local = local || {}; remote = remote || {};
   var merged = {};
@@ -3409,9 +3424,31 @@ function _ghMergeReelsLWW(local, remote) {
   Object.keys(local).forEach(function(k) { merged[k] = local[k]; });
   Object.keys(remote).forEach(function(k) {
     if (!(k in merged)) { merged[k] = remote[k]; return; }
-    if (reelTs(remote[k]) > reelTs(merged[k])) merged[k] = remote[k];
+    var win = merged[k], lose = remote[k];
+    if (reelTs(remote[k]) > reelTs(merged[k])) { win = remote[k]; lose = merged[k]; }
+    merged[k] = _reelCarrySequences(win, lose);
   });
   return merged;
+}
+
+// Give the merge winner the loser's sequences when it has none of its own.
+// Copies the whole marker set together (A+B+spanType+refCountDate, and notes
+// only when the winner has none) so a carried pair stays internally consistent.
+// Returns a COPY — never mutates either side's live object.
+function _reelCarrySequences(win, lose) {
+  if (!win || !lose) return win;
+  var has = function(r) { return !!(r && (r.innerSeq != null || r.outerSeq != null)); };
+  if (has(win) || !has(lose)) return win;
+  var out = {};
+  Object.keys(win).forEach(function(f) { out[f] = win[f]; });
+  out.innerSeq  = lose.innerSeq;  out.outerSeq  = lose.outerSeq;
+  out.innerSeqB = lose.innerSeqB; out.outerSeqB = lose.outerSeqB;
+  out.spanType  = lose.spanType || out.spanType || "single";
+  out.refCountDate = lose.refCountDate || out.refCountDate || "";
+  if (!out.notes && lose.notes) out.notes = lose.notes;
+  if (!out.seqPrev && lose.seqPrev) out.seqPrev = lose.seqPrev;
+  if (typeof reelRecomputeDerived === "function") reelRecomputeDerived(out);
+  return out;
 }
 
 // ===================================================================
@@ -12417,7 +12454,10 @@ function scheduleReelPush() {
 }
 function reelLoadFromStorage() {
   return TimDB.get(REEL_STORAGE_KEY).then(function(saved) {
-    if (saved && typeof saved === "object") appData.reels = saved;
+    // Union, not replace (v2.55.00): tim_reels_v1 is authoritative, but if the
+    // master-cache restore already put reels in memory, a reel present there and
+    // missing from the store must survive rather than be dropped on the floor.
+    if (saved && typeof saved === "object") appData.reels = _ghMergeReelsLWW(appData.reels, saved);
   }).catch(function(){});
 }
 
@@ -12462,6 +12502,70 @@ function reelDirtyQuantLots() {
     }
   });
   return out;
+}
+
+// ── THE STICKY-SEQUENCE RULE (v2.55.00) ───────────────────────────────────
+// A blank NEVER overwrites a known inner/outer marker.
+//
+// Sequences are sparse, hand-captured on a ladder with a flashlight, and
+// expensive to re-derive. A stale pair beats no pair: a counter holding a stale
+// marker VERIFIES a number, a counter holding a blank field derives it from
+// scratch. Sequences legitimately go stale between inventories — that is what the
+// `sequenceStale` badge is for — so staleness is never a reason to discard one.
+//
+// Every writer (reference import, floor count, manual edit) goes through here,
+// and the ONLY way a stored sequence leaves the registry is an explicit human
+// clear: Reel Lookup → Edit → "Clear stored sequences" (opts.allowClear).
+//
+// Span B is NOT nulled when spanType flips to "single" — reelRecomputeDerived
+// already ignores B unless the reel is two-way, so a mis-set span type can't
+// destroy a real reading; flipping back restores it.
+//
+// `vals`: { innerA, outerA, spanType, innerB, outerB } — blank/null = "no reading".
+// Returns { wrote, kept, cleared } so importers can REPORT what they preserved
+// instead of silently dropping it.
+function reelSetSequences(e, vals, opts) {
+  if (!e) return { wrote: false, kept: 0, cleared: false };
+  vals = vals || {}; opts = opts || {};
+  var num = function(v) { return (v != null && v !== "" && !isNaN(v)) ? Number(v) : null; };
+  var incoming = [["innerSeq", num(vals.innerA)], ["outerSeq", num(vals.outerA)],
+                  ["innerSeqB", num(vals.innerB)], ["outerSeqB", num(vals.outerB)]];
+  var hasStored = incoming.some(function(p) { return e[p[0]] != null; });
+  var res = { wrote: false, kept: 0, cleared: false };
+
+  if (opts.allowClear) {
+    // Explicit human clear — snapshot first so it stays recoverable.
+    if (hasStored) { _reelSnapshotSeq(e, opts.by); res.cleared = true; }
+    incoming.forEach(function(p) { e[p[0]] = p[1]; });
+    if (vals.spanType) e.spanType = (vals.spanType === "two_way") ? "two_way" : "single";
+    res.wrote = true;
+    return res;
+  }
+
+  // Non-destructive path: a real reading is written, a blank leaves the stored
+  // marker alone and is counted as kept.
+  if (incoming.some(function(p) { return p[1] != null && e[p[0]] != null && e[p[0]] !== p[1]; }))
+    _reelSnapshotSeq(e, opts.by);
+  incoming.forEach(function(p) {
+    if (p[1] != null) { if (e[p[0]] !== p[1]) res.wrote = true; e[p[0]] = p[1]; }
+    else if (e[p[0]] != null) res.kept++;
+  });
+  if (vals.spanType) e.spanType = (vals.spanType === "two_way") ? "two_way" : "single";
+  return res;
+}
+
+// Keep the last known-good marker set on the reel itself, so an overwrite or a
+// clear is one click to undo (Reel Lookup → Edit → Restore) instead of a dig
+// through the data repo's commit history.
+function _reelSnapshotSeq(e, by) {
+  if (!e) return;
+  e.seqPrev = {
+    innerSeq:  e.innerSeq,  outerSeq:  e.outerSeq,
+    innerSeqB: e.innerSeqB, outerSeqB: e.outerSeqB,
+    spanType:  e.spanType || "single",
+    refCountDate: e.refCountDate || "",
+    at: new Date().toISOString(), by: by || reelWho()
+  };
 }
 
 // Recompute all derived fields + provenance from the source-owned fields.
@@ -12524,16 +12628,17 @@ function reelUpsertReference(row) {
     };
     appData.reels[k] = e;
   }
-  // Reference-owned fields only:
-  e.innerSeq = (row.innerA != null && row.innerA !== "" && !isNaN(row.innerA)) ? Number(row.innerA) : null;
-  e.outerSeq = (row.outerA != null && row.outerA !== "" && !isNaN(row.outerA)) ? Number(row.outerA) : null;
-  e.notes    = row.notes || "";
+  // Reference-owned fields only, under the sticky-sequence rule: a Product Reels
+  // row with an empty Inner/Outer column REFRESHES nothing rather than blanking
+  // markers the floor already captured. Same for a blank notes column.
+  var seqRes = reelSetSequences(e, { innerA: row.innerA, outerA: row.outerA });
+  if (row.notes) e.notes = row.notes;
   e.refCountDate = row.csvDate ? row.csvDate.toISOString() : (row.dateRaw || "");
   if (!e.itemNumber && row.itemNum) e.itemNumber = row.itemNum;
   if (row.desc) e.description = row.desc;
   e.updatedAt = nowISO; e.updatedBy = reelWho();
   reelRecomputeDerived(e);
-  return e;
+  return { entry: e, seq: seqRes };
 }
 
 // Count writer (Phase 3, v2.52.01) — a live cable_reel_count scan. A physical
@@ -12567,13 +12672,11 @@ function reelUpsertFromCount(ev) {
   e.lastCountedFt = (ev.totalAvailableFt != null) ? ev.totalAvailableFt : (ev.qty != null ? ev.qty : null);
   e.lastCountedAt = ts;
   e.lastCountedBy = reelWho();
-  if (ev.innerSeqA != null && ev.innerSeqA !== "") e.innerSeq = Number(ev.innerSeqA);
-  if (ev.outerSeqA != null && ev.outerSeqA !== "") e.outerSeq = Number(ev.outerSeqA);
-  e.spanType      = ev.spanType || e.spanType || "single";
-  if (e.spanType === "two_way") {
-    e.innerSeqB = (ev.innerSeqB != null && ev.innerSeqB !== "") ? Number(ev.innerSeqB) : e.innerSeqB;
-    e.outerSeqB = (ev.outerSeqB != null && ev.outerSeqB !== "") ? Number(ev.outerSeqB) : e.outerSeqB;
-  } else { e.innerSeqB = null; e.outerSeqB = null; }
+  reelSetSequences(e, {
+    innerA: ev.innerSeqA, outerA: ev.outerSeqA,
+    innerB: ev.innerSeqB, outerB: ev.outerSeqB,
+    spanType: ev.spanType || e.spanType || "single"
+  });
   e.refCountDate  = ts;       // newest reference — blocks an older Product Reels overwrite
   if (ev.location) e.locationId = ev.location;
   if (!e.itemNumber && ev.itemNumber) e.itemNumber = ev.itemNumber;
@@ -12591,18 +12694,22 @@ function reelUpsertFromCount(ev) {
 // override recency-guarded in reelSyncFromQuants. It does NOT set footage —
 // footage stays owned by quants/counts, so a hand-entered sequence that disagrees
 // with on-hand correctly lights the Stale flag. `fields`: {innerA,outerA,spanType,
-// innerB,outerB,notes, presence?}. presence is applied only when provided.
+// innerB,outerB,notes, presence?, clearSequences?}. presence is applied only when
+// provided. Returns { entry, seq } — `seq.kept` is how many stored markers the
+// blank-never-wipes rule preserved, so the modal can say so out loud.
 function reelApplyManualEdit(reelNumber, fields) {
   var e = reelGet(reelNumber);
   if (!e) return null;
   fields = fields || {};
   var nowISO = new Date().toISOString();
-  var num = function(v) { return (v != null && v !== "" && !isNaN(v)) ? Number(v) : null; };
-  e.spanType = (fields.spanType === "two_way") ? "two_way" : "single";
-  e.innerSeq = num(fields.innerA);
-  e.outerSeq = num(fields.outerA);
-  if (e.spanType === "two_way") { e.innerSeqB = num(fields.innerB); e.outerSeqB = num(fields.outerB); }
-  else { e.innerSeqB = null; e.outerSeqB = null; }
+  // Sticky-sequence rule: blanking the fields does NOT clear stored markers —
+  // only ticking "Clear stored sequences" does (fields.clearSequences), and that
+  // snapshots the old pair to seqPrev first.
+  var seqRes = reelSetSequences(e, {
+    innerA: fields.innerA, outerA: fields.outerA,
+    innerB: fields.innerB, outerB: fields.outerB,
+    spanType: fields.spanType
+  }, { allowClear: !!fields.clearSequences });
   e.refCountDate = nowISO;    // manual edit = newest reference
   if (fields.notes != null) e.notes = String(fields.notes);
   if (fields.presence === "live" || fields.presence === "gone") {
@@ -12614,7 +12721,7 @@ function reelApplyManualEdit(reelNumber, fields) {
   e.updatedAt = nowISO; e.updatedBy = reelWho();
   reelRecomputeDerived(e);
   reelSaveToStorage();        // local + GitHub push (rides reels.json)
-  return e;
+  return { entry: e, seq: seqRes };
 }
 
 // ── Reel Edit modal (Reel Lookup → Edit) ──────────────────────────────────
@@ -12641,8 +12748,38 @@ function reelOpenEditModal(reelNumber) {
     pres.value = (e.presence === "gone") ? "gone" : (e.presence === "unconfirmed") ? "unconfirmed" : "live";
   }
   if ($("reelEditNotes")) $("reelEditNotes").value = e.notes || "";
+  if ($("reelEditClearSeq")) $("reelEditClearSeq").checked = false;
+  reelEditRenderSeqPrev(e);
   reelEditSpanChanged();
   var m = $("reelEditModal"); if (m) m.classList.remove("hidden");
+}
+
+// Show the last known-good marker set (kept by _reelSnapshotSeq on every
+// overwrite or clear) with a one-click restore — the undo for a bad reading or a
+// regretted clear, without going to the data repo's history.
+function reelEditRenderSeqPrev(e) {
+  var el = $("reelEditSeqPrev"); if (!el) return;
+  var p = e && e.seqPrev;
+  if (!p || (p.innerSeq == null && p.outerSeq == null)) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  var num = function(v) { return v != null ? Number(v).toLocaleString() : "—"; };
+  var when = p.at ? invFormatDateTime(p.at) : "";
+  el.classList.remove("hidden");
+  el.innerHTML = "Previous reading: <strong>" + num(p.innerSeq) + " / " + num(p.outerSeq) + "</strong>"
+    + (p.spanType === "two_way" ? " · B " + num(p.innerSeqB) + " / " + num(p.outerSeqB) : "")
+    + (when ? " <span style=\"color:#94a3b8;\">(replaced " + escapeHtml(when) + (p.by ? " by " + escapeHtml(p.by) : "") + ")</span>" : "")
+    + ' <button type="button" class="secondary" style="margin:0 0 0 6px;padding:2px 9px;font-size:12px;" onclick="reelEditRestorePrev()">Restore</button>';
+}
+
+// Load the snapshot back into the form (not saved until Save Changes).
+function reelEditRestorePrev() {
+  var e = _reelEditKey ? (appData.reels || {})[_reelEditKey] : null;
+  var p = e && e.seqPrev; if (!p) return;
+  var set = function(id, v) { if ($(id)) $(id).value = (v != null ? v : ""); };
+  set("reelEditInnerA", p.innerSeq);  set("reelEditOuterA", p.outerSeq);
+  set("reelEditInnerB", p.innerSeqB); set("reelEditOuterB", p.outerSeqB);
+  if ($("reelEditSpanType")) $("reelEditSpanType").value = (p.spanType === "two_way") ? "two_way" : "single";
+  if ($("reelEditClearSeq")) $("reelEditClearSeq").checked = false;
+  reelEditSpanChanged();
 }
 
 function reelEditSpanChanged() {
@@ -12660,7 +12797,16 @@ function reelEditRecalcPreview() {
   var ftB = 0;
   if (two) { var iB = parseFloat($("reelEditInnerB").value), oB = parseFloat($("reelEditOuterB").value); if (!isNaN(iB) && !isNaN(oB)) ftB = Math.abs(oB - iB); }
   var ref = (ftA != null) ? ftA + ftB : null;
-  if (ref == null) { el.textContent = "Sequences imply: — ft"; el.style.color = "#94a3b8"; return; }
+  if (ref == null) {
+    // Blank form + stored markers: say which way the sticky-sequence rule will go,
+    // so "Save Changes" is never a surprise.
+    var stored = !!(e && (e.innerSeq != null || e.outerSeq != null));
+    var clearing = $("reelEditClearSeq") && $("reelEditClearSeq").checked;
+    if (stored && clearing)      { el.textContent = "⚠ Will CLEAR the stored sequences (recoverable via Restore)."; el.style.color = "#b91c1c"; }
+    else if (stored)             { el.textContent = "Blank — the stored sequences will be KEPT."; el.style.color = "#166534"; }
+    else                         { el.textContent = "Sequences imply: — ft"; el.style.color = "#94a3b8"; }
+    return;
+  }
   var onHand = e ? ((e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || "")) ? e.lastCountedFt : e.onHandFt) : null;
   var txt = "Sequences imply: " + ref.toLocaleString() + " ft";
   if (onHand != null) {
@@ -12678,6 +12824,14 @@ function reelSaveEdit() {
   var selP = $("reelEditPresence") ? $("reelEditPresence").value : "";
   // Only override presence when the user actually changed it to a live/gone value.
   var presence = ((selP === "live" || selP === "gone") && selP !== _reelEditOrigPresence) ? selP : undefined;
+  // Clearing markers is destructive and deliberate — confirm it once, by name.
+  var clearSeq = !!($("reelEditClearSeq") && $("reelEditClearSeq").checked);
+  var hadSeq   = (e.innerSeq != null || e.outerSeq != null);
+  if (clearSeq && hadSeq &&
+      !confirm("Clear the stored sequences for reel " + (e.reelNumber || "") + "?\n\n" +
+               "Current: inner " + (e.innerSeq != null ? e.innerSeq : "—") + " / outer " + (e.outerSeq != null ? e.outerSeq : "—") + "\n\n" +
+               "Counting this reel will start from scratch until someone re-reads the markers. " +
+               "The previous reading is kept and can be restored from this modal.")) return;
   reelApplyManualEdit(e.reelNumber, {
     innerA:   $("reelEditInnerA") ? $("reelEditInnerA").value : "",
     outerA:   $("reelEditOuterA") ? $("reelEditOuterA").value : "",
@@ -12685,7 +12839,8 @@ function reelSaveEdit() {
     innerB:   $("reelEditInnerB") ? $("reelEditInnerB").value : "",
     outerB:   $("reelEditOuterB") ? $("reelEditOuterB").value : "",
     notes:    $("reelEditNotes") ? $("reelEditNotes").value : "",
-    presence: presence
+    presence: presence,
+    clearSequences: clearSeq
   });
   reelCancelEdit();
   if (typeof reelLookupRender === "function") reelLookupRender();
@@ -12782,7 +12937,12 @@ function reelSyncFromQuants() {
       spanType:    "single",
       source:      "quants-only",
       createdAt:   nowISO, createdBy: reelWho(),
-      updatedAt:   nowISO, updatedBy: reelWho()
+      // NO updatedAt (v2.55.00). This record carries no sequences, and updatedAt
+      // is what the cross-device merge ranks on — stamping it here is what let a
+      // footage-only device outrank another device's hand-entered markers. A
+      // quants sync is not an edit; it earns a timestamp when someone writes a
+      // reading. _reelCarrySequences is the belt to this suspenders.
+      updatedAt:   "", updatedBy: ""
     };
     reelRecomputeDerived(e);
     reels[k] = e;
@@ -13001,9 +13161,9 @@ function timLoadMasterCache() {
     if (Array.isArray(parsed.inventory_events))   { appData.inventory_events = parsed.inventory_events; if (parsed.inventory_events.length) hadData = true; }
     if (Array.isArray(parsed.recount_sessions))   appData.recount_sessions  = parsed.recount_sessions;
     if (Array.isArray(parsed.recount_movements))  appData.recount_movements = parsed.recount_movements;
-    if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = parsed.boxes; boxMigrateDevices(); }
-    if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = parsed.pallets; }
-    if (parsed.reels && typeof parsed.reels === "object") { appData.reels = parsed.reels; }
+    if (parsed.boxes && typeof parsed.boxes === "object") { appData.boxes = _ghMergeBoxesLWW(appData.boxes, parsed.boxes); boxMigrateDevices(); }
+    if (parsed.pallets && typeof parsed.pallets === "object") { appData.pallets = _ghMergePalletsLWW(appData.pallets, parsed.pallets); }
+    if (parsed.reels && typeof parsed.reels === "object") { appData.reels = _ghMergeReelsLWW(appData.reels, parsed.reels); }
     if (Array.isArray(parsed.odoo_quants)) appData.odoo_quants = parsed.odoo_quants;
     if (parsed.barcode_map && typeof parsed.barcode_map === "object") {
       Object.assign(BARCODE_MAP, parsed.barcode_map);
@@ -18251,7 +18411,16 @@ function invConfirmCsvImport() {
   // Odoo quants baseline. No cable_reel_count events are created (retired
   // v2.52.00); a reel's footage/presence is reconciled from quants immediately
   // after, so a stale inner/outer vs. live footage surfaces as sequenceStale.
-  toImport.forEach(function(r) { reelUpsertReference(r); });
+  // Tally what the sticky-sequence rule preserved so the import can say it out
+  // loud — an import that quietly keeps data is only trustworthy if it reports.
+  var seqTally = { wrote: 0, keptReels: 0 };
+  toImport.forEach(function(r) {
+    var res = reelUpsertReference(r);
+    if (res && res.seq) {
+      if (res.seq.wrote) seqTally.wrote++;
+      if (res.seq.kept)  seqTally.keptReels++;
+    }
+  });
   reelSyncFromQuants();   // classify presence + refresh footage from the live baseline
   reelSaveToStorage();
 
@@ -18276,6 +18445,12 @@ function invConfirmCsvImport() {
     "Reel reference updated: " + toImport.length + " reel(s) merged into the registry " +
     "(inner/outer sequences + notes). Footage comes from the Odoo quants baseline; " +
     "any reel whose live footage no longer matches its sequences is flagged to re-verify.\n\n" +
+    seqTally.wrote + " reel(s) got new sequence markers from this file." +
+    (seqTally.keptReels
+      ? "\n" + seqTally.keptReels + " reel(s) had blank Inner/Outer columns in the file — " +
+        "TIM KEPT the sequences it already had. Blanks never clear stored markers; " +
+        "clear one deliberately in Reel Lookup → Edit."
+      : "") + "\n\n" +
     (configured
       ? "Pushing the master file to GitHub now — watch the GitHub panel for status. A backup JSON was also downloaded."
       : "The updated master JSON has been downloaded.\nReplace your existing Step 1 file with it to make the import permanent.")

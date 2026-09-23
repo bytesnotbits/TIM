@@ -1980,6 +1980,15 @@
           </label>
         </div>
         <p id="reelEditFtPreview" class="small" style="margin:10px 0 0;color:#0f172a;font-weight:600;"></p>
+        <p id="reelEditSeqPrev" class="small hidden" style="margin:8px 0 0;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;color:#475569;"></p>
+        <div style="margin-top:10px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;">
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#7f1d1d;font-weight:600;margin:0;">
+            <input id="reelEditClearSeq" type="checkbox" style="margin:2px 0 0;width:auto;" onchange="reelEditRecalcPreview()" />
+            <span>Clear stored sequences for this reel<br />
+              <span style="font-weight:400;color:#991b1b;">Leaving the boxes above empty does <strong>not</strong> erase known markers — TIM keeps the last reading so counting stays fast, even when it's stale. Tick this only when the markers are genuinely gone (re-spooled, relabeled).</span>
+            </span>
+          </label>
+        </div>
         <div style="margin-top:12px;">
           <label>Status
             <select id="reelEditPresence">
