@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.54.00";
+const APP_VERSION = "v2.54.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5169,9 +5169,9 @@ function renderInvSummary() {
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
 
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (evt.qty || 1); }
+    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (Number(evt.qty) || 1); }
     else if (evt.eventType === "cable_reel_count") {
-      r.reelFootage += (evt.totalAvailableFt || 0);
+      r.reelFootage += (Number(evt.totalAvailableFt) || 0);
       reelRows.push(evt);
     }
     else if (evt.eventType === "exception")              { r.exceptions += 1; }
@@ -5271,8 +5271,8 @@ function buildInvSummaryMap(events) {
     if (evt.description && !r.description) r.description = evt.description;
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (evt.qty || 1); }
-    else if (evt.eventType === "cable_reel_count")       { r.reelFootage += (evt.totalAvailableFt || 0); }
+    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (Number(evt.qty) || 1); }
+    else if (evt.eventType === "cable_reel_count")       { r.reelFootage += (Number(evt.totalAvailableFt) || 0); }
     else if (evt.eventType === "exception")              { r.exceptions += 1; }
     if (evt.flagged) r.flagged += 1;
   });
@@ -11512,9 +11512,20 @@ function exportRecountXlsx() {
 // Build one force-text worksheet from rows-of-arrays. Pass a `headers` array
 // for a header row; pass null/undefined for a headerless sheet (data starts at
 // row 1 — NISC's per-item import wants a bare column of identifiers).
-function _timTextSheet(headers, rows) {
+// `numericCols` = column INDEXES holding true quantities (counts, footage,
+// variances) rather than identifiers. Those cells are written as real numbers so
+// the sheet can be pivoted, summed and charted in Excel; every other cell stays
+// force-text. Only ever mark a column that cannot hold a serial/FSAN/MAC/barcode
+// -- the text guard is what stops a long all-digit ID rendering as 6.6E+11 and
+// losing digits past 15 significant figures. A marked column also COERCES a
+// numeric-looking string to a number, so a quantity that arrived as text (out of
+// a parsed import) still lands numeric; anything that isn't a number falls
+// through to text untouched.
+function _timTextSheet(headers, rows, numericCols) {
   rows = rows || [];
   var hasHeader = headers != null;
+  var numeric = {};
+  (numericCols || []).forEach(function(c) { numeric[c] = true; });
   var ws = XLSX.utils.aoa_to_sheet(hasHeader ? [headers].concat(rows) : rows);
   if (ws["!ref"]) {
     var range = XLSX.utils.decode_range(ws["!ref"]);
@@ -11522,6 +11533,15 @@ function _timTextSheet(headers, rows) {
       for (var C = range.s.c; C <= range.e.c; C++) {
         var cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
         if (!cell || cell.v == null || cell.v === "") continue;
+        if (numeric[C]) {
+          var raw = String(cell.v).trim();
+          var n   = (typeof cell.v === "number") ? cell.v : Number(raw);
+          if (raw !== "" && isFinite(n)) {
+            cell.t = "n"; cell.v = n;
+            delete cell.w; delete cell.z;
+            continue;
+          }
+        }
         cell.t = "s";
         cell.v = String(cell.v);
         delete cell.w; delete cell.z;
@@ -11550,19 +11570,36 @@ function _timSafeSheetName(name, used) {
   return nm;
 }
 
-function timDownloadXlsx(filename, headers, rows, sheetName) {
+// Resolve caller-supplied numeric column HEADER NAMES to indexes. Names, not
+// indexes, so adding or reordering a column can't silently re-point the opt-out
+// at an identifier column. An unknown name is ignored.
+function _timNumericCols(headers, numericHeaders) {
+  if (!headers || !numericHeaders || !numericHeaders.length) return [];
+  var out = [];
+  numericHeaders.forEach(function(name) {
+    var i = headers.indexOf(name);
+    if (i >= 0) out.push(i);
+  });
+  return out;
+}
+
+// `numericHeaders` (optional) = header names whose cells are written as real
+// numbers instead of text, for an export meant to be pivoted or summed.
+function timDownloadXlsx(filename, headers, rows, sheetName, numericHeaders) {
   var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, _timTextSheet(headers, rows), _timSafeSheetName(sheetName || "Sheet1", {}));
+  XLSX.utils.book_append_sheet(wb, _timTextSheet(headers, rows, _timNumericCols(headers, numericHeaders)),
+    _timSafeSheetName(sheetName || "Sheet1", {}));
   XLSX.writeFile(wb, filename);
 }
 
-// Multi-sheet variant: sheets = [{ name, headers, rows }, …]. Same force-text
+// Multi-sheet variant: sheets = [{ name, headers, rows, numericHeaders? }]. Same force-text
 // cells; tab names are sanitized + de-duplicated in order.
 function timDownloadXlsxSheets(filename, sheets) {
   var wb = XLSX.utils.book_new();
   var used = {};
   (sheets || []).forEach(function(s) {
-    XLSX.utils.book_append_sheet(wb, _timTextSheet(s.headers, s.rows), _timSafeSheetName(s.name, used));
+    XLSX.utils.book_append_sheet(wb, _timTextSheet(s.headers, s.rows, _timNumericCols(s.headers, s.numericHeaders)),
+      _timSafeSheetName(s.name, used));
   });
   XLSX.writeFile(wb, filename);
 }
@@ -11603,7 +11640,8 @@ function exportInvEventLogXlsx() {
   var rows = invEvents.map(function(e) {
     return buildEventLogBaseRow(e).concat([e.flagged ? "Yes" : "", e.notes || ""]);
   });
-  timDownloadXlsx("inv-event-log-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Event Log");
+  timDownloadXlsx("inv-event-log-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Event Log",
+    ["Seq", "Qty"]);
 }
 
 function exportInvSummaryXlsx() {
@@ -11614,7 +11652,10 @@ function exportInvSummaryXlsx() {
     var r = map[k];
     return [r.item, r.description, r.countedQty, r.serializedCount, r.reelFootage || "", r.exceptions, r.flagged || "", r.lastCounted];
   });
-  timDownloadXlsx("inv-summary-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Summary");
+  // This is the export Joe pivots, so the count columns must be real numbers.
+  // Item / Description / Last Counted stay text (Item numbers are identifiers).
+  timDownloadXlsx("inv-summary-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Summary",
+    ["Counted Qty", "Serialized Count", "Reel Footage (ft)", "Exceptions", "Flagged Events"]);
 }
 
 // ===================================================================
@@ -11661,7 +11702,7 @@ function buildOdooAdjustmentRows(events) {
       var f2 = pmFields(evt.itemNumber);
       bulkMap[key] = { extId: f2.extId, defCode: f2.defCode, loc: evt.location || "", qty: 0 };
     }
-    bulkMap[key].qty += (evt.qty || 1);
+    bulkMap[key].qty += (Number(evt.qty) || 1);
   });
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
@@ -11692,7 +11733,8 @@ function exportInvOdooAdjustmentXlsx() {
   var result = buildOdooAdjustmentRows(invEvents);
   if (!result.rows.length) { alert("No countable events to export."); return; }
   invWarnBlankLocations(result.rows);
-  timDownloadXlsx("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx", result.headers, result.rows, "Inventory Adjustment");
+  timDownloadXlsx("odoo-inv-adj-" + new Date().toISOString().slice(0, 10) + ".xlsx", result.headers, result.rows,
+    "Inventory Adjustment", ["inventory_quantity"]);
   invShowOdooImportReminder(result.rows.length);
 }
 
@@ -13618,7 +13660,7 @@ function invBuildGapReport() {
       if (!countedBulk[bk]) {
         countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "", seq: null, seqLast: null };
       }
-      countedBulk[bk].qty += (e.qty || 1);
+      countedBulk[bk].qty += (Number(e.qty) || 1);
       // A bulk gap aggregates several scans, so keep the first and last sequence
       // rather than one: the row then spans where in the count it happened.
       if (countedBulk[bk].seq == null) countedBulk[bk].seq = e.sequence;

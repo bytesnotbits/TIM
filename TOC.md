@@ -120,9 +120,10 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `escapeHtml(v)` | HTML-escape for safe innerHTML injection |
 | `csvEscape(v)` | Quote CSV fields with special chars |
 | `downloadText(filename, text, type)` | Trigger browser file download (JSON payloads; the CSV escape-hatch in the inv-export picker) |
-| `timDownloadXlsx(filename, headers, rows, sheet)` | **General spreadsheet export** — write+download an .xlsx from a header array + rows-of-arrays. Every data cell forced to text (`t:"s"`) so long numeric IDs (serials/FSANs/MACs/barcodes) never become `6.6E+11` in Excel and digits survive Odoo re-import. All former CSV exports route through this |
-| `timDownloadXlsxSheets(filename, sheets)` | Multi-sheet variant — `sheets = [{name,headers,rows}]`, same force-text cells, tab names sanitized + de-duped. Used by the Odoo device export (Devices sheet + one accounting tab per item #) |
-| `_timTextSheet(headers, rows)` | Build one force-text worksheet (shared by both exporters); `headers=null` → headerless sheet (NISC per-item column) |
+| `timDownloadXlsx(filename, headers, rows, sheet, numericHeaders)` | **General spreadsheet export** — write+download an .xlsx from a header array + rows-of-arrays. Every data cell forced to text (`t:"s"`) so long numeric IDs (serials/FSANs/MACs/barcodes) never become `6.6E+11` in Excel and digits survive Odoo re-import. All former CSV exports route through this. **`numericHeaders`** (optional, v2.54.01) names the quantity columns to write as real numbers so the file can be pivoted/summed — never name a column that can hold an identifier |
+| `timDownloadXlsxSheets(filename, sheets)` | Multi-sheet variant — `sheets = [{name,headers,rows,numericHeaders?}]`, same force-text cells + per-sheet numeric opt-out, tab names sanitized + de-duped. Used by the Odoo device export (Devices sheet + one accounting tab per item #) |
+| `_timTextSheet(headers, rows, numericCols)` | Build one force-text worksheet (shared by both exporters); `headers=null` → headerless sheet (NISC per-item column). `numericCols` = column indexes written as real numbers instead of text; a marked column also coerces a numeric-looking string to a number |
+| `_timNumericCols(headers, numericHeaders)` | Resolve numeric column **header names** → indexes (names, not indexes, so reordering a column can't re-point the opt-out at an identifier); unknown name ignored |
 | `_timSafeSheetName(name, used)` | Excel-safe tab name: ≤31 chars, strips `: \ / ? * [ ]`, non-blank, unique via `used` map |
 | `getField(row, names)` | Flexible field extraction from row object |
 | `commonValue(values)` | Most frequent value in array |
@@ -833,11 +834,11 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 |----------|---------|
 | `exportInvEventLogCsv()` | Export event log to CSV |
 | `exportInvSummaryCsv()` | Export summary to CSV |
-| `exportInvEventLogXlsx()` | Export event log to XLSX (force-text via `timDownloadXlsx` since v2.54.00) |
-| `exportInvSummaryXlsx()` | Export summary to XLSX (force-text via `timDownloadXlsx` since v2.54.00) |
+| `exportInvEventLogXlsx()` | Export event log to XLSX (force-text via `timDownloadXlsx` since v2.54.00; **Seq + Qty numeric** since v2.54.01) |
+| `exportInvSummaryXlsx()` | Export summary to XLSX (force-text via `timDownloadXlsx` since v2.54.00). **Joe pivots this file**, so Counted Qty / Serialized Count / Reel Footage / Exceptions / Flagged Events are written as real numbers (v2.54.01); Item stays text |
 | `exportRecountXlsx()` | Export recount results to XLSX (builds its own sheet — **not** force-text; no long numeric IDs in its columns) |
 | `buildEventLogBaseRow(e)` | Build common CSV/XLSX fields for an event |
-| `buildInvSummaryMap(events)` | Aggregate events by item |
+| `buildInvSummaryMap(events)` | Aggregate events by item. Accumulators coerce with `Number()` before `+=` — every current writer of `evt.qty` stores a real number, but these totals now leave as numeric cells, and a string would silently concatenate (`10 + "7"` → `107`) rather than add. `renderInvSummary` holds a near-duplicate of this aggregation |
 | `buildExportPayload()` | Build full master JSON payload (10yr purge); includes `odoo_quants`, `recount_sessions`, `recount_movements` |
 | `requireInvSession()` | Guard: alert if no active session |
 
