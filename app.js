@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.56.00";
+const APP_VERSION = "v2.56.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -12568,6 +12568,17 @@ function _reelSnapshotSeq(e, by) {
   };
 }
 
+// A floor count NEWER than the quants baseline is ground truth; otherwise the
+// quants on-hand is. One definition, three callers (derived flags, the edit
+// preview, the batch preview) — they must never disagree about what a reel holds.
+function _reelFtFromCount(e) {
+  return !!(e && e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || ""));
+}
+function reelEffectiveFt(e) {
+  if (!e) return null;
+  return _reelFtFromCount(e) ? e.lastCountedFt : e.onHandFt;
+}
+
 // Recompute all derived fields + provenance from the source-owned fields.
 // Called after every write to any source (quants / reference / count).
 function reelRecomputeDerived(e) {
@@ -12576,10 +12587,8 @@ function reelRecomputeDerived(e) {
   var ftB = (e.spanType === "two_way" && e.innerSeqB != null && e.outerSeqB != null) ? Math.abs(e.outerSeqB - e.innerSeqB) : 0;
   e.refFt = (ftA != null) ? (ftA + ftB) : null;
   var isLive = (e.presence === "live");
-  // Effective footage: a floor count NEWER than the quants baseline is ground
-  // truth (Phase 3); otherwise the quants on-hand.
-  var ftFromCount = !!(e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || ""));
-  var effFt = ftFromCount ? e.lastCountedFt : e.onHandFt;
+  var ftFromCount = _reelFtFromCount(e);
+  var effFt = reelEffectiveFt(e);
   // When the current sequences AND the effective footage both came from the SAME
   // count, they're consistent by construction (this also covers two-way reels,
   // whose footage is a two-span sum the single refFt pair can't equal) → not stale.
@@ -12849,7 +12858,7 @@ function reelEditRecalcPreview() {
     else                         { el.textContent = "Sequences imply: — ft"; el.style.color = "#94a3b8"; }
     return;
   }
-  var onHand = e ? ((e.lastCountedAt && e.lastCountedFt != null && e.lastCountedAt > (e.quantsAt || "")) ? e.lastCountedFt : e.onHandFt) : null;
+  var onHand = reelEffectiveFt(e);
   var txt = "Sequences imply: " + ref.toLocaleString() + " ft";
   if (onHand != null) {
     txt += " · on hand: " + onHand.toLocaleString() + " ft";
@@ -17805,22 +17814,88 @@ function reelBatchOpenModal() {
   ["reelBatchInnerA", "reelBatchOuterA", "reelBatchInnerB", "reelBatchOuterB"].forEach(function(id) { if ($(id)) $(id).value = ""; });
   if ($("reelBatchNotes")) $("reelBatchNotes").value = "";
 
+  _reelBatchRefreshSelectionUi();
+  reelBatchSpanChanged();
+  var m = $("reelBatchModal"); if (m) m.classList.remove("hidden");
+}
+
+// The selected reels + the item/direction spread, redrawn whenever the selection
+// changes underneath the open modal (i.e. after "keep only the matching reels").
+function _reelBatchRefreshSelectionUi() {
+  var entries = reelBatchSelectedEntries();
+
   var mix = $("reelBatchMixNote");
   if (mix) {
-    var mixed = known.length > 1;
+    var dirs = {};
+    entries.forEach(function(e) { var d = reelSkuDirection(e.itemNumber); if (d) dirs[d] = true; });
+    var mixed = Object.keys(dirs).length > 1;
     mix.classList.toggle("hidden", !mixed);
     if (mixed) mix.textContent = "⚠ This selection mixes one-way and two-way SKUs. The span type below is applied to ALL of them — assign one item group at a time instead.";
   }
 
   var list = $("reelBatchTargets");
   if (list) {
+    var items = {};
+    entries.forEach(function(e) { items[e.itemNumber || "(no item)"] = (items[e.itemNumber || "(no item)"] || 0) + 1; });
+    var itemKeys = Object.keys(items).sort();
     var names = entries.map(function(e) { return e.reelNumber || ""; });
-    list.innerHTML = "<strong>" + entries.length + " reel" + (entries.length !== 1 ? "s" : "") + ":</strong> "
-      + names.slice(0, 24).map(escapeHtml).join(", ")
-      + (names.length > 24 ? " <span style=\"color:#94a3b8;\">…and " + (names.length - 24) + " more</span>" : "");
+    // Name the ITEMS as well as the reels: a cross-item sweep is allowed (the bar
+    // is sticky precisely so you can cross group boundaries), so the modal has to
+    // show that you crossed one.
+    list.innerHTML = "<strong>" + entries.length + " reel" + (entries.length !== 1 ? "s" : "")
+      + " across " + itemKeys.length + " item" + (itemKeys.length !== 1 ? "s" : "") + ":</strong> "
+      + itemKeys.map(function(k) { return escapeHtml(k) + " (" + items[k] + ")"; }).join(", ")
+      + "<br /><span style=\"color:#64748b;\">" + names.slice(0, 20).map(escapeHtml).join(", ")
+      + (names.length > 20 ? " …and " + (names.length - 20) + " more" : "") + "</span>";
   }
-  reelBatchSpanChanged();
-  var m = $("reelBatchModal"); if (m) m.classList.remove("hidden");
+}
+
+function reelBatchSelectedEntries() {
+  return reelBatchSelectedKeys().map(function(k) { return (appData.reels || {})[k]; }).filter(Boolean);
+}
+
+// Which selected reels would AGREE with the markers being typed, and which would
+// not. "Full reel = these two numbers" only holds for the reels that are actually
+// full — within item 1502 alone the floor holds 16 ft, 168 ft and 4,870 ft reels —
+// so the batch has to show the disagreement BEFORE it writes, not as a row of
+// Stale badges afterwards. Reels with no known footage can't be judged; they are
+// counted separately rather than lumped in with the mismatches.
+function reelBatchMatchSplit(refFt) {
+  var match = [], off = [], unknown = [];
+  reelBatchSelectedEntries().forEach(function(e) {
+    var ft = reelEffectiveFt(e);
+    if (ft == null) { unknown.push(e); return; }
+    if (Math.abs(ft - refFt) > REEL_STALE_TOL_FT) off.push(e); else match.push(e);
+  });
+  return { match: match, off: off, unknown: unknown };
+}
+
+// One click to narrow the selection to exactly the reels the typed markers fit.
+// The intended workflow: tick a whole item group (or several), type the full-reel
+// numbers, then drop the partials out rather than hand-picking them up front.
+function reelBatchKeepMatching() {
+  var ref = _reelBatchRefFt();
+  if (ref == null) return;
+  var keep = {};
+  reelBatchMatchSplit(ref).match.forEach(function(e) { keep[normKey(e.reelNumber)] = true; });
+  reelBatchSel = keep;
+  _reelBatchRefreshSelectionUi();
+  reelBatchRecalcPreview();
+  reelBatchUpdateBar();
+  if (typeof reelLookupRender === "function") reelLookupRender();
+}
+
+// Footage the currently typed markers imply, or null when span A is incomplete.
+function _reelBatchRefFt() {
+  var num = function(id) { var v = $(id) ? parseFloat($(id).value) : NaN; return isNaN(v) ? null : v; };
+  var iA = num("reelBatchInnerA"), oA = num("reelBatchOuterA");
+  if (iA == null || oA == null) return null;
+  var ft = Math.abs(oA - iA);
+  if ($("reelBatchSpanType") && $("reelBatchSpanType").value === "two_way") {
+    var iB = num("reelBatchInnerB"), oB = num("reelBatchOuterB");
+    if (iB != null && oB != null) ft += Math.abs(oB - iB);
+  }
+  return ft;
 }
 function reelBatchCancel() { var m = $("reelBatchModal"); if (m) m.classList.add("hidden"); }
 function reelBatchSpanChanged() {
@@ -17834,6 +17909,7 @@ function reelBatchSpanChanged() {
 // only safe to offer if it can say what it is about to overwrite.
 function reelBatchRecalcPreview() {
   var el = $("reelBatchPreview"); if (!el) return;
+  var warn = $("reelBatchMismatch");
   var keys = reelBatchSelectedKeys();
   var num = function(id) { var v = $(id) ? parseFloat($(id).value) : NaN; return isNaN(v) ? null : v; };
   var iA = num("reelBatchInnerA"), oA = num("reelBatchOuterA");
@@ -17848,6 +17924,7 @@ function reelBatchRecalcPreview() {
   if (ftA == null) {
     el.style.color = "#94a3b8";
     el.textContent = "Enter Inner A and Outer A. Blank fields write nothing — stored markers are kept, never cleared.";
+    if (warn) { warn.classList.add("hidden"); warn.innerHTML = ""; }
     return;
   }
   var ft = ftA + ftB;
@@ -17857,6 +17934,33 @@ function reelBatchRecalcPreview() {
     + " · " + keys.length + " reel" + (keys.length !== 1 ? "s" : "")
     + (overwrite ? " · " + overwrite + (overwrite !== 1 ? " already have markers" : " already has markers")
                   + " that will be replaced (each keeps a one-click Restore)" : "");
+
+  // The agreement check. Not a block — a hand-read marker can legitimately beat a
+  // stale on-hand — but a sweep that disagrees with the floor on most of its reels
+  // is almost always the wrong selection, and that has to be visible before Assign.
+  if (!warn) return;
+  var split = reelBatchMatchSplit(ft);
+  if (!split.off.length) {
+    warn.classList.remove("hidden");
+    warn.style.background = "#f0fdf4"; warn.style.borderColor = "#bbf7d0"; warn.style.color = "#166534";
+    warn.innerHTML = "✓ On-hand footage agrees with these markers on all " + split.match.length + " reel"
+      + (split.match.length !== 1 ? "s" : "")
+      + (split.unknown.length ? " (" + split.unknown.length + " with no known footage to check)" : "") + ".";
+    return;
+  }
+  var names = split.off.map(function(e) {
+    return escapeHtml(e.reelNumber || "") + " <span style=\"opacity:.75;\">(" + Number(reelEffectiveFt(e)).toLocaleString() + " ft)</span>";
+  });
+  warn.classList.remove("hidden");
+  warn.style.background = "#fffbeb"; warn.style.borderColor = "#fde047"; warn.style.color = "#92400e";
+  warn.innerHTML = "⚠ <strong>" + split.off.length + " of " + (split.match.length + split.off.length)
+    + " selected reels don't hold " + ft.toLocaleString() + " ft</strong> — they aren't full, so these markers would be wrong for them and they'd all flag Stale:"
+    + "<div style=\"margin:6px 0 0;font-family:monospace;font-size:12px;line-height:1.7;\">"
+    + names.slice(0, 20).join(", ") + (names.length > 20 ? ", …and " + (names.length - 20) + " more" : "") + "</div>"
+    + (split.match.length
+        ? '<button type="button" class="secondary" style="margin:8px 0 0;padding:4px 11px;font-size:12px;" onclick="reelBatchKeepMatching()">Keep only the '
+          + split.match.length + " matching reel" + (split.match.length !== 1 ? "s" : "") + "</button>"
+        : "");
 }
 
 function reelBatchApply() {
@@ -17875,6 +17979,15 @@ function reelBatchApply() {
     var e = (appData.reels || {})[k];
     return !!(e && (e.innerSeq != null || e.outerSeq != null));
   }).length;
+  // Last gate on the agreement check — the same finding the amber panel already
+  // showed while the fields were being filled (cf. invReelCheckDuplicate).
+  var refFt = _reelBatchRefFt();
+  var off = (refFt != null) ? reelBatchMatchSplit(refFt).off : [];
+  if (off.length && !confirm(off.length + " of the " + keys.length + " selected reels don't hold "
+      + refFt.toLocaleString() + " ft on hand — they aren't full, so these markers are wrong for them:\n\n"
+      + off.slice(0, 12).map(function(e) { return "  " + (e.reelNumber || "") + " — " + Number(reelEffectiveFt(e)).toLocaleString() + " ft"; }).join("\n")
+      + (off.length > 12 ? "\n  …and " + (off.length - 12) + " more" : "")
+      + "\n\nAssign anyway?")) return;
   if (!confirm("Assign inner " + innerA + " / outer " + outerA
       + (span === "two_way" && innerB !== "" ? "  ·  B " + innerB + " / " + outerB : "")
       + " to " + keys.length + " reel" + (keys.length !== 1 ? "s" : "") + "?"

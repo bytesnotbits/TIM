@@ -300,6 +300,12 @@ h2 { margin-top: 28px; }
 .dropdown-menu button:disabled { color: #94a3b8; background: transparent; cursor: not-allowed; }
 
 /* ── Save toast ── */
+/* Reel Lookup batch bar: sticks to the top of .main-content's scrollport for as
+   long as the Reel Lookup card is on screen, so the action stays reachable while
+   you tick reels hundreds of rows down — and a selection can deliberately cross
+   item-group boundaries (the same markers often fit several duct SKUs). */
+.reel-batch-bar { position: sticky; top: 0; z-index: 20; box-shadow: 0 2px 6px rgba(15,23,42,.10); }
+
 .prod-save-toast { position:fixed; bottom:24px; right:24px; background:#166534; color:#fff; padding:7px 16px; border-radius:8px; font-size:13px; font-weight:700; z-index:9999; opacity:0; transform:translateY(6px); transition:opacity .18s,transform .18s; pointer-events:none; }
 .prod-save-toast.show { opacity:1; transform:translateY(0); }
 

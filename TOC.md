@@ -783,6 +783,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `reelSaveToStorage()` / `reelLoadFromStorage()` | Persist/load `appData.reels` (Phase 1: local only) |
 | `reelGet(reelNumber)` / `reelAll()` | Fetch one entry by reel number / all entries |
 | `reelItemIsReelTracked(itemNumber)` | Gate: is the item `tracking_type:"reel"` in PRODUCT_MAP? (which quant lots enter the registry) |
+| `_reelFtFromCount(e)` / `reelEffectiveFt(e)` | Is a floor count newer than the quants baseline? / the footage a reel effectively holds (count if newer, else quants on-hand). **One definition, three callers** (derived flags, the edit preview, the batch agreement check) — they must never disagree about what a reel holds (v2.56.01) |
 | `reelRecomputeDerived(e)` | Recompute `refFt` / `needsSequences` / `sequenceStale` / `source`. Effective footage = `lastCountedFt` if a count is newer than `quantsAt`, else `onHandFt`; stale check SKIPPED when footage+sequences came from the same count (covers two-way) |
 | `reelSetSequences(e, vals, opts)` | **THE choke point (v2.55.00)** — the ONLY place `innerSeq`/`outerSeq`/`innerSeqB`/`outerSeqB` are written. A blank incoming value leaves the stored marker alone (counted in the returned `{wrote, kept, cleared}`); `opts.allowClear` is the one destructive path and belongs to the human edit modal alone. Flipping `spanType` to `single` does NOT null span B (`reelRecomputeDerived` already ignores it), so a mis-set span type can't destroy a reading |
 | `_reelSnapshotSeq(e, by)` | Save the last known-good marker set to `e.seqPrev` `{innerSeq,outerSeq,innerSeqB,outerSeqB,spanType,refCountDate,at,by}` before any overwrite or clear — the in-app undo, so recovery never means digging through the data repo's git history |
@@ -804,6 +805,10 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 ### Reel Lookup — Batch Sequence Assign (v2.56.00)
 
 > A FULL plowduct reel is the same two numbers every time (0 → 5,000 single span; 0 → 2,500 twice on a two-way), so the list selects and writes in one sweep instead of one modal per reel. **Not a fourth sequence writer** — every reel still goes through `reelApplyManualEdit` → `reelSetSequences`, so the sticky-sequence rule, the `seqPrev` snapshot and the per-reel Restore apply exactly as for a single edit. The only concession to volume is `opts.deferPersist`: one registry write for the whole sweep.
+>
+> **The bar is STICKY, not per-item-group (v2.56.01).** A per-group button was the other option and is worse twice over: it still scrolls away inside a long group, and it would have locked a batch to one item. Sticky keeps one control reachable hundreds of rows down AND lets a selection deliberately cross item groups — the same markers fit several duct SKUs. The modal names the items it spans so a crossing is never invisible.
+>
+> **THE AGREEMENT CHECK (v2.56.01):** full-reel numbers are only right for the reels that are actually full — inside item 1502 alone the floor holds 16 ft, 168 ft and 4,870 ft reels next to the 5,000 ft ones. Before Assign, `reelBatchMatchSplit` compares each selected reel's effective on-hand against the footage the typed markers imply and names every reel that disagrees, with a one-click **"Keep only the N matching reels"**. Deliberately a warning, not a block — a hand-read marker can legitimately beat a stale on-hand — but it is restated at the confirm, because discovering the mismatch as a row of Stale badges afterwards is discovering it too late.
 
 | Function / Variable | Purpose |
 |---------------------|---------|
@@ -812,7 +817,11 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `reelBatchToggle(reelNumber)` | One row's checkbox — deliberately does NOT re-render (the table is long + lazy-rendered, so a rebuild would throw scroll away); the native checkbox holds its own state and only the bar refreshes |
 | `reelBatchSelectVisible(item)` / `reelBatchDeselectVisible(item)` / `_reelGroupAllSelected(item)` | Tick/untick everything in view or in one item group, and the group header's tick-all state. Works off `_reelLookupVisible`, **not the DOM** — rows below the lazy-render fold aren't there to query |
 | `reelBatchClear()` / `reelBatchUpdateBar()` | Drop the selection / refresh `#reelBatchBar`. The selection deliberately survives a filter or search change, so the bar always states the count out loud |
-| `reelBatchOpenModal()` / `reelBatchCancel()` | Open `#reelBatchModal` with the span type pre-set from the selection's SKUs (unanimous → use it; mixed → amber `#reelBatchMixNote` telling you to assign one item group at a time, since Span B means nothing on a one-way) / close |
+| `reelBatchOpenModal()` / `reelBatchCancel()` | Open `#reelBatchModal` with the span type pre-set from the selection's SKUs (unanimous → use it; mixed → amber `#reelBatchMixNote`, since Span B means nothing on a one-way) / close |
+| `reelBatchSelectedEntries()` / `_reelBatchRefreshSelectionUi()` | Selected registry entries / redraw `#reelBatchTargets` (**"N reels across M items"** + the reel numbers) and the mix note — called on open and again whenever the selection changes underneath the open modal |
+| `_reelBatchRefFt()` | Footage the currently typed markers imply (A, plus B when two-way), or null when span A is incomplete |
+| `reelBatchMatchSplit(refFt)` | `{match, off, unknown}` — selected reels whose effective on-hand agrees with `refFt` within `REEL_STALE_TOL_FT`, disagrees, or has no known footage to judge |
+| `reelBatchKeepMatching()` | Narrow the selection to `match` in one click. The intended flow: tick a whole group, type the full-reel numbers, then drop the partials out — rather than hand-picking the full ones up front |
 | `reelBatchSpanChanged()` / `reelBatchRecalcPreview()` | Show/hide the span-B inputs / live "each selected reel becomes N ft · K reels · M already have markers that will be replaced". **A batch is only safe to offer if it can say what it is about to overwrite** |
 | `reelBatchApply()` | Confirm (restating the overwrite count), then `reelApplyManualEdit(..., {deferPersist:true})` per reel + one `reelSaveToStorage()`. Blank Notes is left `undefined` so each reel keeps its own note rather than being blanked by an empty batch field |
 
