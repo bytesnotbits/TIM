@@ -837,7 +837,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `exportInvEventLogXlsx()` | Export event log to XLSX (force-text via `timDownloadXlsx` since v2.54.00; **Seq + Qty numeric** since v2.54.01) |
 | `exportInvSummaryXlsx()` | Export summary to XLSX (force-text via `timDownloadXlsx` since v2.54.00). **Joe pivots this file**, so Counted Qty / Serialized Count / Reel Footage / Exceptions / Flagged Events are written as real numbers (v2.54.01); Item stays text |
 | `exportRecountXlsx()` | Export recount results to XLSX (builds its own sheet — **not** force-text; no long numeric IDs in its columns) |
-| `buildEventLogBaseRow(e)` | Build common CSV/XLSX fields for an event |
+| `buildEventLogBaseRow(e)` | Build the 14 common CSV/XLSX fields for an event (incl. **Counted By** via `invEventCountedBy`, v2.54.04) |
+| `invEventCountedBy(e, sessionMap)` | Who recorded an event: `e.countedBy` → `session.createdBy` → (legacy only) the session name with its trailing `_YYYY-MM-DD_HHMM` stripped. That last step is **approximate** — it still carries any custom session label, and a username containing `_` is indistinguishable from one — which is why the explicit fields exist. Returns `""` rather than guessing further |
 | `buildInvSummaryMap(events)` | Aggregate events by item. Accumulators coerce with `Number()` before `+=` — every current writer of `evt.qty` stores a real number, but these totals now leave as numeric cells, and a string would silently concatenate (`10 + "7"` → `107`) rather than add. `renderInvSummary` holds a near-duplicate of this aggregation |
 | `buildExportPayload()` | Build full master JSON payload (10yr purge); includes `odoo_quants`, `recount_sessions`, `recount_movements` |
 | `requireInvSession()` | Guard: alert if no active session |

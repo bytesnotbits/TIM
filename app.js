@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.54.03";
+const APP_VERSION = "v2.54.04";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4653,6 +4653,12 @@ function invCreateEvent(eventType, data) {
     timestamp: invNow(),
     sequence:  invSequence,
     eventType: eventType,
+    // WHO counted, as its own field. Before v2.54.04 the only route from an
+    // event to a person was sessionName ("joe_Aisle3_2026-09-20_0815"), which
+    // welds the name to a date and to an optional custom label -- unparseable
+    // when a username itself contains "_". Recording it here keeps person and
+    // time separate, so neither has to be dug out of the other.
+    countedBy: timGetUsername() || "",
     status:    data.status   || "active",
     notes:     data.notes    || "",
     messages:  data.messages || []
@@ -4720,6 +4726,7 @@ function invStartNewSession() {
   invSession = {
     sessionId:       invGenerateSessionId(),
     sessionName:     name,
+    createdBy:       username,   // separate from sessionName, which embeds it
     createdAt:       invNow(),
     updatedAt:       invNow(),
     status:          "active",
@@ -5260,7 +5267,34 @@ function requireInvSession() {
   return true;
 }
 
-// Returns the 13 common fields for an event log row (no "Flagged" column).
+// Who recorded an event. Events written since v2.54.04 carry `countedBy`
+// directly and sessions carry `createdBy`; both are exact. Older rows predate
+// both fields, so the last resort is to strip the trailing "_YYYY-MM-DD_HHMM"
+// off the session name and take what is left. That remainder is only APPROXIMATE
+// -- it still includes any custom session label, and a username containing "_"
+// cannot be told apart from one -- which is precisely why the field now exists.
+// Returns "" when nothing is available rather than guessing further.
+function invEventCountedBy(e, sessionMap) {
+  if (!e) return "";
+  if (e.countedBy) return e.countedBy;
+  var sess = (sessionMap && sessionMap[e.sessionId]) ||
+             (appData.inventory_sessions || []).filter(function(s) { return s.sessionId === e.sessionId; })[0] ||
+             ((invSession && invSession.sessionId === e.sessionId) ? invSession : null) ||
+             (!e.sessionId && invSession ? invSession : null);
+  if (!sess) return "";
+  if (sess.createdBy) return sess.createdBy;
+  var nm = sess.sessionName || "";
+  // Test the recount shape FIRST: a recount name is "<user>_RECOUNT_<stamp>",
+  // and the stamp ends in a date, so the generic date strip would match it too
+  // and hand back "nick_RECOUNT".
+  var rc = nm.match(/^(.*)_RECOUNT_/);
+  if (rc) return rc[1];
+  var m  = nm.match(/^(.*)_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{3,4}$/);
+  if (m) return m[1];
+  return "";
+}
+
+// Returns the 14 common fields for an event log row (no "Flagged" column).
 // XLSX export appends flagged + notes; CSV export appends notes only.
 function buildEventLogBaseRow(e) {
   return [
@@ -5276,7 +5310,8 @@ function buildEventLogBaseRow(e) {
     e.boxId              || "",
     e.location           || "",
     e.qty       != null  ? e.qty : "",
-    e.status             || ""
+    e.status             || "",
+    invEventCountedBy(e)
   ];
 }
 
@@ -5306,7 +5341,7 @@ function buildInvSummaryMap(events) {
 function exportInvEventLogCsv() {
   if (!requireInvSession()) return;
   var header = ["Seq","Timestamp","Event Type","Scan Type","Scanned Value",
-                "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Notes"];
+                "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Counted By","Notes"];
   var lines = [header.join(",")].concat(invEvents.map(function(evt) {
     return buildEventLogBaseRow(evt).concat([evt.notes || ""]).map(csvEscape).join(",");
   }));
@@ -11282,6 +11317,7 @@ function invStartRecount() {
   invSession = {
     sessionId:       "RC-" + Date.now(),
     sessionName:     username + "_RECOUNT_" + stamp,
+    createdBy:       username,   // separate from sessionName, which embeds it
     sessionType:     "recount",
     parentSessionId: invRecountParentId,
     createdAt:       now,
@@ -11660,7 +11696,7 @@ function invDoExport(key, fmt) {
 function exportInvEventLogXlsx() {
   if (!requireInvSession()) return;
   var headers = ["Seq","Timestamp","Event Type","Scan Type","Scanned Value",
-                 "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Flagged","Notes"];
+                 "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Counted By","Flagged","Notes"];
   var rows = invEvents.map(function(e) {
     return buildEventLogBaseRow(e).concat([e.flagged ? "Yes" : "", e.notes || ""]);
   });
@@ -13566,6 +13602,7 @@ function prodShowItemHistory(itemNumber) {
           // The event's OWN timestamp + sequence, not the session's close date:
           // every event in a session shared one close date, which said nothing
           // about when the item was actually counted or in what order.
+          "<td>" + escapeHtml(invEventCountedBy(e, sessionMap)) + "</td>" +
           "<td style='text-align:right;color:#64748b;'>" + (e.sequence != null ? e.sequence : "") + "</td>" +
           "<td style='white-space:nowrap;'>" + escapeHtml(e.timestamp ? invFormatDateTime(e.timestamp) : "") + "</td>" +
           "<td>" + escapeHtml(e.location || "") + "</td>" +
@@ -13575,7 +13612,7 @@ function prodShowItemHistory(itemNumber) {
           "<td>" + escapeHtml(e.notes || "") + "</td>" +
           "</tr>";
       }).join("")
-    : '<tr><td colspan="8" style="color:#94a3b8;text-align:center;padding:12px;">No finalized inventory events. Finalize a session to see history here.</td></tr>';
+    : '<tr><td colspan="9" style="color:#94a3b8;text-align:center;padding:12px;">No finalized inventory events. Finalize a session to see history here.</td></tr>';
 
   // Current session events (not yet finalized)
   var currentEvts = invSession ? invEvents.filter(function(e) {
