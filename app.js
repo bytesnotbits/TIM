@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.59.00";
+const APP_VERSION = "v2.59.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5047,6 +5047,22 @@ function invAllEvents() {
   return stored.concat(live);
 }
 
+// Scans sitting on THIS device that never made it into the SHARED copy of a
+// session. Normally zero — a checkpoint fires every ~30s — but a device that
+// was offline, or in testing mode (which suppresses every push), when another
+// device finalized can be holding counts that are not in the finalized record.
+// Those must never be closed over silently, so invDetectLeaseChange asks first.
+function invStrandedEventCount(sessionId) {
+  var sharedIds = {};
+  (appData.inventory_events || []).forEach(function(e) {
+    if (e && e.sessionId === sessionId && e.eventId) sharedIds[e.eventId] = 1;
+  });
+  return (invEvents || []).filter(function(e) {
+    return e && e.eventId && !sharedIds[e.eventId] &&
+           e.status !== "voided" && e.eventType !== "void_event";
+  }).length;
+}
+
 // A sync just replaced appData — did the shared copy of MY active session move
 // out from under me? Two ways it can:
 //   finalized elsewhere → nothing more to push here, and re-finalizing would
@@ -5064,8 +5080,42 @@ function invDetectLeaseChange() {
   if (shared.status === "closed") {
     invLeaseLost = true;
     invCancelCheckpoint();
-    renderInvLeaseBanner("This session was finalized on " +
-      (shared.holderLabel || "another device") + ". It is now read-only here.");
+    var who = shared.holderLabel || "another device";
+
+    // FINALIZING ELSEWHERE MUST CLOSE IT HERE TOO (v2.59.01). Before this, the
+    // closed branch only raised a banner and left invSession.status "active" —
+    // and invProgressSessions unions the live session in on exactly that field,
+    // so a count that had already been finalized sat in THIS device's "Counts In
+    // Progress" list indefinitely. Worse on reload: invAutoRestoreSession reads
+    // the IDB copy (still "active"), restores it, and since holderDevice is
+    // still this device invLeaseLost resets to false — so even the banner went
+    // away and the finalized count went back to reading green "Counting here".
+    // Found 2026-09-24 across two real devices: the PC correctly showed nothing
+    // in progress while the iPad still listed a count that was sitting in Past
+    // Counts on both. invFinalizeSession is the only writer of status "closed",
+    // so nothing else was ever going to reconcile the other device's copy.
+    var stranded = invStrandedEventCount(shared.sessionId);
+    if (stranded) {
+      // Do NOT close over unfinished business. These scans exist ONLY here and
+      // are not in the finalized record; the session staying open is what keeps
+      // them reachable, so the honest move is to leave it open and say plainly
+      // what is wrong rather than tidy them away behind a "closed". No reclaim
+      // button either — see renderInvLeaseBanner.
+      renderInvLeaseBanner("This session was finalized on " + who + ", but " + stranded +
+        " scan(s) made on this device never reached it — they are NOT in the finalized count. " +
+        "They are still in this device's Event Log. Export a backup (Export ▸ Session Backup JSON) " +
+        "and re-count them into a new session before clearing.", false);
+      return;
+    }
+    invSession.status       = "closed";
+    invSession.closedAt     = shared.closedAt || invNow();
+    invSession.updatedAt    = invNow();
+    invSession.holderDevice = "";
+    invSession.holderLabel  = "";
+    invAutosave();          // persist, so a reload can't resurrect it as active
+    renderInvSessionUI();   // drops into the normal "reviewing a closed count" state
+    renderInvLeaseBanner("This session was finalized on " + who +
+      ". It is closed here too — it is on record under Inventory → Past Counts.", false);
     return;
   }
   if (shared.holderDevice && shared.holderDevice !== timGetDeviceId()) {
@@ -5096,13 +5146,21 @@ function invReclaimLease() {
   if (ghConfigured()) ghPushToGitHub({ auto: true });
 }
 
-function renderInvLeaseBanner(msg) {
+// `allowReclaim` defaults to true. "Take it back" is a LEASE action — it only
+// means anything while the session is still open somewhere. A session finalized
+// on another device is terminal, so the closed branches pass false: reclaiming
+// there would resume scanning into a count that is already closed, and a
+// re-finalize would overwrite the finalized record with THIS device's event set,
+// silently dropping anything the finalizing device had and this one doesn't
+// (invFinalizeSession replaces a session's events wholesale). v2.59.01.
+function renderInvLeaseBanner(msg, allowReclaim) {
   var el = $("invLeaseBanner");
   if (!el) return;
   if (!msg) { el.classList.add("hidden"); el.innerHTML = ""; return; }
   el.classList.remove("hidden");
+  var reclaim = (allowReclaim === undefined) ? true : !!allowReclaim;
   el.innerHTML = "<span>&#9888; " + escapeHtml(msg) + "</span>" +
-    '<button class="btn-compact" onclick="invReclaimLease()">Take it back</button>';
+    (reclaim ? '<button class="btn-compact" onclick="invReclaimLease()">Take it back</button>' : "");
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -5192,15 +5250,30 @@ function renderInvProgress() {
     }).length;
     var stamp = s.checkpointAt || s.updatedAt || s.createdAt || "";
 
+    // Is the SHARED copy already finalized? Only the live session can be in this
+    // list while closed elsewhere — invDetectLeaseChange normally mirrors the
+    // close and it drops out entirely — but it deliberately does NOT when this
+    // device is holding scans that never reached the finalized record. In that
+    // case the row must stay visible and must NOT offer a handoff: continuing a
+    // finalized count is refused downstream anyway, and the button only invites
+    // a click that ends in an alert (v2.59.01).
+    var sharedRec = (appData.inventory_sessions || []).filter(function(x) {
+      return x && x.sessionId === s.sessionId;
+    })[0];
+    var finalizedElsewhere = !!(sharedRec && sharedRec.status === "closed");
+
     var status, cls;
-    if (heldHere && !invLeaseLost) { status = "Counting here"; cls = "ok"; }
-    else if (mine)                 { status = "Your count, elsewhere"; cls = "warn"; }
-    else                           { status = "Read-only"; cls = ""; }
+    if (finalizedElsewhere)             { status = "Finalized elsewhere"; cls = "warn"; }
+    else if (heldHere && !invLeaseLost) { status = "Counting here"; cls = "ok"; }
+    else if (mine)                      { status = "Your count, elsewhere"; cls = "warn"; }
+    else                                { status = "Read-only"; cls = ""; }
 
     // The action column is the whole permission model made visible: the owner on
     // another device gets a handoff; everyone else gets a look and nothing more.
     var action;
-    if (heldHere && !invLeaseLost) {
+    if (finalizedElsewhere) {
+      action = '<span class="small" style="color:#94a3b8;">Read-only</span>';
+    } else if (heldHere && !invLeaseLost) {
       action = '<span class="small" style="color:#94a3b8;">—</span>';
     } else if (mine) {
       action = '<button class="btn-compact" onclick="invClaimRemoteSession(\'' +
