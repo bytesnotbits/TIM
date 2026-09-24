@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.57.06";
+const APP_VERSION = "v2.58.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -6019,9 +6019,34 @@ function invEventCountedBy(e, sessionMap) {
   return "";
 }
 
-// Returns the 14 common fields for an event log row (no "Flagged" column).
+// Is this row a reel? The event type answers it for an actual reel count; for
+// every other row the item's tracking type does (so a reel item counted in bulk,
+// or an exception raised against a reel, still reads as reel material).
+// PRODUCT_MAP lookups fall back to an O(catalog) scan, so memoize per item —
+// an event log is thousands of rows against the same handful of items.
+// Cleared at the top of each export so a catalog edit mid-session can't leave a
+// stale answer behind — the memo only has to survive one file build.
+var _invIsReelItemCache = {};
+function _invResetIsReelCache() { _invIsReelItemCache = {}; }
+function _invEventIsReel(e) {
+  if (!e) return false;
+  if (e.eventType === "cable_reel_count" || e.scanType === "reel_number") return true;
+  var item = e.itemNumber || "";
+  if (!item) return false;
+  if (!(item in _invIsReelItemCache)) {
+    var mm = findProductMapMatch(item);
+    _invIsReelItemCache[item] = !!(mm && getTrackingType(mm.entry) === "reel");
+  }
+  return _invIsReelItemCache[item];
+}
+
+// Returns the 21 common fields for an event log row (no "Flagged" column).
 // XLSX export appends flagged + notes; CSV export appends notes only.
+// Reel columns sit next to Qty because Qty IS the reel's total footage —
+// Inner/Outer are the readings it was derived from, and a variance is argued
+// from the markers, not the total (v2.58.00).
 function buildEventLogBaseRow(e) {
+  var isReel = _invEventIsReel(e);
   return [
     e.sequence    != null ? e.sequence : "",
     e.timestamp          || "",
@@ -6035,10 +6060,26 @@ function buildEventLogBaseRow(e) {
     e.boxId              || "",
     e.location           || "",
     e.qty       != null  ? e.qty : "",
+    isReel ? "Yes" : "",
+    e.reelNumber         || "",
+    isReel ? (e.spanType || "") : "",
+    e.innerSeqA != null  ? e.innerSeqA : "",
+    e.outerSeqA != null  ? e.outerSeqA : "",
+    e.innerSeqB != null  ? e.innerSeqB : "",
+    e.outerSeqB != null  ? e.outerSeqB : "",
     e.status             || "",
     invEventCountedBy(e)
   ];
 }
+
+// Header slice shared by both event-log exports, so the CSV and the XLSX can
+// never drift apart on column order.
+var INV_EVENT_LOG_BASE_HEADERS = [
+  "Seq","Timestamp","Event Type","Scan Type","Scanned Value",
+  "Item","Description","Serial","FSAN","Box ID","Location","Qty",
+  "Is Reel","Reel #","Span Type","Inner A","Outer A","Inner B","Outer B",
+  "Status","Counted By"
+];
 
 // Aggregates invEvents into a per-item summary map (includes flagged count).
 function buildInvSummaryMap(events) {
@@ -6065,8 +6106,8 @@ function buildInvSummaryMap(events) {
 
 function exportInvEventLogCsv() {
   if (!requireInvSession()) return;
-  var header = ["Seq","Timestamp","Event Type","Scan Type","Scanned Value",
-                "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Counted By","Notes"];
+  _invResetIsReelCache();
+  var header = INV_EVENT_LOG_BASE_HEADERS.concat(["Notes"]);
   var lines = [header.join(",")].concat(invEvents.map(function(evt) {
     return buildEventLogBaseRow(evt).concat([evt.notes || ""]).map(csvEscape).join(",");
   }));
@@ -12455,13 +12496,15 @@ function invDoExport(key, fmt) {
 
 function exportInvEventLogXlsx() {
   if (!requireInvSession()) return;
-  var headers = ["Seq","Timestamp","Event Type","Scan Type","Scanned Value",
-                 "Item","Description","Serial","FSAN","Box ID","Location","Qty","Status","Counted By","Flagged","Notes"];
+  _invResetIsReelCache();
+  var headers = INV_EVENT_LOG_BASE_HEADERS.concat(["Flagged","Notes"]);
   var rows = invEvents.map(function(e) {
     return buildEventLogBaseRow(e).concat([e.flagged ? "Yes" : "", e.notes || ""]);
   });
+  // Inner/Outer go out as real numbers: they are measurements, and the whole
+  // point of having them here is subtracting them against Qty in Excel.
   timDownloadXlsx("inv-event-log-" + new Date().toISOString().slice(0,10) + ".xlsx", headers, rows, "Event Log",
-    ["Seq", "Qty"]);
+    ["Seq", "Qty", "Inner A", "Outer A", "Inner B", "Outer B"]);
 }
 
 function exportInvSummaryXlsx() {
