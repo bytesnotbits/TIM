@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.60.00";
+const APP_VERSION = "v2.60.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -7980,8 +7980,19 @@ function invSaveEditRowModal() {
     }
   }
 
-  if (evt.eventType === "bulk_quantity_count" && (updated.qty == null || updated.qty < 1)) {
-    alert("Quantity must be a whole number of at least 1.");
+  // A ZERO IS A COUNT, NOT AN EMPTY FIELD (v2.60.01). HCTC deliberately
+  // counts a SKU at zero so the record shows it was visited and not skipped,
+  // which makes a zero positive evidence of coverage — the one number you
+  // must not be able to enter is the one this guard used to reject.
+  //
+  // It also disagreed with the qty keypad, which has always committed
+  // whatever `parseInt` returns (including 0, and negatives via its sign
+  // key). So a counter could record a zero on the floor but could not
+  // CORRECT a row to zero afterwards without voiding and re-scanning it.
+  // Matching the keypad exactly: reject only what isn't a number at all —
+  // `updated.qty` is already null when the field is blank or unparseable.
+  if (evt.eventType === "bulk_quantity_count" && updated.qty == null) {
+    alert("Enter a quantity. Zero is allowed — it records that the item was counted and none were found.");
     return;
   }
 
