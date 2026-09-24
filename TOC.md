@@ -21,7 +21,7 @@ Single-page PWA. Four files do all the work:
 
 ### Main Tabs / Feature Areas
 - **Receiving** — load vendor/RMA source file, map products, export to Odoo
-- **Inventory** — active session scanning (serial, reel, bulk, box, MAC)
+- **Inventory** — sub-tabbed section (`invShowSubview`): Count (active session scanning — serial, reel, bulk, box, MAC) · In Progress (live cross-device counts) · **Past Counts** (read-only record of finalized counts, by count or by item — v2.59.00) · Exceptions · Summary · Gap Analysis · Recount · Event Log
 - **Products** — sub-tabbed section (indented sidebar sub-nav, `prodShowSubview`): Product Catalog editor (`PRODUCT_MAP`) · Product Mapping (Mapping Editor + Unknown-Products) · Serial/Device Lookup · Reel Lookup · Catalog Health · New Item — Dup Check · Architecture Notes. **Product Mapping folded in here from its former top-level tab (v2.48.00).**
 - **Barcodes** — barcode batch management (barcode-to-item assignment)
 
@@ -189,6 +189,30 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `renderInvProgress()` / `renderInvProgressDetail()` / `invProgressSelect(id)` | Session list + read-only per-item rollup. The Action column is the permission model made visible: "Continue here" only when owner-and-not-holder, otherwise "Read-only" |
 | `invClaimRemoteSession(id)` | "Continue here" — carries the events over and claims the lease. Re-checks the owner gate (a stale rendered button can't hand someone else's count over) and takes `invSequence` from the **max sequence actually present**, not the stored counter, which lags when a device scanned after its last push. The activity feed + exceptions list are NOT synced and stay behind; the alert says so |
 
+
+### Past Counts (`invPast*`, v2.59.00)
+
+> The historical record of **finalized** counts, under **Inventory → Past Counts** (`invShowSubview('past')`). Every other session-scoped view (Count, Summary, Event Log, Gap Analysis) renders from the live `invEvents` array, so all of them go blank the moment a session is put down — and `invAutoRestoreSession` deliberately refuses to reopen a closed session on reload. The counts were never lost (`invFinalizeSession` copies them into `appData.inventory_sessions/_events`), but until now nothing rendered that copy except `prodShowItemHistory`, so "how many did we count last cycle?" had no answer short of resuming the session or reading the JSON. **Read-only by construction:** reads `appData` only, never touches `invSession`/`invEvents`, and offers no continue path — reopening a count stays on the explicit Resume button. Lives under Inventory, not Products, because the unit of the record is the count session; the item-centric question is served by the By Item panel, whose item links open `prodShowItemHistory`. Re-rendered on sub-view entry **and** after both sync paths (a sync can bring in counts finalized on another device).
+
+| Function | Purpose |
+|---|---|
+| `invPastSessions()` | Finalized (`status === "closed"`) sessions, newest `closedAt` first. Never sorts on `sessionName` — that leads with the username, so it orders by person, then date |
+| `invPastEventsBySession()` / `invPastEvents(id, by)` | One pass bucketing `appData.inventory_events` by session. Both panels need events for EVERY past session, and re-filtering the whole array per session is O(sessions × events) — fine at 3 sessions, not at 30 on an iPad |
+| `invPastCountedBy(s)` | Session-level "counted by", delegating to `invEventCountedBy` so the exact-`createdBy`/parse-`sessionName` fallback isn't re-implemented and left to drift |
+| `invPastRollup(events)` | Per-item rollup **plus the per-location breakdown** `buildInvSummaryMap` doesn't carry. Same exclusions (voided / `void_event` / `box_scan`) so a past count totals here exactly as it read while open. Units and feet are tallied separately per location — a reel line showing "0" would read as "nothing there" when it means "1,200 ft there" |
+| `invPastLocText(locs)` | `"WH04900 (180), WH06200 (40)"` / `"YARD-A (3,100 ft)"` |
+| `invPastOpenCountNote()` | The disclosure line: counts still open are NOT in this record. Silence there is its own bug — an item counted this morning must not look like it was never counted |
+| `invPastShowPanel(name)` / `renderInvPast()` | Panel switch + top-level render. **By Count** = "what did that cycle come to, and where?"; **By Item** = "how many of item A last cycle — and the cycle before?" |
+| `renderInvPastSessions()` / `renderInvPastDetail()` / `invPastSelect(id)` | By Count: session list (items/units/reel-ft per count) + per-item detail with locations |
+| `invPastItemIndex()` | item → `{item, description, rows:[{session,qty,serialized,ft,locs,last}]}`, rows already newest-cycle-first (`invPastSessions` is sorted) — the order the question is asked in |
+| `renderInvPastItem()` / `renderInvPastItemDetail(idx)` / `invPastItemSearch()` / `invPastItemSelect(item)` | By Item: searchable chooser (capped at 200 rendered rows; auto-selects on a single match) + one row per finalized count |
+| `invPastExportEvents(fmt)` / `invPastExportSummary(fmt)` / `invPastExportItem(fmt)` | XLSX/CSV, **deliberately NOT via `requireInvSession`/`invDoExport`**. The existing event-log export is gated on a live session (`invExportEventLogBtn` is disabled without one), which is exactly the hole this closes: once a count closed, the XLSX for accounting was unreachable unless you reopened the session. Same builders (`buildEventLogBaseRow`, `INV_EVENT_LOG_BASE_HEADERS`), same column order |
+| `INV_PAST_SUMMARY_HEADERS` / `INV_PAST_ITEM_HEADERS` (+ `_NUMERIC`) | Column sets for the two rollup exports; count columns go out as real numbers so they pivot |
+| `_invPastFileStamp(s)` / `_invPastRequireSession()` | Filename slug from the session name / selected-session guard |
+
+CSS: `.panel-toggle` / `.panel-toggle-btn` (`styles.css`) — the in-card segmented control. The sidebar sub-nav classes are styled for the dark sidebar and are nearly invisible on a white card.
+
+---
 ---
 
 ### CSV Column Mapper
@@ -1127,7 +1151,7 @@ Ports the NISC catalog dedup + product-numbering process into TIM (Phase 1 = ing
 |----------|---------|
 | `TIM_TABS` | **The canonical tab list** (v2.57.04). `switchTab` paints from it and the boot restore validates against it, so a tab can't be navigable but not restorable. That drift — a second hand-kept copy in the boot restore missing `"dataimport"` — silently bounced a reload from Data Import onto Receiving, i.e. off the GitHub panel right after an update. `"mapping"` is deliberately NOT in it: it's a legacy alias `switchTab` rewrites to products + the Mapping sub-view (and it self-heals, since the rewritten name is what gets persisted) |
 | `switchTab(name)` | Switch main tab; persists to localStorage; shows Inventory **and** Products sub-nav + applies their sub-views. Legacy `switchTab("mapping")` (removed top-level tab) redirects to Products → Mapping sub-view |
-| `invShowSubview(name)` | Switch Inventory sub-screen (count/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
+| `invShowSubview(name)` | Switch Inventory sub-screen (count/progress/past/exceptions/summary/gap/recount/eventlog) by toggling `[data-inv-subview]` cards; Count is a static no-scroll frame |
 | `prodShowSubview(name)` / `PROD_SUBVIEWS` | Switch Products sub-screen (catalog/mapping/serial/reel/health/newitem/notes) by toggling `[data-prod-subview]` cards; persists to `tim_prod_subview`. `mapping` = the folded-in Mapping Editor + Unknown-Products cards; `notes` = Architecture & Data Model Notes (own sub-tab, shown expanded — the old Show/Hide collapsible + `prodToggleNotes` were removed) |
 | `toggleSidebar()` | Collapse/expand left sidebar |
 | `updateSidebarStatus(step, rows)` | Update sidebar file-loaded indicators |

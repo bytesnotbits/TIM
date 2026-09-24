@@ -1009,3 +1009,12 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 }
 #invReelSaveBtn.conflict:hover { background:#b91c1c; }
 .inv-qty-key.apply.conflict { background:#dc2626; border-color:#b91c1c; }
+
+/* In-card panel toggle (Past Counts: By Count / By Item). The sidebar sub-nav
+   classes look right only on the dark sidebar — grey-on-dark text on a white
+   card is nearly invisible — so panels that need a segmented control inside a
+   card use this instead. */
+.panel-toggle { display: flex; gap: 6px; margin: 0 0 12px; }
+.panel-toggle-btn { background: #f1f5f9; color: #475569; border: 1px solid #e5e7eb; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0; white-space: nowrap; transition: background .12s, color .12s, border-color .12s; }
+.panel-toggle-btn:hover:not(.active) { background: #e2e8f0; color: #1e40af; }
+.panel-toggle-btn.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }

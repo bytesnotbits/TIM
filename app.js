@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.58.00";
+const APP_VERSION = "v2.59.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2994,6 +2994,7 @@ function ghSyncNow(silent) {
           // or its write lease claimed by another device) — v2.57.00.
           invDetectLeaseChange();
           renderInvProgress();
+          renderInvPast();            // a sync can bring in counts finalized elsewhere
           timSaveMasterCache();
           return _bootMarkAndSettle("render", "done");
         });
@@ -4073,6 +4074,7 @@ function ghPushToGitHub(opts) {
             // happens to hit Sync manually (v2.57.05).
             invDetectLeaseChange();
             renderInvProgress();
+            renderInvPast();          // a sync can bring in counts finalized elsewhere
             timSaveMasterCache();
             ghMergeConflictEntries(asm.conflicts);
             ghMergeConflictEntries(res.conflicts);
@@ -4715,13 +4717,16 @@ function switchTab(name) {
 // card(s) and hide the rest. The Count view keeps the scan panel + recount
 // cards together.
 var invActiveSubview = "count";
-var INV_SUBVIEWS = ["count", "progress", "exceptions", "summary", "gap", "recount", "eventlog"];
+var INV_SUBVIEWS = ["count", "progress", "past", "exceptions", "summary", "gap", "recount", "eventlog"];
 function invShowSubview(name) {
   if (INV_SUBVIEWS.indexOf(name) === -1) name = "count";
   invActiveSubview = name;
   // Built from synced data, so it can be stale the moment it's opened — rebuild
   // on entry rather than only on sync (v2.57.00).
   if (name === "progress") renderInvProgress();
+  // Same reasoning for Past Counts: it renders from synced appData, so a sync
+  // that landed while another sub-view was open would leave it stale.
+  if (name === "past") renderInvPast();
   // Mode/LOC controls only make sense while counting — collapse the toolbar to
   // just session/count info on the table sub-screens.
   var statusBar = $("invStatusBar");
@@ -5328,6 +5333,483 @@ function invClaimRemoteSession(sessionId) {
         "original device — they aren't part of the synced data. Your counts are all here.");
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// PAST COUNTS — the historical record of FINALIZED counts (v2.59.00)
+//
+// Every session-scoped view in Inventory (Count, Summary, Event Log, Gap
+// Analysis) renders from the live `invEvents` array, so all of them go blank
+// the moment a session is put down — and invAutoRestoreSession deliberately
+// refuses to reopen a closed session on reload, because a finalized count
+// silently becoming active again is worse. The counts were never lost:
+// invFinalizeSession copies them into appData.inventory_sessions/_events,
+// which is what syncs. Until now nothing rendered that copy except the
+// per-item history modal, so "how many did we count last cycle?" had no
+// answer short of reopening the session or reading the JSON.
+//
+// This view is that answer, and it is READ-ONLY BY CONSTRUCTION: it reads
+// appData only, never touches invSession/invEvents, and offers no continue
+// path. Reopening a count stays exactly where it was — the explicit Resume
+// button — so nothing here can quietly put a finalized count back in play.
+//
+// Two panels, because there are two questions:
+//   By Count → "what did that cycle count come to, and where?"
+//   By Item  → "how many of item A last cycle — and the cycle before that?"
+//
+// Lives under Inventory, not Products: the unit of the record is the count
+// session. The item-centric question is served by the By Item panel, whose
+// item links open the Products history modal — the same cross-link Serial
+// Lookup and Reel Lookup already use.
+// ───────────────────────────────────────────────────────────────────────
+var invPastPanel        = "counts";   // "counts" | "item"
+var invPastSelectedId   = "";         // selected session (By Count)
+var invPastSelectedItem = "";         // selected item    (By Item)
+
+// Finalized sessions, most recently closed first. `closedAt` is the real
+// ordering key; updatedAt/createdAt are fallbacks for sessions that predate it.
+// Never sort on sessionName — it leads with the username, so it orders by
+// person, then date.
+function invPastSessions() {
+  return (appData.inventory_sessions || []).filter(function(s) {
+    return s && s.status === "closed";
+  }).slice().sort(function(a, b) {
+    var at = a.closedAt || a.updatedAt || a.createdAt || "";
+    var bt = b.closedAt || b.updatedAt || b.createdAt || "";
+    return at > bt ? -1 : at < bt ? 1 : 0;
+  });
+}
+
+// One pass over the event array, bucketed by session. Both panels need events
+// for EVERY past session, and filtering the whole array once per session is
+// O(sessions x events) — fine at 3 sessions, not at 30 against tens of
+// thousands of events on an iPad.
+function invPastEventsBySession() {
+  var by = {};
+  (appData.inventory_events || []).forEach(function(e) {
+    if (!e || !e.sessionId) return;
+    (by[e.sessionId] || (by[e.sessionId] = [])).push(e);
+  });
+  return by;
+}
+
+function invPastEvents(sessionId, by) {
+  if (by) return by[sessionId] || [];
+  return (appData.inventory_events || []).filter(function(e) {
+    return e && e.sessionId === sessionId;
+  });
+}
+
+// Who counted it. Reuses the event-level resolver (exact `createdBy` when the
+// session has it, the approximate sessionName strip when it doesn't) rather
+// than re-implementing the fallback and letting the two drift.
+function invPastCountedBy(s) {
+  return (s && s.createdBy) || invEventCountedBy({ sessionId: s && s.sessionId }) || "(unknown)";
+}
+
+// Per-item rollup for one session's events, plus the location breakdown the
+// Summary map doesn't carry. Exclusions match buildInvSummaryMap exactly
+// (voided / void_event / box_scan) so a past count totals here the same way it
+// read while it was still open — a historical record that disagrees with what
+// the counter saw on the day is worse than no record.
+function invPastRollup(events) {
+  var map = {};
+  (events || []).forEach(function(evt) {
+    if (!evt)                           return;
+    if (evt.status === "voided")        return;
+    if (evt.eventType === "void_event") return;
+    if (evt.eventType === "box_scan")   return;   // audit marker; its devices carry the count
+    var key = evt.itemNumber || evt.scannedValue || "(unknown)";
+    if (!map[key]) map[key] = { item: key, description: "", qty: 0, serialized: 0, ft: 0,
+                                exceptions: 0, flagged: 0, last: "", locs: {} };
+    var r = map[key];
+    if (evt.description && !r.description) r.description = evt.description;
+    if (evt.timestamp && evt.timestamp > r.last) r.last = evt.timestamp;
+
+    var units = 0, feet = 0;
+    if      (evt.eventType === "serialized_device_scan") { units = 1; r.serialized += 1; }
+    else if (evt.eventType === "bulk_quantity_count")    { units = Number(evt.qty) || 1; }
+    else if (evt.eventType === "cable_reel_count")       {
+      feet = Number(evt.totalAvailableFt != null ? evt.totalAvailableFt : evt.qty) || 0;
+    }
+    else if (evt.eventType === "exception")              { r.exceptions += 1; }
+    r.qty += units;
+    r.ft  += feet;
+    if (evt.flagged) r.flagged += 1;
+
+    // WHERE it was counted — the second half of the question, and the reason
+    // this rollup exists instead of just calling buildInvSummaryMap. Units and
+    // feet are tallied separately per location: a reel line showing "0" would
+    // read as "nothing there" when it means "1,200 ft there".
+    if (units || feet) {
+      var loc = evt.location || "(no location)";
+      if (!r.locs[loc]) r.locs[loc] = { qty: 0, ft: 0 };
+      r.locs[loc].qty += units;
+      r.locs[loc].ft  += feet;
+    }
+  });
+  return map;
+}
+
+function invPastLocText(locs) {
+  var keys = Object.keys(locs || {});
+  if (!keys.length) return "—";
+  return keys.sort().map(function(k) {
+    var v = locs[k];
+    var parts = [];
+    if (v.qty) parts.push(String(v.qty));
+    if (v.ft)  parts.push(v.ft.toLocaleString() + " ft");
+    return k + " (" + (parts.join(" + ") || "0") + ")";
+  }).join(", ");
+}
+
+// A count in progress is NOT in here (this reads finalized sessions only), and
+// silence about that would be its own bug: an item counted this morning looking
+// like it was never counted is exactly the wrong answer. Say so instead.
+function invPastOpenCountNote() {
+  var open = (appData.inventory_sessions || []).filter(function(s) {
+    return s && s.status === "active";
+  }).length;
+  if (invSession && invSession.status === "active") open = Math.max(open, 1);
+  if (!open) return "";
+  return "Note: " + open + " count" + (open === 1 ? " is" : "s are") +
+         " still open and not included here — a count joins this record when it is finalized. " +
+         "See In Progress for what is being counted now.";
+}
+
+function invPastShowPanel(name) {
+  invPastPanel = (name === "item") ? "item" : "counts";
+  renderInvPast();
+}
+
+function renderInvPast() {
+  var cp = $("invPastCountsPanel"), ip = $("invPastItemPanel");
+  if (!cp || !ip) return;
+  cp.classList.toggle("hidden", invPastPanel !== "counts");
+  ip.classList.toggle("hidden", invPastPanel !== "item");
+  var bc = $("invPastTabCounts"), bi = $("invPastTabItem");
+  if (bc) bc.classList.toggle("active", invPastPanel === "counts");
+  if (bi) bi.classList.toggle("active", invPastPanel === "item");
+
+  var note = $("invPastOpenNote");
+  if (note) {
+    var msg = invPastOpenCountNote();
+    note.textContent = msg;
+    note.style.display = msg ? "" : "none";
+  }
+
+  if (invPastPanel === "counts") renderInvPastSessions();
+  else                           renderInvPastItem();
+}
+
+// -- By Count ---------------------------------------------------------
+
+function invPastSelect(sessionId) {
+  invPastSelectedId = sessionId || "";
+  renderInvPastSessions();
+}
+
+function renderInvPastSessions() {
+  var tbody = $("invPastBody");
+  if (!tbody) return;
+  var rows = invPastSessions();
+  var by   = invPastEventsBySession();
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:16px;">' +
+      "No finalized counts on this device yet. A count lands here when it is finalized — " +
+      "sync to pick up counts finalized elsewhere.</td></tr>";
+    var d0 = $("invPastDetail"); if (d0) d0.innerHTML = "";
+    return;
+  }
+
+  tbody.innerHTML = rows.map(function(s) {
+    var roll = invPastRollup(invPastEvents(s.sessionId, by));
+    var keys = Object.keys(roll);
+    var units = 0, feet = 0;
+    keys.forEach(function(k) { units += roll[k].qty; feet += roll[k].ft; });
+    var closed = s.closedAt || s.updatedAt || "";
+    return '<tr class="' + (s.sessionId === invPastSelectedId ? "queue-row-selected" : "") + '">' +
+      "<td><a href=\"#\" onclick=\"invPastSelect('" + escapeHtml(s.sessionId) + "');return false;\">" +
+        escapeHtml(s.sessionName || s.sessionId) + "</a></td>" +
+      "<td>" + escapeHtml(invPastCountedBy(s)) + "</td>" +
+      "<td style=\"white-space:nowrap\">" + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") + "</td>" +
+      "<td style=\"text-align:right\">" + keys.length + "</td>" +
+      "<td style=\"text-align:right\">" + (units ? units.toLocaleString() : "") + "</td>" +
+      "<td style=\"text-align:right\">" + (feet ? feet.toLocaleString() : "") + "</td>" +
+      "</tr>";
+  }).join("");
+
+  renderInvPastDetail();
+}
+
+function renderInvPastDetail() {
+  var host = $("invPastDetail");
+  if (!host) return;
+  if (!invPastSelectedId) {
+    host.innerHTML = '<p class="small" style="color:#94a3b8;margin-top:12px;">' +
+      "Pick a count above to see what it found, item by item.</p>";
+    return;
+  }
+  var sess = invPastSessions().filter(function(s) { return s.sessionId === invPastSelectedId; })[0];
+  if (!sess) { invPastSelectedId = ""; host.innerHTML = ""; return; }
+
+  var roll  = invPastRollup(invPastEvents(sess.sessionId));
+  var items = Object.keys(roll).map(function(k) { return roll[k]; })
+    .sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
+  var closed = sess.closedAt || sess.updatedAt || "";
+
+  host.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0 6px;">' +
+      "<div><h3 style=\"margin:0;font-size:14px;color:#166534;\">" +
+        escapeHtml(sess.sessionName || sess.sessionId) + "</h3>" +
+      '<p class="small" style="margin:2px 0 0;">Counted by ' + escapeHtml(invPastCountedBy(sess)) +
+        " &middot; finalized " + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") +
+        " &middot; read-only historical record.</p></div>" +
+      "<div style=\"display:flex;gap:6px;flex-wrap:wrap;\">" +
+        '<button class="btn-compact" onclick="invPastExportSummary(\'xlsx\')">Export Items (XLSX)</button>' +
+        '<button class="btn-compact secondary" onclick="invPastExportSummary(\'csv\')">CSV</button>' +
+        '<button class="btn-compact" onclick="invPastExportEvents(\'xlsx\')">Export Event Log (XLSX)</button>' +
+        '<button class="btn-compact secondary" onclick="invPastExportEvents(\'csv\')">CSV</button>' +
+      "</div>" +
+    "</div>" +
+    '<div class="scroll"><table><thead><tr>' +
+      "<th>Item</th><th>Description</th><th>Counted Qty</th><th>Serialized</th>" +
+      "<th>Reel Footage</th><th>Where It Was Counted</th><th>Last Counted</th>" +
+    "</tr></thead><tbody>" +
+    (items.length ? items.map(function(r) {
+      return "<tr><td>" +
+          "<a href=\"#\" onclick=\"prodShowItemHistory('" + escapeHtml(r.item) + "');return false;\">" +
+          escapeHtml(r.item) + "</a></td>" +
+        "<td>" + escapeHtml(r.description) + "</td>" +
+        "<td style=\"text-align:right\">" + (r.qty ? r.qty.toLocaleString() : "") + "</td>" +
+        "<td style=\"text-align:right\">" + (r.serialized ? r.serialized.toLocaleString() : "") + "</td>" +
+        "<td style=\"text-align:right\">" + (r.ft ? r.ft.toLocaleString() : "") + "</td>" +
+        "<td>" + escapeHtml(invPastLocText(r.locs)) + "</td>" +
+        "<td style=\"white-space:nowrap\">" + escapeHtml(r.last ? new Date(r.last).toLocaleString() : "") + "</td></tr>";
+    }).join("")
+      : '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:12px;">This count has no items on record.</td></tr>') +
+    "</tbody></table></div>";
+}
+
+// -- By Item ----------------------------------------------------------
+
+// item -> { item, description, rows: [{ session, qty, serialized, ft, locs, last }] }
+// Rows arrive newest-cycle-first because invPastSessions() is already sorted,
+// which is the order the question is asked in: last cycle, then the one before.
+function invPastItemIndex() {
+  var by  = invPastEventsBySession();
+  var idx = {};
+  invPastSessions().forEach(function(s) {
+    var roll = invPastRollup(invPastEvents(s.sessionId, by));
+    Object.keys(roll).forEach(function(k) {
+      var r = roll[k];
+      if (!idx[k]) idx[k] = { item: k, description: "", rows: [] };
+      if (r.description && !idx[k].description) idx[k].description = r.description;
+      idx[k].rows.push({ session: s, qty: r.qty, serialized: r.serialized,
+                         ft: r.ft, locs: r.locs, last: r.last, exceptions: r.exceptions });
+    });
+  });
+  return idx;
+}
+
+function invPastItemSearch() {
+  invPastSelectedItem = "";
+  renderInvPastItem();
+}
+
+function invPastItemSelect(item) {
+  invPastSelectedItem = item || "";
+  renderInvPastItem();
+}
+
+function renderInvPastItem() {
+  var listEl = $("invPastItemBody");
+  if (!listEl) return;
+  var q   = normKey(($("invPastItemQuery") ? $("invPastItemQuery").value : "") || "");
+  var idx = invPastItemIndex();
+  var sessionCount = invPastSessions().length;
+
+  var matches = Object.keys(idx).map(function(k) { return idx[k]; }).filter(function(r) {
+    if (!q) return true;
+    return normKey(r.item).indexOf(q) !== -1 || normKey(r.description).indexOf(q) !== -1;
+  }).sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
+
+  var cnt = $("invPastItemCount");
+  if (cnt) cnt.textContent = matches.length + " item" + (matches.length === 1 ? "" : "s") +
+                             " across " + sessionCount + " finalized count" +
+                             (sessionCount === 1 ? "" : "s");
+
+  if (!matches.length) {
+    listEl.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px;">' +
+      (q ? "No counted item matches that search."
+         : "Nothing counted yet in any finalized count.") + "</td></tr>";
+    var d = $("invPastItemDetail"); if (d) d.innerHTML = "";
+    return;
+  }
+
+  // Cap the chooser, not the search: a warehouse catalog is thousands of rows,
+  // and rendering all of them is how this becomes the slow tab.
+  var CAP = 200;
+  var shown = matches.slice(0, CAP);
+
+  // One match and nothing chosen yet: that IS the choice. Save the extra click.
+  if (!invPastSelectedItem && matches.length === 1) invPastSelectedItem = matches[0].item;
+
+  listEl.innerHTML = shown.map(function(r) {
+    var totQty = 0, totFt = 0;
+    r.rows.forEach(function(x) { totQty += x.qty; totFt += x.ft; });
+    return '<tr class="' + (r.item === invPastSelectedItem ? "queue-row-selected" : "") + '">' +
+      "<td><a href=\"#\" onclick=\"invPastItemSelect('" + escapeHtml(r.item) + "');return false;\">" +
+        escapeHtml(r.item) + "</a></td>" +
+      "<td>" + escapeHtml(r.description) + "</td>" +
+      "<td style=\"text-align:right\">" + r.rows.length + "</td>" +
+      "<td style=\"text-align:right\">" + (totQty ? totQty.toLocaleString() : "") + "</td>" +
+      "<td style=\"text-align:right\">" + (totFt ? totFt.toLocaleString() : "") + "</td>" +
+      "</tr>";
+  }).join("") +
+  (matches.length > CAP
+    ? '<tr><td colspan="5" class="small" style="text-align:center;color:#94a3b8;padding:8px;">' +
+      "Showing the first " + CAP + " of " + matches.length + " — narrow the search to see the rest.</td></tr>"
+    : "");
+
+  renderInvPastItemDetail(idx);
+}
+
+function renderInvPastItemDetail(idx) {
+  var host = $("invPastItemDetail");
+  if (!host) return;
+  idx = idx || invPastItemIndex();
+  var rec = invPastSelectedItem ? idx[invPastSelectedItem] : null;
+  if (!rec) {
+    host.innerHTML = '<p class="small" style="color:#94a3b8;margin-top:12px;">' +
+      "Pick an item above to see it cycle by cycle.</p>";
+    return;
+  }
+
+  host.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0 6px;">' +
+      "<div><h3 style=\"margin:0;font-size:14px;color:#166534;\">" + escapeHtml(rec.item) +
+        (rec.description ? " — " + escapeHtml(rec.description) : "") + "</h3>" +
+      '<p class="small" style="margin:2px 0 0;">One row per finalized count, newest first. ' +
+        '<a href="#" onclick="prodShowItemHistory(\'' + escapeHtml(rec.item) + '\');return false;">' +
+        "Full item history &#9654;</a></p></div>" +
+      "<div style=\"display:flex;gap:6px;\">" +
+        '<button class="btn-compact" onclick="invPastExportItem(\'xlsx\')">Export (XLSX)</button>' +
+        '<button class="btn-compact secondary" onclick="invPastExportItem(\'csv\')">CSV</button>' +
+      "</div>" +
+    "</div>" +
+    '<div class="scroll"><table><thead><tr>' +
+      "<th>Count</th><th>Counted By</th><th>Finalized</th><th>Counted Qty</th>" +
+      "<th>Serialized</th><th>Reel Footage</th><th>Where It Was Counted</th>" +
+    "</tr></thead><tbody>" +
+    rec.rows.map(function(x) {
+      var closed = x.session.closedAt || x.session.updatedAt || "";
+      return "<tr><td>" + escapeHtml(x.session.sessionName || x.session.sessionId) + "</td>" +
+        "<td>" + escapeHtml(invPastCountedBy(x.session)) + "</td>" +
+        "<td style=\"white-space:nowrap\">" + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") + "</td>" +
+        "<td style=\"text-align:right\">" + (x.qty ? x.qty.toLocaleString() : "") + "</td>" +
+        "<td style=\"text-align:right\">" + (x.serialized ? x.serialized.toLocaleString() : "") + "</td>" +
+        "<td style=\"text-align:right\">" + (x.ft ? x.ft.toLocaleString() : "") + "</td>" +
+        "<td>" + escapeHtml(invPastLocText(x.locs)) + "</td></tr>";
+    }).join("") +
+    "</tbody></table></div>";
+}
+
+// -- Exports ----------------------------------------------------------
+//
+// These deliberately do NOT go through requireInvSession / invDoExport. The
+// existing event-log export is gated on a live session (invExportEventLogBtn is
+// disabled without one), which is exactly the hole this view closes: once a
+// count closed, the XLSX you actually hand to accounting was unreachable unless
+// you reopened the session first. Same builders, same column order — only the
+// event source and the gate differ.
+
+function _invPastFileStamp(sess) {
+  var nm = (sess && (sess.sessionName || sess.sessionId)) || "count";
+  return nm.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+}
+
+function _invPastRequireSession() {
+  var sess = invPastSessions().filter(function(s) { return s.sessionId === invPastSelectedId; })[0];
+  if (!sess) { alert("Pick a finalized count first."); return null; }
+  return sess;
+}
+
+function invPastExportEvents(fmt) {
+  var sess = _invPastRequireSession();
+  if (!sess) return;
+  _invResetIsReelCache();
+  var evts = invPastEvents(sess.sessionId);
+  var file = "past-count-events-" + _invPastFileStamp(sess);
+  if (fmt === "csv") {
+    var header = INV_EVENT_LOG_BASE_HEADERS.concat(["Notes"]);
+    var lines  = [header.join(",")].concat(evts.map(function(e) {
+      return buildEventLogBaseRow(e).concat([e.notes || ""]).map(csvEscape).join(",");
+    }));
+    downloadText(file + ".csv", lines.join("\r\n"), "text/csv");
+    return;
+  }
+  var headers = INV_EVENT_LOG_BASE_HEADERS.concat(["Flagged", "Notes"]);
+  var rows = evts.map(function(e) {
+    return buildEventLogBaseRow(e).concat([e.flagged ? "Yes" : "", e.notes || ""]);
+  });
+  timDownloadXlsx(file + ".xlsx", headers, rows, "Event Log",
+    ["Seq", "Qty", "Inner A", "Outer A", "Inner B", "Outer B"]);
+}
+
+var INV_PAST_SUMMARY_HEADERS = [
+  "Item", "Description", "Counted Qty", "Serialized", "Reel Footage (ft)",
+  "Exceptions", "Flagged Events", "Where It Was Counted", "Last Counted"
+];
+var INV_PAST_SUMMARY_NUMERIC = ["Counted Qty", "Serialized", "Reel Footage (ft)", "Exceptions", "Flagged Events"];
+
+function invPastExportSummary(fmt) {
+  var sess = _invPastRequireSession();
+  if (!sess) return;
+  var roll = invPastRollup(invPastEvents(sess.sessionId));
+  var rows = Object.keys(roll).sort().map(function(k) {
+    var r = roll[k];
+    return [r.item, r.description, r.qty, r.serialized, r.ft || "",
+            r.exceptions, r.flagged || "", invPastLocText(r.locs), r.last];
+  });
+  var file = "past-count-items-" + _invPastFileStamp(sess);
+  if (fmt === "csv") {
+    var lines = [INV_PAST_SUMMARY_HEADERS.join(",")].concat(rows.map(function(r) {
+      return r.map(csvEscape).join(",");
+    }));
+    downloadText(file + ".csv", lines.join("\r\n"), "text/csv");
+    return;
+  }
+  timDownloadXlsx(file + ".xlsx", INV_PAST_SUMMARY_HEADERS, rows, "Items", INV_PAST_SUMMARY_NUMERIC);
+}
+
+var INV_PAST_ITEM_HEADERS = [
+  "Item", "Description", "Count", "Counted By", "Finalized",
+  "Counted Qty", "Serialized", "Reel Footage (ft)", "Where It Was Counted"
+];
+var INV_PAST_ITEM_NUMERIC = ["Counted Qty", "Serialized", "Reel Footage (ft)"];
+
+function invPastExportItem(fmt) {
+  var idx = invPastItemIndex();
+  var rec = invPastSelectedItem ? idx[invPastSelectedItem] : null;
+  if (!rec) { alert("Pick an item first."); return; }
+  var rows = rec.rows.map(function(x) {
+    return [rec.item, rec.description,
+            x.session.sessionName || x.session.sessionId,
+            invPastCountedBy(x.session),
+            x.session.closedAt || x.session.updatedAt || "",
+            x.qty, x.serialized, x.ft || "", invPastLocText(x.locs)];
+  });
+  var file = "past-counts-item-" + String(rec.item).replace(/[^A-Za-z0-9_-]+/g, "-");
+  if (fmt === "csv") {
+    var lines = [INV_PAST_ITEM_HEADERS.join(",")].concat(rows.map(function(r) {
+      return r.map(csvEscape).join(",");
+    }));
+    downloadText(file + ".csv", lines.join("\r\n"), "text/csv");
+    return;
+  }
+  timDownloadXlsx(file + ".xlsx", INV_PAST_ITEM_HEADERS, rows, "Item by Cycle", INV_PAST_ITEM_NUMERIC);
+}
+
 // -- Event creation -------------------------------------------------
 function invCreateEvent(eventType, data) {
   if (!invSession) return null;
@@ -5453,7 +5935,8 @@ function invAutoRestoreSession() {
         var ctxt = $("invAutosaveText");
         if (ctxt) ctxt.textContent = "Last session “" +
           (saved.session.sessionName || saved.session.sessionId) +
-          "” was finalized. Start a new session to continue (Resume reopens it if needed).";
+          "” was finalized — it is on record under Inventory → Past Counts. " +
+          "Start a new session to continue (Resume reopens the old one if you really need to scan into it).";
       }
       return;
     }
@@ -5597,7 +6080,8 @@ function invClearSession() {
 
   var confirmMsg = isClosed
     ? "Clear this finalized session from view?\n\nIts events are already merged into your master data — " +
-      "this only removes it from the screen so you can start fresh. Nothing is lost."
+      "this only removes it from the screen so you can start fresh. Nothing is lost — the count stays " +
+      "readable under Inventory → Past Counts (v2.59.00)."
     : "Clear the active inventory session?\n\nThis removes all events from memory. " +
       "Export a backup JSON first if you need to keep the data.";
   if (!confirm(confirmMsg)) return;

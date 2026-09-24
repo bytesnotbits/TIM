@@ -80,6 +80,7 @@
       <div id="invSubnav" class="sidebar-subnav hidden">
         <button class="sidebar-subnav-btn active" id="invSub_count"      onclick="invShowSubview('count')">Count</button>
         <button class="sidebar-subnav-btn"        id="invSub_progress"   onclick="invShowSubview('progress')">In Progress</button>
+        <button class="sidebar-subnav-btn"        id="invSub_past"       onclick="invShowSubview('past')">Past Counts</button>
         <button class="sidebar-subnav-btn"        id="invSub_exceptions" onclick="invShowSubview('exceptions')">Exceptions</button>
         <button class="sidebar-subnav-btn"        id="invSub_summary"    onclick="invShowSubview('summary')">Summary</button>
         <button class="sidebar-subnav-btn"        id="invSub_gap"        onclick="invShowSubview('gap')">Gap Analysis</button>
@@ -882,6 +883,64 @@
           </table>
         </div>
         <div id="invProgressDetail"></div>
+      </div>
+    </div>
+
+    <!-- Past Counts — read-only historical record of FINALIZED counts (v2.59.00).
+         Reads appData.inventory_sessions/_events only; offers no continue path.
+         Reopening a count stays on the explicit Resume button. -->
+    <div class="card inv-subview" data-inv-subview="past" id="invPastCard">
+      <div class="collapsible-header open" id="invPastHeader" onclick="toggleCollapsible('invPastCollapse','invPastHeader','invPastChevron')">
+        <h2 style="margin:0;">Past Counts</h2>
+        <svg id="invPastChevron" class="collapsible-chevron" style="transform:rotate(180deg);" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <div id="invPastCollapse" class="collapsible-body">
+        <p class="small">Every finalized count, kept as the historical record &mdash; what was counted, how much, and where. <strong>Read-only:</strong> nothing here reopens a count. To scan against an old session again, use &#8617; Resume on the Count screen.</p>
+        <div id="invPastOpenNote" class="small" style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;color:#475569;margin-bottom:10px;display:none;"></div>
+        <div class="panel-toggle">
+          <button class="panel-toggle-btn active" id="invPastTabCounts" onclick="invPastShowPanel('counts')">By Count</button>
+          <button class="panel-toggle-btn"        id="invPastTabItem"   onclick="invPastShowPanel('item')">By Item</button>
+        </div>
+
+        <!-- By Count: pick a finalized count, see what it found -->
+        <div id="invPastCountsPanel">
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Count</th><th>Counted By</th><th>Finalized</th>
+                  <th>Items</th><th>Units</th><th>Reel Ft</th>
+                </tr>
+              </thead>
+              <tbody id="invPastBody">
+                <tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:16px;">No finalized counts yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="invPastDetail"></div>
+        </div>
+
+        <!-- By Item: one row per cycle — "how many last time, and the time before?" -->
+        <div id="invPastItemPanel" class="hidden">
+          <div class="event-log-filters" style="margin-bottom:10px;">
+            <input id="invPastItemQuery" type="search" placeholder="Item number or description&hellip;" oninput="invPastItemSearch()" style="width:260px;" />
+            <span id="invPastItemCount" class="small">0 items</span>
+          </div>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th><th>Description</th><th>Counts</th>
+                  <th>Total Units</th><th>Total Reel Ft</th>
+                </tr>
+              </thead>
+              <tbody id="invPastItemBody">
+                <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px;">Nothing counted yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="invPastItemDetail"></div>
+        </div>
       </div>
     </div>
 
