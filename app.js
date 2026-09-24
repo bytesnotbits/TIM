@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.60.01";
+const APP_VERSION = "v2.61.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5692,6 +5692,13 @@ function renderInvPastDetail() {
             " &middot; read-only historical record.") +
         "</p></div>" +
       "<div style=\"display:flex;gap:6px;flex-wrap:wrap;\">" +
+        // Editing is offered ONLY for an imported cycle. A scanned count has a
+        // real audit trail of what somebody physically did; a transcription of
+        // a spreadsheet does not, and correcting one is a different act.
+        (sess.imported
+          ? '<button class="btn-compact" onclick="invHistEditOpen(\'' + escapeHtml(sess.sessionId) +
+            '\')">Edit rows</button>'
+          : "") +
         '<button class="btn-compact" onclick="invPastExportSummary(\'xlsx\')">Export Items (XLSX)</button>' +
         '<button class="btn-compact secondary" onclick="invPastExportSummary(\'csv\')">CSV</button>' +
         '<button class="btn-compact" onclick="invPastExportEvents(\'xlsx\')">Export Event Log (XLSX)</button>' +
@@ -6826,25 +6833,86 @@ function invHistCommit() {
       }).join("\n") +
       "\n\nThey are marked as imported wherever they appear, and can be removed again from Past Counts.")) return;
 
+  // Does this import contradict anything corrected by hand? Rows nobody has
+  // touched are simply refreshed; only the user's own edits can conflict.
+  var diffs = invHistComputeDiffs(chosen);
+
+  if (!diffs.length) { _invHistWriteCycles(chosen, {}); return; }
+
+  // THE VOLUME GATE. One at a time is right for a handful and punishing for
+  // hundreds, so past the limit say how many there are and offer the honest
+  // alternative: go back to the spreadsheet instead.
+  if (diffs.length > INV_HIST_DIFF_LIMIT) {
+    var goOn = confirm(
+      "This import disagrees with " + diffs.length.toLocaleString() +
+      " rows you changed in TIM.\n\n" +
+      "That is a lot to review one at a time. You can:\n\n" +
+      "  OK     - review all " + diffs.length.toLocaleString() + " now, one row at a time\n" +
+      "  Cancel - stop the import, adjust the spreadsheet so it matches, and import again\n\n" +
+      "Nothing has been changed yet either way.");
+    if (!goOn) {
+      alert("Import cancelled. Nothing was changed.\n\n" +
+            "Adjust the spreadsheet so it matches what is in TIM, then import it again.");
+      return;
+    }
+  }
+
+  INV_HIST_DIFFS = { list: diffs, cycles: chosen };
+  invHistClosePreview();
+  var m = $("invHistDiffModal");
+  if (m) m.classList.remove("hidden");
+  renderInvHistDiff();
+}
+
+// The actual write. `keepMine` holds eventIds whose ON-RECORD version wins
+// over the incoming file row; everything absent from it takes the file's.
+function _invHistWriteCycles(chosen, keepMine) {
+  keepMine = keepMine || {};
   appData.inventory_sessions = appData.inventory_sessions || [];
   appData.inventory_events   = appData.inventory_events   || [];
 
-  var addedEvents = 0;
+  var addedEvents = 0, keptEdits = 0, keptAdds = 0;
+
   chosen.forEach(function(cycle) {
     var built = invHistBuildRecords(cycle);
-    var idx = appData.inventory_sessions.findIndex(function(s) {
-      return s && s.sessionId === built.session.sessionId;
+    var sid   = built.session.sessionId;
+
+    var existing = (appData.inventory_events || []).filter(function(e) {
+      return e && e.sessionId === sid;
     });
+    var byId = {};
+    existing.forEach(function(e) { byId[e.eventId] = e; });
+
+    var out = built.events.map(function(inc) {
+      var cur = byId[inc.eventId];
+      if (cur && keepMine[inc.eventId]) { keptEdits++; return cur; }
+      return inc;
+    });
+
+    // Edited rows the file no longer carries, which the user chose to keep,
+    // plus every row added by hand - those exist in no file and would be
+    // erased by a refresh that only looked at what the file contains.
+    var incomingIds = {};
+    built.events.forEach(function(e) { incomingIds[e.eventId] = true; });
+    existing.forEach(function(cur) {
+      if (cur.manualAdd) { out.push(cur); keptAdds++; return; }
+      if (keepMine[cur.eventId] && !incomingIds[cur.eventId]) { out.push(cur); keptEdits++; }
+    });
+
+    var prev = (appData.inventory_sessions || []).filter(function(s) { return s && s.sessionId === sid; })[0];
+    if (prev && prev.lastEditedAt) {
+      built.session.lastEditedBy = prev.lastEditedBy;
+      built.session.lastEditedAt = prev.lastEditedAt;
+    }
+
+    var idx = appData.inventory_sessions.findIndex(function(s) { return s && s.sessionId === sid; });
     if (idx >= 0) appData.inventory_sessions[idx] = built.session;
     else          appData.inventory_sessions.push(built.session);
 
-    // Drop this cycle's existing events before inserting, so a row deleted
-    // at source disappears here too instead of lingering as a ghost.
     appData.inventory_events = appData.inventory_events.filter(function(e) {
-      return !e || e.sessionId !== built.session.sessionId;
-    });
-    appData.inventory_events = appData.inventory_events.concat(built.events);
-    addedEvents += built.events.length;
+      return !e || e.sessionId !== sid;
+    }).concat(out);
+    addedEvents += out.length;
   });
 
   timSaveMasterCache();
@@ -6857,6 +6925,8 @@ function invHistCommit() {
 
   alert("Imported " + chosen.length + " cycle" + (chosen.length === 1 ? "" : "s") +
         " (" + addedEvents.toLocaleString() + " rows) into Past Counts." +
+        (keptEdits ? "\n\nKept " + keptEdits + " row(s) you had corrected in TIM." : "") +
+        (keptAdds  ? "\nKept " + keptAdds + " row(s) you added in TIM." : "") +
         (configured ? "\n\nPushing to GitHub now so the other devices pick them up."
                     : "\n\nThese live on this device until you push or export the master file."));
 
@@ -6923,10 +6993,543 @@ function renderInvHistImported() {
         '<td class="small">' + escapeHtml(s.importedAt ? new Date(s.importedAt).toLocaleDateString() : "") +
           (s.importedBy ? " by " + escapeHtml(s.importedBy) : "") + "</td>" +
         '<td class="small">' + escapeHtml((s.importedFrom || []).join(", ")) + "</td>" +
-        '<td style="text-align:right"><button class="btn-compact secondary" ' +
+        '<td style="text-align:right;white-space:nowrap">' +
+          '<button class="btn-compact" onclick="invHistEditOpen(\'' + escapeHtml(s.sessionId) + '\')">Edit rows</button> ' +
+          '<button class="btn-compact secondary" ' +
           "onclick=\"invHistRemove('" + escapeHtml(s.sessionId) + "')\">Remove</button></td></tr>";
     }).join("") +
     "</tbody></table></div>";
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EDITING AN IMPORTED CYCLE (invHistEdit*, v2.61.00)
+//
+// Small corrections to a historical cycle happen IN TIM; a re-import is for
+// bulk change. That inverts the earlier arrangement, where the spreadsheet
+// was the master and every fix meant a round trip through it.
+//
+// THE BOUNDARY: only cycles flagged `imported` are editable. A scanned count
+// stays read-only, as it has been since Past Counts shipped — it carries a
+// real audit trail of what somebody physically did, and that is not the same
+// object as a transcription of a spreadsheet. Correcting a transcription
+// error is a different act from editing what a counter scanned, and every
+// entry point here re-checks the flag rather than trusting the caller.
+//
+// REMOVAL VOIDS, IT DOES NOT DELETE. `status: "voided"` already exists and
+// the rollups already exclude it, so a removed row stops counting while the
+// record still shows it was there and who dropped it. A hard delete would
+// lose that, and would come back on the next import anyway.
+//
+// Every edit stamps `editedBy`/`editedAt` and keeps `importedValues` — the
+// row exactly as the file gave it. That snapshot is what makes a later
+// re-import able to tell "the file changed" from "Joe changed it", and it
+// is what Revert restores.
+// ═══════════════════════════════════════════════════════════════════════
+
+var INV_HIST_EDIT_SESSION = "";    // sessionId being edited
+var INV_HIST_EDIT_PENDING = {};    // eventId -> { qty?, location?, notes?, void? }
+var INV_HIST_EDIT_ADDED   = [];    // newly added rows not yet saved
+var INV_HIST_EDIT_CAP     = 200;   // rendered rows before the list is capped
+
+function invHistEditableSession(sessionId) {
+  var s = (appData.inventory_sessions || []).filter(function(x) {
+    return x && x.sessionId === sessionId;
+  })[0];
+  return (s && s.imported) ? s : null;
+}
+
+// The values a row arrived with. Captured lazily on first edit rather than at
+// import time so the 9,000-row payload doesn't carry a second copy of itself.
+function _invHistSnapshot(evt) {
+  if (!evt.importedValues) {
+    evt.importedValues = {
+      qty:      evt.qty,
+      location: evt.location || "",
+      notes:    evt.notes || "",
+      status:   evt.status || "active"
+    };
+  }
+  return evt.importedValues;
+}
+
+function _invHistStampEdit(evt) {
+  _invHistSnapshot(evt);
+  evt.manuallyEdited = true;
+  evt.editedBy = (typeof timGetUsername === "function" && timGetUsername()) || "";
+  evt.editedAt = invNow();
+}
+
+// Has this row diverged from the file it came from? Drives the EDITED badge
+// and, on re-import, whether the row is a diff to resolve or just refreshable.
+function invHistRowDiverged(evt) {
+  if (!evt || !evt.manuallyEdited) return false;
+  var iv = evt.importedValues;
+  if (!iv) return true;
+  return Number(evt.qty) !== Number(iv.qty) ||
+         (evt.location || "") !== (iv.location || "") ||
+         (evt.status   || "active") !== (iv.status || "active");
+}
+
+function invHistEditOpen(sessionId) {
+  var sess = invHistEditableSession(sessionId);
+  if (!sess) { alert("Only imported cycles can be edited here. A scanned count stays read-only."); return; }
+  INV_HIST_EDIT_SESSION = sessionId;
+  INV_HIST_EDIT_PENDING = {};
+  INV_HIST_EDIT_ADDED   = [];
+  var m = $("invHistEditModal");
+  if (m) m.classList.remove("hidden");
+  var q = $("invHistEditQuery"); if (q) q.value = "";
+  renderInvHistEditRows();
+}
+
+function invHistEditClose() {
+  var n = Object.keys(INV_HIST_EDIT_PENDING).length + INV_HIST_EDIT_ADDED.length;
+  if (n && !confirm(n + " unsaved change" + (n === 1 ? "" : "s") + ". Discard them?")) return;
+  var m = $("invHistEditModal");
+  if (m) m.classList.add("hidden");
+  INV_HIST_EDIT_SESSION = "";
+  INV_HIST_EDIT_PENDING = {};
+  INV_HIST_EDIT_ADDED   = [];
+}
+
+function invHistEditSearch() { renderInvHistEditRows(); }
+
+function _invHistEditRowsFor(sessionId) {
+  return (appData.inventory_events || []).filter(function(e) {
+    return e && e.sessionId === sessionId;
+  });
+}
+
+// Pending edits are held until Save so a mis-typed quantity can be abandoned,
+// and so one Save produces one push rather than one per keystroke.
+function invHistEditSetField(eventId, field, value) {
+  var p = INV_HIST_EDIT_PENDING[eventId] || (INV_HIST_EDIT_PENDING[eventId] = {});
+  if (field === "qty") {
+    // A SERIALIZED ROW HAS NO EDITABLE QUANTITY. It is one specific device:
+    // the rollup scores one unit per serialized event and ignores `qty`
+    // entirely, so accepting "0" here would report a save that changed
+    // nothing on screen — the worst kind of edit. "It isn't there" is what
+    // Remove says, and Remove is what actually moves the number.
+    var e0 = (appData.inventory_events || []).filter(function(e) { return e && e.eventId === eventId; })[0];
+    if (e0 && e0.eventType === "serialized_device_scan") {
+      alert("This row is one specific device (" + (e0.serial || e0.fsan || "serial") + "), so it has no quantity to change.\n\n" +
+            "If it was not there, use Remove — that takes it out of the count and keeps the serial on record.");
+      delete INV_HIST_EDIT_PENDING[eventId];
+      renderInvHistEditRows();
+      return;
+    }
+    var raw = String(value).trim();
+    if (raw === "") { delete p.qty; }
+    else {
+      var n = Number(raw);
+      // A zero is a count. Only a non-number is refused.
+      if (isNaN(n)) { alert("Quantity must be a number. Zero is allowed."); renderInvHistEditRows(); return; }
+      p.qty = n;
+    }
+  } else {
+    p[field] = String(value);
+  }
+  if (!Object.keys(p).length) delete INV_HIST_EDIT_PENDING[eventId];
+  _invHistEditRefreshFooter();
+}
+
+function invHistEditToggleVoid(eventId) {
+  var evt = (appData.inventory_events || []).filter(function(e) { return e && e.eventId === eventId; })[0];
+  if (!evt) return;
+  var p = INV_HIST_EDIT_PENDING[eventId] || (INV_HIST_EDIT_PENDING[eventId] = {});
+  var currentlyVoid = (p.void !== undefined) ? p.void : (evt.status === "voided");
+  p.void = !currentlyVoid;
+  if (p.void === (evt.status === "voided")) delete p.void;
+  if (!Object.keys(p).length) delete INV_HIST_EDIT_PENDING[eventId];
+  renderInvHistEditRows();
+}
+
+// Restore a row to exactly what the spreadsheet said.
+function invHistEditRevert(eventId) {
+  var evt = (appData.inventory_events || []).filter(function(e) { return e && e.eventId === eventId; })[0];
+  if (!evt || !evt.importedValues) return;
+  var iv = evt.importedValues;
+  INV_HIST_EDIT_PENDING[eventId] = { qty: iv.qty, location: iv.location, notes: iv.notes,
+                                     void: (iv.status === "voided"), _revert: true };
+  renderInvHistEditRows();
+}
+
+function invHistEditAddRow() {
+  var sess = invHistEditableSession(INV_HIST_EDIT_SESSION);
+  if (!sess) return;
+  var item = prompt("Item number for the new row:");
+  if (item === null) return;
+  item = String(item).trim();
+  if (!item) { alert("An item number is required."); return; }
+  var qtyRaw = prompt("Quantity counted (0 is allowed):", "0");
+  if (qtyRaw === null) return;
+  var qty = Number(String(qtyRaw).trim());
+  if (isNaN(qty)) { alert("Quantity must be a number."); return; }
+  var loc = prompt("Location as recorded (leave blank if none):", "");
+  if (loc === null) return;
+
+  var mm = (typeof findProductMapMatch === "function") ? findProductMapMatch(item) : null;
+  INV_HIST_EDIT_ADDED.push({
+    item: item,
+    description: mm && mm.entry ? getMapDescription(mm.entry) : "",
+    qty: qty,
+    location: String(loc).trim(),
+    matched: !!(mm && mm.entry)
+  });
+  renderInvHistEditRows();
+}
+
+function invHistEditRemoveAdded(idx) {
+  INV_HIST_EDIT_ADDED.splice(idx, 1);
+  renderInvHistEditRows();
+}
+
+function _invHistEditPendingCount() {
+  return Object.keys(INV_HIST_EDIT_PENDING).length + INV_HIST_EDIT_ADDED.length;
+}
+
+function _invHistEditRefreshFooter() {
+  var el = $("invHistEditPendingNote");
+  var n  = _invHistEditPendingCount();
+  if (el) el.textContent = n ? (n + " unsaved change" + (n === 1 ? "" : "s")) : "";
+  var btn = $("invHistEditSaveBtn");
+  if (btn) btn.disabled = !n;
+}
+
+function renderInvHistEditRows() {
+  var host = $("invHistEditBody");
+  if (!host || !INV_HIST_EDIT_SESSION) return;
+  var sess = invHistEditableSession(INV_HIST_EDIT_SESSION);
+  if (!sess) return;
+
+  var title = $("invHistEditTitle");
+  if (title) title.textContent = "Edit rows - " + (sess.cycleKey || sess.sessionName);
+
+  var q    = normKey(($("invHistEditQuery") ? $("invHistEditQuery").value : "") || "");
+  var all  = _invHistEditRowsFor(INV_HIST_EDIT_SESSION);
+  var rows = !q ? all : all.filter(function(e) {
+    return normKey(e.itemNumber || "").indexOf(q) >= 0 ||
+           normKey(e.description || "").indexOf(q) >= 0 ||
+           normKey(e.serial || "").indexOf(q) >= 0 ||
+           normKey(e.reelNumber || "").indexOf(q) >= 0 ||
+           normKey(e.location || "").indexOf(q) >= 0;
+  });
+  rows = rows.slice().sort(function(a, b) {
+    var ai = (a.itemNumber || ""), bi = (b.itemNumber || "");
+    if (ai !== bi) return ai < bi ? -1 : 1;
+    return (a.sequence || 0) - (b.sequence || 0);
+  });
+
+  var cnt = $("invHistEditCount");
+  if (cnt) cnt.textContent = rows.length.toLocaleString() + " of " + all.length.toLocaleString() + " rows";
+
+  var shown = rows.slice(0, INV_HIST_EDIT_CAP);
+  var html = shown.map(function(e) {
+    var p        = INV_HIST_EDIT_PENDING[e.eventId] || {};
+    var isVoid   = (p.void !== undefined) ? p.void : (e.status === "voided");
+    var qtyVal   = (p.qty !== undefined) ? p.qty : (e.eventType === "cable_reel_count" ? e.totalAvailableFt : e.qty);
+    var isReel   = e.eventType === "cable_reel_count";
+    var isSerial = e.eventType === "serialized_device_scan";
+    var ident    = e.serial ? "S/N " + e.serial : (e.reelNumber ? "Reel " + e.reelNumber : "");
+    var dirty    = !!Object.keys(p).length;
+    var diverged = invHistRowDiverged(e);
+    return '<tr style="' + (isVoid ? "opacity:.5;" : "") + (dirty ? "background:#fefce8;" : "") + '">' +
+      "<td>" + escapeHtml(e.itemNumber || "") +
+        (diverged || dirty ? ' <span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:999px;padding:1px 5px;">EDITED</span>' : "") +
+        "</td>" +
+      "<td>" + escapeHtml((e.description || "").slice(0, 46)) + "</td>" +
+      '<td class="small">' + escapeHtml(ident) + "</td>" +
+      "<td>" + '<input type="text" value="' + escapeHtml(e.location || "") + '" size="14" ' +
+        'style="font-family:monospace;padding:2px 5px;border:1px solid #cbd5e1;border-radius:4px;" ' +
+        'onchange="invHistEditSetField(\'' + escapeHtml(e.eventId) + '\',\'location\',this.value)" />' + "</td>" +
+      // A serialized row shows "1 device" as plain text, not an input: its
+      // count is its existence, which Remove/Restore controls. An editable
+      // box there would invite a change the rollup cannot honour.
+      '<td style="text-align:right">' +
+        (isSerial
+          ? '<span class="small" title="One specific device — use Remove if it was not there">' +
+            (isVoid ? "not counted" : "1 device") + "</span>"
+          : '<input type="text" value="' + escapeHtml(String(qtyVal == null ? "" : qtyVal)) + '" size="8" ' +
+            'style="text-align:right;font-family:monospace;padding:2px 5px;border:1px solid #cbd5e1;border-radius:4px;" ' +
+            'onchange="invHistEditSetField(\'' + escapeHtml(e.eventId) + '\',\'qty\',this.value)" />' +
+            (isReel ? ' <span class="small">ft</span>' : "")) + "</td>" +
+      '<td style="text-align:right;white-space:nowrap">' +
+        '<button class="btn-compact secondary" onclick="invHistEditToggleVoid(\'' + escapeHtml(e.eventId) + '\')">' +
+          (isVoid ? "Restore" : "Remove") + "</button>" +
+        (e.importedValues ? ' <button class="btn-compact secondary" title="Restore the value the spreadsheet gave" ' +
+          "onclick=\"invHistEditRevert('" + escapeHtml(e.eventId) + "')\">Revert</button>" : "") +
+      "</td></tr>";
+  }).join("");
+
+  var addedHtml = INV_HIST_EDIT_ADDED.map(function(a, i) {
+    return '<tr style="background:#ecfdf5;">' +
+      "<td>" + escapeHtml(a.item) +
+        ' <span style="font-size:10px;font-weight:700;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:999px;padding:1px 5px;">NEW</span></td>' +
+      "<td>" + escapeHtml(a.description || "") + (a.matched ? "" : ' <span class="small">(not in catalog)</span>') + "</td>" +
+      "<td></td>" +
+      "<td>" + escapeHtml(a.location || "") + "</td>" +
+      '<td style="text-align:right">' + a.qty.toLocaleString() + "</td>" +
+      '<td style="text-align:right"><button class="btn-compact secondary" onclick="invHistEditRemoveAdded(' + i + ')">Discard</button></td>' +
+      "</tr>";
+  }).join("");
+
+  host.innerHTML = addedHtml + html +
+    (rows.length > INV_HIST_EDIT_CAP
+      ? '<tr><td colspan="6" class="small" style="text-align:center;color:#94a3b8;padding:8px;">' +
+        "Showing the first " + INV_HIST_EDIT_CAP + " of " + rows.length.toLocaleString() +
+        " - narrow the search to reach the rest.</td></tr>"
+      : "") +
+    (!rows.length && !INV_HIST_EDIT_ADDED.length
+      ? '<tr><td colspan="6" class="small" style="text-align:center;color:#94a3b8;padding:12px;">No rows match.</td></tr>'
+      : "");
+
+  _invHistEditRefreshFooter();
+}
+
+function invHistEditSave() {
+  if (!INV_HIST_EDIT_SESSION) return;
+  var sess = invHistEditableSession(INV_HIST_EDIT_SESSION);
+  if (!sess) return;
+  var n = _invHistEditPendingCount();
+  if (!n) return;
+  if (!confirm("Save " + n + " change" + (n === 1 ? "" : "s") + " to cycle " +
+               (sess.cycleKey || sess.sessionName) + "?")) return;
+
+  var user = (typeof timGetUsername === "function" && timGetUsername()) || "";
+  var now  = invNow();
+
+  Object.keys(INV_HIST_EDIT_PENDING).forEach(function(eventId) {
+    var evt = (appData.inventory_events || []).filter(function(e) { return e && e.eventId === eventId; })[0];
+    if (!evt) return;
+    var p = INV_HIST_EDIT_PENDING[eventId];
+    _invHistStampEdit(evt);
+
+    if (p.qty !== undefined) {
+      if (evt.eventType === "cable_reel_count") {
+        evt.totalAvailableFt = p.qty;
+        evt.availableFtA     = p.qty;
+        evt.qty              = p.qty;
+      } else {
+        evt.qty = p.qty;
+      }
+    }
+    if (p.location !== undefined) evt.location = String(p.location).trim();
+    if (p.notes    !== undefined) evt.notes    = String(p.notes);
+    if (p.void !== undefined) {
+      evt.status = p.void ? "voided" : "active";
+      if (p.void) { evt.voidedBy = user; evt.voidedAt = now; }
+      else        { delete evt.voidedBy; delete evt.voidedAt; }
+    }
+    if (p._revert) {
+      // Back to the file's values: it is no longer a divergence to defend
+      // against a future re-import.
+      evt.manuallyEdited = false;
+      delete evt.editedBy; delete evt.editedAt;
+    }
+  });
+
+  // Added rows get ids marked as manual so a re-import preserves them - they
+  // exist in no file and would otherwise vanish on the next refresh.
+  var maxSeq = _invHistEditRowsFor(INV_HIST_EDIT_SESSION)
+    .reduce(function(m, e) { return Math.max(m, e.sequence || 0); }, 0);
+  INV_HIST_EDIT_ADDED.forEach(function(a) {
+    maxSeq++;
+    appData.inventory_events.push({
+      eventId:     "evt_hist_manual_" + _invHistHash(INV_HIST_EDIT_SESSION + "|" + a.item + "|" +
+                     a.location + "|" + maxSeq + "|" + now),
+      sessionId:   INV_HIST_EDIT_SESSION,
+      timestamp:   sess.closedAt || sess.cycleEnd || now,
+      sequence:    maxSeq,
+      eventType:   "bulk_quantity_count",
+      scanType:    "item_number",
+      scannedValue: a.item,
+      itemNumber:  a.item,
+      description: a.description || "",
+      location:    a.location || "",
+      qty:         a.qty,
+      countedBy:   user,
+      status:      "active",
+      notes:       "Added in TIM" + (a.matched ? "" : " - item not in the product catalog"),
+      messages:    [],
+      imported:      true,
+      manualAdd:     true,
+      manuallyEdited: true,
+      sourceCycle:   sess.cycleKey || "",
+      editedBy:      user,
+      editedAt:      now
+    });
+  });
+
+  sess.updatedAt  = now;
+  sess.lastEditedBy = user;
+  sess.lastEditedAt = now;
+
+  INV_HIST_EDIT_PENDING = {};
+  INV_HIST_EDIT_ADDED   = [];
+
+  timSaveMasterCache();
+  renderInvHistEditRows();
+  renderInvPast();
+  renderInvHistImported();
+
+  var configured = (typeof ghConfigured === "function") && ghConfigured();
+  alert("Saved " + n + " change" + (n === 1 ? "" : "s") + "." +
+        (configured ? "\n\nPushing to GitHub so the other devices pick them up." : ""));
+  if (configured) ghPushToGitHub({ auto: true });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RE-IMPORT vs IN-APP EDITS (invHistDiff*, v2.61.00)
+//
+// Once a cycle can be corrected inside TIM, a re-import is no longer a
+// straight refresh — it is two sources of truth meeting. The original
+// commit dropped a cycle's events and reinserted them from the file, which
+// after this feature would silently throw away every hand correction.
+//
+// So a re-import now classifies each row:
+//   * untouched here        -> refreshed from the file, no questions
+//   * added here            -> always kept (it exists in no file)
+//   * edited here, file agrees   -> refreshed; the divergence is resolved
+//   * edited here, file disagrees -> A DIFF. The user decides.
+//   * edited here, gone from file -> also a diff (dropped at source)
+//
+// THE VOLUME GATE. Reviewing diffs one at a time is right for the handful
+// a normal correction pass produces, and wrong for a bulk re-import that
+// could produce hundreds. Past INV_HIST_DIFF_LIMIT the user is told how
+// many there are and offered the honest choice: work through them anyway,
+// or cancel, fix the spreadsheet, and import again. Better to send someone
+// back to the source than to march them through 400 dialogs.
+// ═══════════════════════════════════════════════════════════════════════
+
+var INV_HIST_DIFF_LIMIT = 25;
+var INV_HIST_DIFFS      = null;   // { list: [...], cycles: [...] } awaiting resolution
+
+function _invHistDiffValue(evt) {
+  return {
+    qty:      (evt.eventType === "cable_reel_count")
+                ? Number(evt.totalAvailableFt != null ? evt.totalAvailableFt : evt.qty)
+                : Number(evt.qty),
+    location: evt.location || "",
+    status:   evt.status || "active"
+  };
+}
+
+function _invHistSameValue(a, b) {
+  return Number(a.qty) === Number(b.qty) &&
+         (a.location || "") === (b.location || "") &&
+         (a.status || "active") === (b.status || "active");
+}
+
+// Compare what a re-import would write against what is on record, for the
+// rows the user has actually touched. Untouched rows are never diffs — the
+// file is their only author, so it simply wins.
+function invHistComputeDiffs(chosenCycles) {
+  var diffs = [];
+  chosenCycles.forEach(function(cycle) {
+    var built    = invHistBuildRecords(cycle);
+    var incoming = {};
+    built.events.forEach(function(e) { incoming[e.eventId] = e; });
+
+    var existing = (appData.inventory_events || []).filter(function(e) {
+      return e && e.sessionId === cycle.sessionId;
+    });
+
+    existing.forEach(function(evt) {
+      if (evt.manualAdd) return;                 // kept regardless; nothing to decide
+      if (!evt.manuallyEdited) return;           // file is its only author
+      var inc = incoming[evt.eventId];
+      var mine = _invHistDiffValue(evt);
+      if (!inc) {
+        diffs.push({ cycleKey: cycle.cycleKey, sessionId: cycle.sessionId, eventId: evt.eventId,
+                     itemNumber: evt.itemNumber, description: evt.description,
+                     ident: evt.serial ? "S/N " + evt.serial : (evt.reelNumber ? "Reel " + evt.reelNumber : ""),
+                     mine: mine, theirs: null, gone: true, choice: "mine" });
+        return;
+      }
+      var theirs = _invHistDiffValue(inc);
+      if (_invHistSameValue(mine, theirs)) return;   // file caught up; no conflict
+      diffs.push({ cycleKey: cycle.cycleKey, sessionId: cycle.sessionId, eventId: evt.eventId,
+                   itemNumber: evt.itemNumber, description: evt.description,
+                   ident: evt.serial ? "S/N " + evt.serial : (evt.reelNumber ? "Reel " + evt.reelNumber : ""),
+                   mine: mine, theirs: theirs, gone: false, choice: "mine" });
+    });
+  });
+  return diffs;
+}
+
+function _invHistDiffText(v) {
+  if (!v) return "not in the file any more";
+  var parts = [String(v.qty)];
+  if (v.location) parts.push("at " + v.location);
+  if (v.status === "voided") parts.push("(removed)");
+  return parts.join(" ");
+}
+
+function invHistDiffSetChoice(eventId, choice) {
+  if (!INV_HIST_DIFFS) return;
+  INV_HIST_DIFFS.list.forEach(function(d) { if (d.eventId === eventId) d.choice = choice; });
+  renderInvHistDiff();
+}
+
+function invHistDiffSetAll(choice) {
+  if (!INV_HIST_DIFFS) return;
+  INV_HIST_DIFFS.list.forEach(function(d) { if (!(choice === "theirs" && d.gone)) d.choice = choice; });
+  renderInvHistDiff();
+}
+
+function renderInvHistDiff() {
+  var host = $("invHistDiffBody");
+  if (!host || !INV_HIST_DIFFS) return;
+  var list = INV_HIST_DIFFS.list;
+  var keepMine = list.filter(function(d) { return d.choice === "mine"; }).length;
+
+  var note = $("invHistDiffNote");
+  if (note) {
+    note.innerHTML = "<strong>" + list.length + "</strong> row" + (list.length === 1 ? "" : "s") +
+      " you changed in TIM " + (list.length === 1 ? "differs" : "differ") + " from the file. " +
+      "Keeping " + keepMine + " of yours, taking " + (list.length - keepMine) + " from the file. " +
+      "Rows you never touched are refreshed from the file either way.";
+  }
+
+  host.innerHTML = list.map(function(d) {
+    return "<tr>" +
+      "<td>" + escapeHtml(d.cycleKey) + "</td>" +
+      "<td>" + escapeHtml(d.itemNumber || "") + "</td>" +
+      "<td>" + escapeHtml((d.description || "").slice(0, 40)) + "</td>" +
+      '<td class="small">' + escapeHtml(d.ident) + "</td>" +
+      "<td>" + escapeHtml(_invHistDiffText(d.mine)) + "</td>" +
+      "<td>" + escapeHtml(_invHistDiffText(d.theirs)) + "</td>" +
+      '<td style="white-space:nowrap">' +
+        '<label style="margin-right:8px;"><input type="radio" name="d_' + escapeHtml(d.eventId) + '" ' +
+          (d.choice === "mine" ? "checked" : "") +
+          ' onchange="invHistDiffSetChoice(\'' + escapeHtml(d.eventId) + '\',\'mine\')" /> Mine</label>' +
+        (d.gone ? "" :
+        '<label><input type="radio" name="d_' + escapeHtml(d.eventId) + '" ' +
+          (d.choice === "theirs" ? "checked" : "") +
+          ' onchange="invHistDiffSetChoice(\'' + escapeHtml(d.eventId) + '\',\'theirs\')" /> File</label>') +
+      "</td></tr>";
+  }).join("");
+}
+
+function invHistDiffClose() {
+  var m = $("invHistDiffModal");
+  if (m) m.classList.add("hidden");
+  INV_HIST_DIFFS = null;
+}
+
+function invHistDiffCancelImport() {
+  invHistDiffClose();
+  alert("Import cancelled. Nothing was changed.\n\n" +
+        "Adjust the spreadsheet so it matches, then import it again.");
+}
+
+function invHistDiffApply() {
+  if (!INV_HIST_DIFFS) return;
+  var keep = {};
+  INV_HIST_DIFFS.list.forEach(function(d) { if (d.choice === "mine") keep[d.eventId] = true; });
+  var cycles = INV_HIST_DIFFS.cycles;
+  invHistDiffClose();
+  _invHistWriteCycles(cycles, keep);
 }
 
 // -- Event creation -------------------------------------------------

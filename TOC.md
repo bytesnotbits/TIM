@@ -240,6 +240,33 @@ CSS: `.panel-toggle` / `.panel-toggle-btn` (`styles.css`) — the in-card segmen
 | `renderInvHistPreview()` / `invHistToggleCycle` / `invHistRelabelCycle` | The review modal: per-cycle include checkbox, editable label for a guessed cycle, and the skipped/flagged row list. **Nothing is patched up automatically** — problems are reported for fixing at source |
 | `invHistCommit()` | Writes the chosen cycles. Drops each cycle's existing events before inserting, so a row deleted at source disappears rather than lingering |
 | `invHistImportedSessions()` / `invHistRemove(id)` / `renderInvHistImported()` | Imported-cycle list + removal. `invHistRemove` refuses any session not flagged `imported` — a scanned count cannot be deleted from here by any path |
+| `_invHistWriteCycles(cycles, keepMine)` | The actual write, split out of `invHistCommit` so the diff flow and the no-diff flow share one path. `keepMine` holds eventIds whose ON-RECORD version beats the incoming file row; manual adds are appended unconditionally |
+
+### Editing an imported cycle (`invHistEdit*`, v2.61.00)
+
+> Small corrections happen **in TIM**; a re-import is for bulk change. Reached from **Past Counts → (select an imported cycle) → Edit rows**, or the Edit rows button in the imported-cycle list. Only sessions flagged `imported` are editable — a scanned count stays read-only, because it carries a real audit trail of what somebody physically did and correcting a transcription is a different act. Every entry point re-checks the flag rather than trusting its caller.
+
+| Function | Purpose |
+|---|---|
+| `invHistEditableSession(id)` | The gate. Returns the session only if `imported` |
+| `_invHistSnapshot(evt)` / `_invHistStampEdit(evt)` | Captures `importedValues` (the row exactly as the file gave it) on **first** edit — lazily, so the 9k-row payload doesn't carry a second copy of itself — then stamps `editedBy`/`editedAt`. That snapshot is what lets a later re-import tell "the file changed" from "Joe changed it", and what Revert restores |
+| `invHistRowDiverged(evt)` | Has this row moved away from its file value? Drives the EDITED badge |
+| `invHistEditOpen/Close` / `renderInvHistEditRows()` / `invHistEditSearch()` | The modal: searchable row list (capped at `INV_HIST_EDIT_CAP` = 200) with inline qty + location, Remove/Restore and Revert per row |
+| `invHistEditSetField(id, field, value)` | Pending-edit buffer (applied on Save, so one Save = one push). **Refuses a qty edit on a `serialized_device_scan`** — that row is one specific device and the rollup scores one unit per serialized event *ignoring* `qty`, so accepting "0" would report a save that moved nothing on screen. Those rows render "1 device" as text, and Remove is what actually takes them out of the count. Same bug family as the `\|\| 1` default |
+| `invHistEditToggleVoid(id)` | **Removal voids, it does not delete.** `status: "voided"` already exists and the rollups already exclude it, so the row stops counting while the record still shows it was there and who dropped it — and a hard delete would come back on the next import anyway |
+| `invHistEditAddRow()` / `invHistEditRemoveAdded(i)` | Adds a row that exists in no file; saved with `manualAdd: true`, which is what makes a re-import keep it |
+| `invHistEditSave()` | Applies the buffer, stamps the session `lastEditedBy/At`, persists, pushes |
+
+### Re-import vs in-app edits (`invHistDiff*`, v2.61.00)
+
+> Once a cycle is editable, a re-import is two sources of truth meeting. Rows nobody touched are refreshed from the file without asking; only the user's own edits can conflict.
+
+| Function / Variable | Purpose |
+|---|---|
+| `invHistComputeDiffs(cycles)` | Classifies each row: untouched → refresh; `manualAdd` → always kept, never a diff; edited **and the file now agrees** → refresh (divergence resolved); edited and the file disagrees, or edited and **gone from the file** → a diff to resolve |
+| `INV_HIST_DIFF_LIMIT` (25) | **The volume gate.** One-at-a-time review is right for a handful and punishing for hundreds, so past the limit the user is told the count and offered the honest alternative — review anyway, or cancel and fix the spreadsheet. Better to send someone back to the source than march them through 400 dialogs |
+| `renderInvHistDiff()` / `invHistDiffSetChoice` / `invHistDiffSetAll` | Per-row Mine/File radios + "Keep all mine" / "Take all from file". A row the file has dropped offers Mine only |
+| `invHistDiffApply()` / `invHistDiffCancelImport()` | Apply the choices via `_invHistWriteCycles`, or abandon the import having written nothing |
 
 ---
 ---
