@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.59.01";
+const APP_VERSION = "v2.60.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5321,7 +5321,7 @@ function renderInvProgressDetail() {
     if (evt.description && !r.description) r.description = evt.description;
     if (evt.timestamp && evt.timestamp > r.last) r.last = evt.timestamp;
     if      (evt.eventType === "serialized_device_scan") r.qty += 1;
-    else if (evt.eventType === "bulk_quantity_count")    r.qty += (Number(evt.qty) || 1);
+    else if (evt.eventType === "bulk_quantity_count")    r.qty += invEventUnits(evt);
     else if (evt.eventType === "cable_reel_count")       r.ft  += (Number(evt.totalAvailableFt != null ? evt.totalAvailableFt : evt.qty) || 0);
   });
 
@@ -5437,18 +5437,37 @@ var invPastPanel        = "counts";   // "counts" | "item"
 var invPastSelectedId   = "";         // selected session (By Count)
 var invPastSelectedItem = "";         // selected item    (By Item)
 
-// Finalized sessions, most recently closed first. `closedAt` is the real
-// ordering key; updatedAt/createdAt are fallbacks for sessions that predate it.
-// Never sort on sessionName — it leads with the username, so it orders by
-// person, then date.
+// Finalized sessions, most recent cycle first. Never sort on sessionName —
+// it leads with the username, so it orders by person, then date.
+//
+// `cycleEnd` comes first because a cycle is frequently counted after its
+// quarter has closed: 2025.4 was counted in January, so its closedAt is
+// EARLIER than 2025.1's and sorting on the count date alone drops it in
+// among the wrong year. An imported historical cycle therefore carries
+// `cycleEnd` (the end of the quarter its label names) as its ordering key,
+// while closedAt stays the day people actually counted. A live scanned
+// session has no cycleEnd and falls through to closedAt exactly as before.
+function _invPastSortStamp(s) {
+  return (s && (s.cycleEnd || s.closedAt || s.updatedAt || s.createdAt)) || "";
+}
+
 function invPastSessions() {
   return (appData.inventory_sessions || []).filter(function(s) {
     return s && s.status === "closed";
   }).slice().sort(function(a, b) {
-    var at = a.closedAt || a.updatedAt || a.createdAt || "";
-    var bt = b.closedAt || b.updatedAt || b.createdAt || "";
+    var at = _invPastSortStamp(a), bt = _invPastSortStamp(b);
     return at > bt ? -1 : at < bt ? 1 : 0;
   });
+}
+
+// The badge that keeps the record honest: a reconstructed rollup line must
+// never be indistinguishable from something somebody actually scanned.
+function invPastImportedBadge(s) {
+  if (!s || !s.imported) return "";
+  return ' <span title="Loaded from a spreadsheet, not scanned in TIM" ' +
+         'style="display:inline-block;font-size:10px;font-weight:700;letter-spacing:.03em;' +
+         'background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd;border-radius:999px;' +
+         'padding:1px 6px;vertical-align:middle;">IMPORTED</span>';
 }
 
 // One pass over the event array, bucketed by session. Both panels need events
@@ -5478,6 +5497,25 @@ function invPastCountedBy(s) {
   return (s && s.createdBy) || invEventCountedBy({ sessionId: s && s.sessionId }) || "(unknown)";
 }
 
+// How many units a bulk_quantity_count event is worth.
+//
+// This used to be written inline as `Number(evt.qty) || 1` in six places,
+// and that idiom cannot tell "no quantity was recorded, assume one" apart
+// from "we counted this item and found ZERO" — `0 || 1` is 1. Nothing a
+// live scan produces can hit it: the scan path hard-codes qty 1 and the
+// keypad path clamps with `if (isNaN(qty) || qty < 1) qty = 1`, so no
+// scanned event has ever carried a zero. Historical imports do — 322 rows
+// across the spreadsheets are a deliberate "looked, found none" — and
+// every one of them was landing in the record as one unit found.
+//
+// So: a missing quantity still defaults to 1, an explicit 0 stays 0.
+function invEventUnits(evt) {
+  var q = evt ? evt.qty : undefined;
+  if (q === undefined || q === null || q === "") return 1;
+  var n = Number(q);
+  return isNaN(n) ? 1 : n;
+}
+
 // Per-item rollup for one session's events, plus the location breakdown the
 // Summary map doesn't carry. Exclusions match buildInvSummaryMap exactly
 // (voided / void_event / box_scan) so a past count totals here the same way it
@@ -5499,7 +5537,7 @@ function invPastRollup(events) {
 
     var units = 0, feet = 0;
     if      (evt.eventType === "serialized_device_scan") { units = 1; r.serialized += 1; }
-    else if (evt.eventType === "bulk_quantity_count")    { units = Number(evt.qty) || 1; }
+    else if (evt.eventType === "bulk_quantity_count")    { units = invEventUnits(evt); }
     else if (evt.eventType === "cable_reel_count")       {
       feet = Number(evt.totalAvailableFt != null ? evt.totalAvailableFt : evt.qty) || 0;
     }
@@ -5571,6 +5609,8 @@ function renderInvPast() {
 
   if (invPastPanel === "counts") renderInvPastSessions();
   else                           renderInvPastItem();
+
+  renderInvHistImported();
 }
 
 // -- By Count ---------------------------------------------------------
@@ -5600,11 +5640,17 @@ function renderInvPastSessions() {
     var units = 0, feet = 0;
     keys.forEach(function(k) { units += roll[k].qty; feet += roll[k].ft; });
     var closed = s.closedAt || s.updatedAt || "";
+    // An imported cycle shows the day it was COUNTED, not a finalize click
+    // that never happened — and says so, rather than dressing a spreadsheet
+    // date up as a session being closed.
+    var when = s.imported
+      ? (s.datesMissing ? "not recorded" : new Date(closed).toLocaleDateString())
+      : (closed ? new Date(closed).toLocaleString() : "—");
     return '<tr class="' + (s.sessionId === invPastSelectedId ? "queue-row-selected" : "") + '">' +
       "<td><a href=\"#\" onclick=\"invPastSelect('" + escapeHtml(s.sessionId) + "');return false;\">" +
-        escapeHtml(s.sessionName || s.sessionId) + "</a></td>" +
+        escapeHtml(s.sessionName || s.sessionId) + "</a>" + invPastImportedBadge(s) + "</td>" +
       "<td>" + escapeHtml(invPastCountedBy(s)) + "</td>" +
-      "<td style=\"white-space:nowrap\">" + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") + "</td>" +
+      "<td style=\"white-space:nowrap\">" + escapeHtml(when) + "</td>" +
       "<td style=\"text-align:right\">" + keys.length + "</td>" +
       "<td style=\"text-align:right\">" + (units ? units.toLocaleString() : "") + "</td>" +
       "<td style=\"text-align:right\">" + (feet ? feet.toLocaleString() : "") + "</td>" +
@@ -5633,10 +5679,18 @@ function renderInvPastDetail() {
   host.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:16px 0 6px;">' +
       "<div><h3 style=\"margin:0;font-size:14px;color:#166534;\">" +
-        escapeHtml(sess.sessionName || sess.sessionId) + "</h3>" +
+        escapeHtml(sess.sessionName || sess.sessionId) + invPastImportedBadge(sess) + "</h3>" +
       '<p class="small" style="margin:2px 0 0;">Counted by ' + escapeHtml(invPastCountedBy(sess)) +
-        " &middot; finalized " + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") +
-        " &middot; read-only historical record.</p></div>" +
+        (sess.imported
+          ? " &middot; counted " + escapeHtml(sess.datesMissing
+              ? "on a date the spreadsheet does not record"
+              : new Date(sess.createdAt || closed).toLocaleDateString() +
+                (closed && closed !== sess.createdAt ? " - " + new Date(closed).toLocaleDateString() : "")) +
+            " &middot; loaded from " + escapeHtml((sess.importedFrom || []).join(", ") || "a spreadsheet") +
+            ", not scanned in TIM."
+          : " &middot; finalized " + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") +
+            " &middot; read-only historical record.") +
+        "</p></div>" +
       "<div style=\"display:flex;gap:6px;flex-wrap:wrap;\">" +
         '<button class="btn-compact" onclick="invPastExportSummary(\'xlsx\')">Export Items (XLSX)</button>' +
         '<button class="btn-compact secondary" onclick="invPastExportSummary(\'csv\')">CSV</button>' +
@@ -5776,9 +5830,13 @@ function renderInvPastItemDetail(idx) {
     "</tr></thead><tbody>" +
     rec.rows.map(function(x) {
       var closed = x.session.closedAt || x.session.updatedAt || "";
-      return "<tr><td>" + escapeHtml(x.session.sessionName || x.session.sessionId) + "</td>" +
+      var when   = x.session.imported
+        ? (x.session.datesMissing ? "not recorded" : new Date(closed).toLocaleDateString())
+        : (closed ? new Date(closed).toLocaleString() : "—");
+      return "<tr><td>" + escapeHtml(x.session.sessionName || x.session.sessionId) +
+          invPastImportedBadge(x.session) + "</td>" +
         "<td>" + escapeHtml(invPastCountedBy(x.session)) + "</td>" +
-        "<td style=\"white-space:nowrap\">" + escapeHtml(closed ? new Date(closed).toLocaleString() : "—") + "</td>" +
+        "<td style=\"white-space:nowrap\">" + escapeHtml(when) + "</td>" +
         "<td style=\"text-align:right\">" + (x.qty ? x.qty.toLocaleString() : "") + "</td>" +
         "<td style=\"text-align:right\">" + (x.serialized ? x.serialized.toLocaleString() : "") + "</td>" +
         "<td style=\"text-align:right\">" + (x.ft ? x.ft.toLocaleString() : "") + "</td>" +
@@ -5881,6 +5939,994 @@ function invPastExportItem(fmt) {
     return;
   }
   timDownloadXlsx(file + ".xlsx", INV_PAST_ITEM_HEADERS, rows, "Item by Cycle", INV_PAST_ITEM_NUMERIC);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// HISTORICAL COUNT IMPORT (invHist*, v2.60.00)
+//
+// Loads counts that happened BEFORE TIM into the Past Counts record, so
+// "how many did we count last cycle, and the cycle before?" reaches back
+// past the point where TIM started scanning.
+//
+// These files are spreadsheets kept by hand over several years, so they do
+// not share one shape: an item/serial rollup keyed by a YEAR.QTR label, and
+// two different cable-reel exports. Each is detected by its header
+// signature and normalised into the SAME intermediate row, and only then
+// turned into sessions + events. Adding a fourth shape means adding one
+// entry to INV_HIST_SOURCES, not touching the builder.
+//
+// WHAT IT WRITES: `appData.inventory_sessions` / `inventory_events` only —
+// one synthesised CLOSED session per count cycle. It never touches
+// `invSession`/`invEvents`, so Past Counts stays read-only with respect to
+// live counting, and never writes the reel registry (`appData.reels`):
+// that holds CURRENT state under the sticky-sequence rule, and feeding it
+// 2025 markers would let an old reading overwrite a newer one.
+//
+// HONEST BY CONSTRUCTION. Every synthesised session carries `imported:true`
+// and shows an "Imported" badge wherever it renders. A reconstructed rollup
+// line must never be indistinguishable from a real scan — the event log is
+// an audit trail, and a fabricated row that looks scanned destroys that.
+//
+// IDEMPOTENT. Session ids are derived from the cycle label and event ids
+// from row IDENTITY (cycle + item + serial/reel + location + ordinal), not
+// from quantity — so re-importing a file whose quantities were corrected
+// updates those rows in place instead of doubling them, and re-importing
+// an unchanged file is a no-op. Commit also drops the cycle's existing
+// events before inserting, so a row deleted at source disappears here.
+//
+// THE CYCLE LABEL IS A FACT, NOT A HYPOTHESIS. A count is routinely done
+// after its quarter has closed — 2024.4 was counted in January 2025 — so a
+// count date lying outside its own quarter is ordinary and is NEVER treated
+// as evidence that the label is wrong. Consequences, both deliberate:
+//   * Cycles are ORDERED by `cycleEnd`, derived from the label, not by when
+//     anyone counted. Sorting on the date would file a late-counted Q4 in
+//     among the next year's Q1.
+//   * A calendar quarter is only ever derived from a date for a file that
+//     carries NO label at all, and then it is flagged `cycleAssumed` and
+//     the user confirms it before anything is written.
+//
+// VALIDATE, DON'T PATCH. Bad source data is reported and the cycle is held
+// back for an explicit override; nothing is silently repaired. The one
+// structural check is the ADJUSTMENT LEDGER: a "cycle" that is really a
+// relocation pass (+1 at the new location, -1 at the old) nets to ~zero
+// while looking row-for-row exactly like a count. Imported as one it
+// invents a cycle of thousands of units that never happened. Detected by
+// shape, never by cycle name, and defaulted OFF.
+// ═══════════════════════════════════════════════════════════════════════
+
+var INV_HIST_STAGED = null;   // parsed plan awaiting the user's confirmation
+
+// Full CSV state machine — NOT _parseCsvToRowObjects, which splits on
+// newlines before it parses quotes. The reel export carries multi-line
+// NOTES cells ("2026.2\nYellow sequences"), and a line-first split tears
+// every one of them into a broken row plus a phantom row.
+function _invHistParseCsv(text) {
+  text = String(text || "").replace(/^﻿/, "");
+  var rows = [], row = [], field = "", inQuotes = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"')  inQuotes = true;
+    else if (c === ",")    { row.push(field); field = ""; }
+    else if (c === "\r")   { /* swallowed; \n ends the row */ }
+    else if (c === "\n")   { row.push(field); rows.push(row); row = []; field = ""; }
+    else field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return { headers: [], rows: [] };
+
+  var headers = rows[0].map(function(h) { return String(h || "").trim(); });
+  var out = [];
+  rows.slice(1).forEach(function(r, idx) {
+    if (!r.some(function(c) { return String(c || "").trim() !== ""; })) return;  // blank padding row
+    var o = { _line: idx + 2 };
+    headers.forEach(function(h, i) { if (h) o[h] = String(r[i] == null ? "" : r[i]).trim(); });
+    out.push(o);
+  });
+  return { headers: headers, rows: out };
+}
+
+// "1,304" -> 1304. Blank, the literal string "null" (a spreadsheet export
+// artefact in the legacy reel file) and anything non-numeric -> null, so
+// the caller reports the row instead of silently treating it as zero. One
+// real row has a LOCATION sitting in the quantity column.
+function _invHistNum(v) {
+  var s = String(v == null ? "" : v).trim();
+  if (!s || s.toLowerCase() === "null") return null;
+  if (!/^-?[\d,]*\.?\d+$/.test(s)) return null;
+  var n = parseFloat(s.replace(/,/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+// "6/30/2026 10:06" / "7/8/2026" -> ISO. Parsed as local time, which is how
+// they were written; "" when unparseable rather than an Invalid Date that
+// poisons every sort it touches downstream.
+function _invHistDate(v) {
+  var s = String(v == null ? "" : v).trim();
+  if (!s || s.toLowerCase() === "null") return "";
+  var m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) { var d0 = new Date(s); return isNaN(d0) ? "" : d0.toISOString(); }
+  var d = new Date(+m[3], +m[1] - 1, +m[2], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0);
+  return isNaN(d) ? "" : d.toISOString();
+}
+
+function _invHistCycleParts(cycleKey) {
+  var m = String(cycleKey || "").match(/^(\d{4})\.([1-4])$/);
+  return m ? { year: +m[1], q: +m[2] } : null;
+}
+
+// Built in UTC on purpose. These are period boundaries, not moments anyone
+// experienced, and a local-time 23:59:59 stringifies to the NEXT day in UTC
+// — so "2024.2" would store and display a cycleEnd of 2024-07-01. Ordering
+// survives that, but a record that prints the wrong day is a record people
+// stop trusting.
+function _invHistQuarterStart(cycleKey) {
+  var p = _invHistCycleParts(cycleKey);
+  if (!p) return "";
+  return new Date(Date.UTC(p.year, (p.q - 1) * 3, 1, 0, 0, 0)).toISOString();
+}
+
+function _invHistQuarterEnd(cycleKey) {
+  var p = _invHistCycleParts(cycleKey);
+  if (!p) return "";
+  return new Date(Date.UTC(p.year, p.q * 3, 0, 23, 59, 59)).toISOString();   // day 0 of next month = last day of this one
+}
+
+function _invHistCycleFromDate(iso) {
+  if (!iso) return "";
+  var d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.getFullYear() + "." + (Math.floor(d.getMonth() / 3) + 1);
+}
+
+// FNV-1a. Only needs to be stable and collision-resistant enough to key a
+// row within one cycle — it is not a security hash.
+function _invHistHash(str) {
+  var h = 0x811c9dc5;
+  str = String(str);
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(36);
+}
+
+// Catalog lookup. The file's own item number stays the event's itemNumber —
+// it is the NISC number the warehouse searches by, and swapping in a catalog
+// key would show a vendor part number for the ~30 items keyed that way. The
+// resolved key rides along as `mappedKey` and the catalog supplies the
+// description, which is better maintained than the spreadsheet's copy.
+function _invHistResolveItem(rawItem, rawDesc) {
+  var item = String(rawItem || "").trim();
+  var out  = { item: item, description: String(rawDesc || "").trim(), mappedKey: "", matched: false };
+  if (!item) return out;
+  var mm = (typeof findProductMapMatch === "function") ? findProductMapMatch(item) : null;
+  if (mm && mm.entry) {
+    out.matched   = true;
+    out.mappedKey = mm.key;
+    var d = getMapDescription(mm.entry);
+    if (d) out.description = d;
+  }
+  return out;
+}
+
+// -- Source shapes ----------------------------------------------------
+//
+// Each parser returns the SAME normalised row so the plan builder never has
+// to know which spreadsheet a number came from:
+//   { cycleKey, kind:"unit"|"reel", item, description, mappedKey, matched,
+//     serial, reelNumber, inner, outer, qty, ft, location, locationParent,
+//     countedBy, timestamp, notes, sourceLine }
+// plus `problems[]` for rows it refused to guess at.
+
+var INV_HIST_SOURCES = [
+  {
+    id: "cycle_rollup",
+    label: "Cycle count (items and serials)",
+    match: function(h) { return h.indexOf("YEAR.QTR") >= 0 && h.indexOf("QuantitySum") >= 0; },
+    parse: function(parsed, fileName) { return _invHistParseCycleRollup(parsed, fileName); }
+  },
+  {
+    id: "reel_export",
+    label: "Reel count (sequence export)",
+    match: function(h) { return h.indexOf("Reels No") >= 0 && h.indexOf("Quantity") >= 0; },
+    parse: function(parsed, fileName) { return _invHistParseReelExport(parsed, fileName); }
+  },
+  {
+    id: "reel_legacy",
+    label: "Reel count (counted / captured)",
+    match: function(h) { return h.indexOf("REEL") >= 0 && h.indexOf("COUNTED") >= 0 && h.indexOf("CAPTURED") >= 0; },
+    parse: function(parsed, fileName) { return _invHistParseReelLegacy(parsed, fileName); }
+  }
+];
+
+function invHistDetectSource(headers) {
+  for (var i = 0; i < INV_HIST_SOURCES.length; i++) {
+    if (INV_HIST_SOURCES[i].match(headers)) return INV_HIST_SOURCES[i];
+  }
+  return null;
+}
+
+// The item/serial rollup. LOCATION LIVES IN TWO COLUMNS and they are not
+// rivals: where both are filled, `Location` is the parent warehouse
+// ("W367 - INGRAM - WAREHOUSE/YARD") and `Ticket` is the actual bin (Y01,
+// S04, FG). So Ticket wins when present and Location is kept as the parent.
+// In the earliest cycles `Location` is empty and Ticket carries the only
+// location there is.
+//
+// Strings are stored VERBATIM. The same bin is written four ways across the
+// years (W367/Stock/3900, W367/S/3900, WH03900, 3800) and there is no
+// formula from any of them to an Odoo location; the column also holds
+// things that are not locations at all (NISC, CAPTURE, UNKNOWN, "XFER TO
+// W367"). Normalising would invent a precision the source never had.
+function _invHistParseCycleRollup(parsed, fileName) {
+  var rows = [], problems = [];
+  parsed.rows.forEach(function(r) {
+    var cycleKey = String(r["YEAR.QTR"] || "").trim();
+    var item     = String(r["Item"] || "").trim();
+    if (!cycleKey || !item) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Row has no cycle (YEAR.QTR) or no Item - skipped." });
+      return;
+    }
+    var qty = _invHistNum(r["QuantitySum"]);
+    if (qty === null) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Item " + item + " (" + cycleKey + "): quantity is \"" +
+                           (r["QuantitySum"] || "") + "\", not a number - row skipped." });
+      return;
+    }
+    var res    = _invHistResolveItem(item, r["Description"]);
+    var ticket = String(r["Ticket"] || "").trim();
+    var locCol = String(r["Location"] || "").trim();
+    var notes  = [];
+    if (r["REMARKS"]) notes.push(String(r["REMARKS"]).trim());
+    if (r["RECOUNT"]) notes.push("Recount: " + String(r["RECOUNT"]).trim());
+
+    rows.push({
+      cycleKey:       cycleKey,   // the YEAR.QTR label, taken as fact
+      cycleAssumed:   false,
+      kind:           "unit",
+      item:           res.item,
+      description:    res.description,
+      mappedKey:      res.mappedKey,
+      matched:        res.matched,
+      serial:         String(r["Lot/Serial"] || "").trim(),
+      reelNumber:     "",
+      inner:          null, outer: null,
+      qty:            qty,
+      ft:             0,
+      location:       ticket || locCol,
+      locationParent: (ticket && locCol) ? locCol : "",
+      countedBy:      String(r["COUNTED BY"] || "").trim(),
+      timestamp:      _invHistDate(r["COUNT DATE"]),
+      notes:          notes.join(" | "),
+      sourceLine:     r._line
+    });
+  });
+  return { rows: rows, problems: problems };
+}
+
+// Reel export. `Quantity` is the recorded footage and is authoritative;
+// |inner - outer| is a cross-check, not a replacement - where the two
+// disagree the source is reporting something the arithmetic doesn't know
+// about (a splice, a partial pull), so the row is kept and flagged rather
+// than silently recomputed.
+function _invHistParseReelExport(parsed, fileName) {
+  var rows = [], problems = [];
+  parsed.rows.forEach(function(r) {
+    var item = String(r["SKU"] || "").trim();
+    var reel = String(r["Reels No"] || "").trim();
+    if (!item || !reel) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Row has no SKU or no reel number - skipped." });
+      return;
+    }
+    var ft = _invHistNum(r["Quantity"]);
+    if (ft === null) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Reel " + reel + ": quantity is \"" + (r["Quantity"] || "") +
+                           "\", not a number - row skipped." });
+      return;
+    }
+    var rawNotes = String(r["NOTES"] || "").replace(/\s*\n+\s*/g, " | ").trim();
+    var ts       = _invHistDate(r["Last Updated on"]);
+    // The NOTES cell carries the cycle tag ("2026.2"). THE TAG IS THE FACT.
+    // A count date outside its own quarter is normal and not a defect -
+    // counting often doesn't start until after the period closes - so the
+    // date is never used to second-guess a label that is actually there.
+    // It is only a fallback for a file that carries no label at all, and
+    // then the guess is marked `cycleAssumed` for the user to confirm.
+    var tagged   = (rawNotes.match(/\b(\d{4})\.([1-4])\b/) || [])[0] || "";
+    var cycleKey = tagged || _invHistCycleFromDate(ts);
+    if (!cycleKey) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Reel " + reel + ": no cycle tag in NOTES and no usable date - skipped." });
+      return;
+    }
+    var inner = _invHistNum(r["Inner Sequence No"]);
+    var outer = _invHistNum(r["Outer Sequence No"]);
+    if (inner !== null && outer !== null && Math.abs(Math.abs(inner - outer) - ft) >= 0.5) {
+      problems.push({ severity: "warn", file: fileName, line: r._line,
+                      msg: "Reel " + reel + ": recorded " + ft.toLocaleString() + " ft but inner/outer (" +
+                           inner + "/" + outer + ") works out to " + Math.abs(inner - outer).toLocaleString() +
+                           " ft - keeping the recorded figure." });
+    }
+    var res = _invHistResolveItem(item, String(r["Description"] || "").replace(/^\s*\[[^\]]*\]\s*/, ""));
+    rows.push({
+      cycleKey: cycleKey, cycleAssumed: !tagged, kind: "reel",
+      item: res.item, description: res.description, mappedKey: res.mappedKey, matched: res.matched,
+      serial: "", reelNumber: reel,
+      inner: inner, outer: outer,
+      qty: 0, ft: ft,
+      location: "", locationParent: "",
+      countedBy: "", timestamp: ts,
+      notes: rawNotes, sourceLine: r._line
+    });
+  });
+  return { rows: rows, problems: problems };
+}
+
+// The older reel sheet. COUNTED is the count - it agrees with
+// |OUTER - INNER| on every checkable row, so it is the figure that is
+// internally consistent with the markers. CAPTURED is what reached the
+// system afterwards; where the two differ that gap is itself worth keeping,
+// so it goes in the note rather than being dropped or silently preferred.
+function _invHistParseReelLegacy(parsed, fileName) {
+  var rows = [], problems = [], seen = {};
+  parsed.rows.forEach(function(r) {
+    var item = String(r["Item"] || "").trim();
+    var reel = String(r["REEL"] || "").trim();
+    if (!item || !reel) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Row has no Item or no REEL - skipped." });
+      return;
+    }
+    var ft = _invHistNum(r["COUNTED"]);
+    if (ft === null) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Reel " + reel + ": COUNTED is \"" + (r["COUNTED"] || "") +
+                           "\", not a number - row skipped." });
+      return;
+    }
+    // THIS SHEET CARRIES NO CYCLE LABEL AT ALL - no YEAR.QTR column, no tag
+    // in a note. The calendar quarter of the count date is therefore a GUESS,
+    // not a fact, and it is exactly the inference that goes wrong when a
+    // quarter is counted after it closed. So every row is marked
+    // `cycleAssumed` and the preview makes the user confirm or change the
+    // cycle before anything is written.
+    var ts       = _invHistDate(r["countdate/time"]);
+    var cycleKey = _invHistCycleFromDate(ts);
+    if (!cycleKey) {
+      problems.push({ severity: "skip", file: fileName, line: r._line,
+                      msg: "Reel " + reel + ": no usable count date, so no cycle to file it under - skipped." });
+      return;
+    }
+    var key = cycleKey + "|" + reel.toUpperCase();
+    if (seen[key]) {
+      problems.push({ severity: "warn", file: fileName, line: r._line,
+                      msg: "Reel " + reel + " appears more than once in " + cycleKey +
+                           " - both rows are kept; check the source if that is a duplicate." });
+    }
+    seen[key] = true;
+
+    var captured = _invHistNum(r["CAPTURED"]);
+    var notes    = [];
+    if (captured !== null && Math.abs(captured - ft) >= 0.5) {
+      notes.push("Captured into the system as " + captured.toLocaleString() + " ft");
+    } else if (captured === null && String(r["CAPTURED"] || "").trim()) {
+      notes.push("Captured value not recorded (\"" + String(r["CAPTURED"]).trim() + "\")");
+    }
+    var res = _invHistResolveItem(item, "");
+    rows.push({
+      cycleKey: cycleKey, cycleAssumed: true, kind: "reel",
+      item: res.item, description: res.description, mappedKey: res.mappedKey, matched: res.matched,
+      serial: "", reelNumber: reel,
+      inner: _invHistNum(r["INNER"]), outer: _invHistNum(r["OUTER"]),
+      qty: 0, ft: ft,
+      location: "", locationParent: "",
+      countedBy: "", timestamp: ts,
+      notes: notes.join(" | "), sourceLine: r._line
+    });
+  });
+  return { rows: rows, problems: problems };
+}
+
+// -- Plan building ----------------------------------------------------
+//
+// THE CYCLE LABEL IS THE FACT, AND IT IS ALSO THE ORDER. A cycle is very
+// often counted after its quarter has closed - 2024.4 was counted in
+// January - so the count DATE cannot order the record: sorting on it drops
+// a Q4 cycle in among the following year's Q1. `cycleEnd` (the last day of
+// the labelled quarter) is therefore the ordering key, and the real count
+// dates are carried alongside it and shown as what they are.
+function invHistSessionIdFor(cycleKey) {
+  return "inv_hist_" + String(cycleKey).replace(/[^0-9A-Za-z]+/g, "_");
+}
+
+// Identity, NOT contents. Quantity is deliberately excluded so that
+// re-importing a file whose numbers were corrected updates the same rows
+// instead of orphaning the originals and adding new ones beside them.
+function _invHistEventId(cycleKey, row, ordinal) {
+  var identity = [cycleKey, row.kind, row.item.toUpperCase(),
+                  (row.serial || "").toUpperCase(),
+                  (row.reelNumber || "").toUpperCase(),
+                  (row.location || "").toUpperCase(), ordinal].join("|");
+  return "evt_hist_" + _invHistHash(identity);
+}
+
+function invHistBuildPlan(parsedFiles) {
+  var cycles = {}, order = [], problems = [];
+  var allRows = [];
+
+  parsedFiles.forEach(function(pf) {
+    problems = problems.concat(pf.problems || []);
+    (pf.rows || []).forEach(function(r) {
+      r.sourceFile = pf.fileName;
+      r.sourceId   = pf.sourceId;
+      allRows.push(r);
+    });
+  });
+
+  allRows.forEach(function(r) {
+    var key = r.cycleKey;
+    if (!cycles[key]) {
+      cycles[key] = { cycleKey: key, rows: [], files: {}, assumed: false,
+                      countedBy: {}, dates: [] };
+      order.push(key);
+    }
+    var c = cycles[key];
+    c.rows.push(r);
+    c.files[r.sourceFile] = true;
+    if (r.cycleAssumed) c.assumedRows = (c.assumedRows || 0) + 1;
+    if (r.countedBy) c.countedBy[r.countedBy] = (c.countedBy[r.countedBy] || 0) + 1;
+    if (r.timestamp)  c.dates.push(r.timestamp);
+  });
+
+  // A cycle only needs its label CONFIRMED when nothing in it carries a real
+  // one. Reel rows dated into a quarter that a labelled sheet also covers are
+  // anchored by that sheet's label and need no prompt — but the fact that
+  // some rows were placed by date is still surfaced, because a wrong guess
+  // that happens to agree with a real label would otherwise land in silence.
+  order.forEach(function(k) {
+    cycles[k].assumed = (cycles[k].assumedRows || 0) === cycles[k].rows.length;
+  });
+
+  var plan = order.sort().map(function(key) {
+    var c        = cycles[key];
+    var dates    = c.dates.slice().sort();
+    var cycleEnd = _invHistQuarterEnd(key);
+    var units = 0, ft = 0, negRows = 0, grossPos = 0, unmatched = {}, items = {};
+
+    c.rows.forEach(function(r) {
+      items[r.item.toUpperCase()] = true;
+      if (!r.matched) unmatched[r.item] = true;
+      if (r.kind === "reel") { ft += r.ft; }
+      else {
+        units += r.qty;
+        if (r.qty < 0) negRows++; else grossPos += r.qty;
+      }
+    });
+
+    // AN ADJUSTMENT LEDGER IS NOT A COUNT. A relocation pass writes +1 at
+    // the new location and -1 at the old, so it nets to roughly nothing
+    // while looking, row for row, exactly like a count. Imported as one it
+    // invents a cycle of thousands of units that never happened and wedges
+    // a phantom row into every affected item's history. Detected by shape
+    // rather than by name, and held back for an explicit override.
+    var unitRows = c.rows.filter(function(r) { return r.kind !== "reel"; }).length;
+    var ledgerish = unitRows >= 20 &&
+                    (negRows / unitRows) >= 0.25 &&
+                    grossPos > 0 && Math.abs(units) < grossPos * 0.05;
+
+    return {
+      cycleKey:     key,
+      sessionId:    invHistSessionIdFor(key),
+      sessionName:  "Cycle count " + key,
+      cycleEnd:     cycleEnd,
+      cycleStart:   _invHistQuarterStart(key),
+      countStart:   dates[0] || "",
+      countEnd:     dates[dates.length - 1] || "",
+      datesMissing: !dates.length,
+      assumed:      c.assumed,
+      assumedRows:  c.assumedRows || 0,
+      files:        Object.keys(c.files),
+      rows:         c.rows,
+      rowCount:     c.rows.length,
+      itemCount:    Object.keys(items).length,
+      units:        units,
+      ft:           ft,
+      negRows:      negRows,
+      unmatched:    Object.keys(unmatched),
+      countedBy:    Object.keys(c.countedBy).sort(function(a, b) {
+                      return c.countedBy[b] - c.countedBy[a];
+                    }),
+      ledgerish:    ledgerish,
+      include:      !ledgerish,           // a suspected ledger starts OFF
+      existing:     !!(appData.inventory_sessions || []).filter(function(s) {
+                      return s.sessionId === invHistSessionIdFor(key);
+                    })[0]
+    };
+  });
+
+  return { cycles: plan, problems: problems };
+}
+
+// Build the session + event records for one planned cycle. Nothing here
+// touches invSession/invEvents - these go straight into the appData
+// archives that Past Counts reads.
+function invHistBuildRecords(cycle) {
+  var now      = invNow();
+  var user     = (typeof timGetUsername === "function" && timGetUsername()) || "";
+  var stampFor = function(r) { return r.timestamp || cycle.countEnd || cycle.cycleEnd; };
+  var ordinals = {};
+  var seq      = 0;
+
+  var events = cycle.rows.slice().sort(function(a, b) {
+    var at = stampFor(a), bt = stampFor(b);
+    if (at !== bt) return at < bt ? -1 : 1;
+    return (a.sourceLine || 0) - (b.sourceLine || 0);
+  }).map(function(r) {
+    // Ordinal disambiguates genuinely identical rows (same item, same
+    // serial-or-reel, same location) so they get distinct stable ids.
+    var ik = [r.kind, r.item.toUpperCase(), (r.serial || "").toUpperCase(),
+              (r.reelNumber || "").toUpperCase(), (r.location || "").toUpperCase()].join("|");
+    ordinals[ik] = (ordinals[ik] || 0) + 1;
+
+    var notes = [];
+    if (r.notes)          notes.push(r.notes);
+    if (r.locationParent) notes.push("Within " + r.locationParent);
+    if (!r.matched)       notes.push("Item not in the product catalog at import");
+
+    var evt = {
+      eventId:   _invHistEventId(cycle.cycleKey, r, ordinals[ik]),
+      sessionId: cycle.sessionId,
+      timestamp: stampFor(r),
+      sequence:  ++seq,
+      countedBy: r.countedBy || "",
+      status:    "active",
+      notes:     notes.join(" | "),
+      messages:  [],
+      // Provenance. `imported` is what the Past Counts badge and the event
+      // log read; the rest is so a number can always be traced back to the
+      // spreadsheet row it came from.
+      imported:     true,
+      importSource: r.sourceFile,
+      sourceCycle:  cycle.cycleKey,
+      sourceLine:   r.sourceLine,
+      itemNumber:   r.item,
+      description:  r.description,
+      location:     r.location || ""
+    };
+    if (r.mappedKey) evt.mappedKey = r.mappedKey;
+
+    if (r.kind === "reel") {
+      evt.eventType        = "cable_reel_count";
+      evt.scanType         = "reel_number";
+      evt.scannedValue     = r.reelNumber;
+      evt.reelNumber       = r.reelNumber;
+      evt.spanType         = "single";
+      evt.innerSeqA        = r.inner === null ? 0 : r.inner;
+      evt.outerSeqA        = r.outer === null ? 0 : r.outer;
+      evt.availableFtA     = r.ft;
+      evt.totalAvailableFt = r.ft;
+      evt.qty              = r.ft;
+    } else if (r.serial && r.qty === 1) {
+      evt.eventType    = "serialized_device_scan";
+      evt.scanType     = "serial";
+      evt.scannedValue = r.serial;
+      evt.serial       = r.serial;
+      evt.qty          = 1;
+    } else if (r.serial) {
+      // A SERIAL ROW THAT ISN'T EXACTLY ONE IS NOT A DEVICE COUNT. The
+      // rollup scores one unit per serialized event and ignores its qty,
+      // so routing these through serialized_device_scan silently flips
+      // their meaning: "-1, we could not find it" and "0, it is gone to
+      // RMA" would both land in the record as "+1, we found it". Both
+      // shapes are real - 2,058 negative rows and 20 zero rows in the
+      // source - so they become quantity rows that keep their own number,
+      // with the serial preserved as provenance.
+      evt.eventType      = "bulk_quantity_count";
+      evt.scanType       = "item_number";
+      evt.scannedValue   = r.item;
+      evt.qty            = r.qty;
+      evt.adjustedSerial = r.serial;
+      evt.notes = (evt.notes ? evt.notes + " | " : "") +
+                  (r.qty < 0 ? "Negative adjustment for serial " + r.serial
+                             : "Serial " + r.serial + " recorded with quantity " + r.qty);
+    } else {
+      evt.eventType    = "bulk_quantity_count";
+      evt.scanType     = "item_number";
+      evt.scannedValue = r.item;
+      evt.qty          = r.qty;
+    }
+    return evt;
+  });
+
+  var session = {
+    sessionId:       cycle.sessionId,
+    sessionName:     cycle.sessionName,
+    // The source records counters as free text and one cycle carries eleven
+    // distinct spellings ("GM", "GM/MRIOS", "JLH/GM/MRIOS"). The column has
+    // to stay readable, so it is capped for display and the full set is kept
+    // beside it rather than thrown away.
+    createdBy:       cycle.countedBy.length
+                       ? (cycle.countedBy.slice(0, 3).join(", ") +
+                          (cycle.countedBy.length > 3 ? " +" + (cycle.countedBy.length - 3) + " more" : ""))
+                       : "(not recorded)",
+    countedByAll:    cycle.countedBy.slice(),
+    createdAt:       cycle.countStart || cycle.cycleEnd,
+    // closedAt stays the real last count date so the record does not claim a
+    // day nobody counted. `cycleEnd` is what Past Counts ORDERS on, so a
+    // quarter counted late still sits in its own place in the sequence.
+    closedAt:        cycle.countEnd || cycle.cycleEnd,
+    cycleEnd:        cycle.cycleEnd,
+    cycleKey:        cycle.cycleKey,
+    // updatedAt is NOW, not a historical date: inventory_sessions merges
+    // last-write-wins, so a corrected re-import has to out-stamp the copy
+    // already sitting on the other devices.
+    updatedAt:       now,
+    status:          "closed",
+    sequenceCounter: seq,
+    holderDevice:    "",
+    holderLabel:     "",
+    imported:        true,
+    importedAt:      now,
+    importedBy:      user,
+    importedFrom:    cycle.files.slice(),
+    datesMissing:    !!cycle.datesMissing,
+    cycleAssumed:    !!cycle.assumed
+  };
+
+  return { session: session, events: events };
+}
+
+// -- Intake + preview -------------------------------------------------
+
+function invHistPickFiles(input) {
+  var files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+  if (!files.length) return;
+  invHistStageFiles(files);
+  input.value = "";   // so re-picking the same file after a source fix still fires
+}
+
+function invHistStageFiles(files) {
+  var parsedFiles = [], fatal = [], pending = files.length;
+
+  files.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function() {
+      try {
+        var parsed = _invHistParseCsv(String(reader.result || ""));
+        var src    = invHistDetectSource(parsed.headers);
+        if (!src) {
+          fatal.push(file.name + ": not a count file TIM recognises. Expected one of - " +
+                     INV_HIST_SOURCES.map(function(s) { return s.label; }).join("; ") +
+                     ". Headers found: " + parsed.headers.slice(0, 8).join(", "));
+        } else if (!parsed.rows.length) {
+          fatal.push(file.name + ": no data rows.");
+        } else {
+          var res = src.parse(parsed, file.name);
+          parsedFiles.push({ fileName: file.name, sourceId: src.id, sourceLabel: src.label,
+                             rows: res.rows, problems: res.problems });
+        }
+      } catch (e) {
+        fatal.push(file.name + ": could not be read (" + (e && e.message ? e.message : e) + ")");
+      }
+      if (--pending === 0) invHistFinishStaging(parsedFiles, fatal);
+    };
+    reader.onerror = function() {
+      fatal.push(file.name + ": could not be read.");
+      if (--pending === 0) invHistFinishStaging(parsedFiles, fatal);
+    };
+    reader.readAsText(file);
+  });
+}
+
+function invHistFinishStaging(parsedFiles, fatal) {
+  if (fatal.length) {
+    alert("Nothing was imported.\n\n" + fatal.join("\n\n"));
+    if (!parsedFiles.length) return;
+  }
+  if (!parsedFiles.length) return;
+  var plan = invHistBuildPlan(parsedFiles);
+  if (!plan.cycles.length) {
+    alert("Nothing was imported - no usable rows were found in those files.");
+    return;
+  }
+  INV_HIST_STAGED = { files: parsedFiles, cycles: plan.cycles, problems: plan.problems };
+  invHistOpenPreview();
+}
+
+function invHistOpenPreview() {
+  var m = $("invHistModal");
+  if (!m) return;
+  m.classList.remove("hidden");
+  renderInvHistPreview();
+}
+
+function invHistClosePreview() {
+  var m = $("invHistModal");
+  if (m) m.classList.add("hidden");
+  INV_HIST_STAGED = null;
+}
+
+function invHistToggleCycle(cycleKey, on) {
+  if (!INV_HIST_STAGED) return;
+  INV_HIST_STAGED.cycles.forEach(function(c) {
+    if (c.cycleKey === cycleKey) c.include = !!on;
+  });
+  renderInvHistPreview();
+}
+
+// Re-label a cycle whose label was GUESSED from count dates. Rewrites the
+// staged rows and rebuilds the plan, so the relabelled rows merge into the
+// real cycle if one is already staged under that label.
+function invHistRelabelCycle(cycleKey, input) {
+  if (!INV_HIST_STAGED) return;
+  var next = String(input && input.value || "").trim();
+  if (!/^\d{4}\.[1-4]$/.test(next)) {
+    alert("A cycle label looks like 2025.2 - four-digit year, a dot, then the quarter 1-4.");
+    renderInvHistPreview();
+    return;
+  }
+  if (next === cycleKey) return;
+  INV_HIST_STAGED.files.forEach(function(pf) {
+    (pf.rows || []).forEach(function(r) {
+      if (r.cycleKey === cycleKey && r.cycleAssumed) r.cycleKey = next;
+    });
+  });
+  var keep = {};
+  INV_HIST_STAGED.cycles.forEach(function(c) { keep[c.cycleKey] = c.include; });
+  var plan = invHistBuildPlan(INV_HIST_STAGED.files);
+  plan.cycles.forEach(function(c) {
+    if (c.cycleKey in keep) c.include = keep[c.cycleKey];
+  });
+  INV_HIST_STAGED.cycles   = plan.cycles;
+  INV_HIST_STAGED.problems = plan.problems;
+  renderInvHistPreview();
+}
+
+function _invHistDateRangeText(c) {
+  if (c.datesMissing) return "no count dates recorded";
+  var a = new Date(c.countStart), b = new Date(c.countEnd);
+  var f = function(d) { return d.toLocaleDateString(); };
+  return f(a) === f(b) ? f(a) : f(a) + " - " + f(b);
+}
+
+function renderInvHistPreview() {
+  var host = $("invHistPreview");
+  if (!host || !INV_HIST_STAGED) return;
+  var cycles   = INV_HIST_STAGED.cycles;
+  var problems = INV_HIST_STAGED.problems || [];
+  var chosen   = cycles.filter(function(c) { return c.include; });
+
+  var fileLines = INV_HIST_STAGED.files.map(function(f) {
+    return "<li>" + escapeHtml(f.fileName) + " &mdash; read as <strong>" +
+           escapeHtml(f.sourceLabel) + "</strong> (" + f.rows.length.toLocaleString() + " usable rows)</li>";
+  }).join("");
+
+  var rows = cycles.map(function(c) {
+    var notes = [];
+    if (c.ledgerish) {
+      notes.push('<span style="color:#b91c1c;font-weight:700;">Looks like an adjustment ledger, not a count</span> &mdash; ' +
+                 c.negRows.toLocaleString() + " of its rows are negative and the whole cycle nets to " +
+                 c.units.toLocaleString() + ". Importing it would invent a count that never happened. " +
+                 "Tick it only if you know it really was a physical count.");
+    }
+    if (c.existing)     notes.push("Replaces the copy already in Past Counts.");
+    if (c.datesMissing) notes.push("No count dates in the file &mdash; events are stamped at the end of the quarter.");
+    if (c.assumedRows && !c.assumed) {
+      notes.push(c.assumedRows.toLocaleString() + " row" + (c.assumedRows === 1 ? "" : "s") +
+                 " (from a sheet with no cycle label) were filed here by their count date.");
+    }
+    if (c.unmatched.length) {
+      notes.push("<strong>" + c.unmatched.length + "</strong> item number" + (c.unmatched.length === 1 ? "" : "s") +
+                 " not in the product catalog: " + escapeHtml(c.unmatched.slice(0, 12).join(", ")) +
+                 (c.unmatched.length > 12 ? " &hellip;" : "") +
+                 ". They still import, with the spreadsheet's own description.");
+    }
+    if (c.negRows && !c.ledgerish) {
+      notes.push(c.negRows.toLocaleString() + " negative row" + (c.negRows === 1 ? "" : "s") +
+                 " imported as adjustments, keeping their sign.");
+    }
+
+    var label = c.assumed
+      ? '<input type="text" value="' + escapeHtml(c.cycleKey) + '" size="7" ' +
+        'style="font-family:monospace;padding:3px 6px;border:1px solid #f59e0b;border-radius:5px;" ' +
+        'onchange="invHistRelabelCycle(\'' + escapeHtml(c.cycleKey) + '\',this)" /> ' +
+        '<span class="small" style="color:#b45309;">guessed from dates &mdash; confirm</span>'
+      : "<strong>" + escapeHtml(c.cycleKey) + "</strong>";
+
+    return "<tr>" +
+      '<td style="text-align:center;"><input type="checkbox" ' + (c.include ? "checked" : "") +
+        ' onchange="invHistToggleCycle(\'' + escapeHtml(c.cycleKey) + '\',this.checked)" /></td>' +
+      "<td>" + label + "</td>" +
+      '<td class="small">' + escapeHtml(_invHistDateRangeText(c)) + "</td>" +
+      '<td class="small">' + escapeHtml(c.countedBy.length ? c.countedBy.join(", ") : "(not recorded)") + "</td>" +
+      '<td style="text-align:right">' + c.rowCount.toLocaleString() + "</td>" +
+      '<td style="text-align:right">' + c.itemCount.toLocaleString() + "</td>" +
+      '<td style="text-align:right">' + (c.units ? c.units.toLocaleString() : "") + "</td>" +
+      '<td style="text-align:right">' + (c.ft ? c.ft.toLocaleString() : "") + "</td>" +
+      '<td class="small">' + (notes.length ? notes.join("<br>") : "") + "</td>" +
+      "</tr>";
+  }).join("");
+
+  var skipped = problems.filter(function(p) { return p.severity === "skip"; });
+  var warned  = problems.filter(function(p) { return p.severity !== "skip"; });
+  var probBlock = "";
+  if (problems.length) {
+    var listFor = function(arr, cap) {
+      return arr.slice(0, cap).map(function(p) {
+        return "<li>" + escapeHtml(p.file) + " line " + p.line + ": " + escapeHtml(p.msg) + "</li>";
+      }).join("") + (arr.length > cap ? "<li>&hellip; and " + (arr.length - cap) + " more</li>" : "");
+    };
+    probBlock =
+      '<div style="margin-top:14px;border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;padding:10px 12px;">' +
+        '<p class="small" style="margin:0 0 6px;font-weight:700;color:#92400e;">' +
+          "Rows TIM would not guess at (" + skipped.length.toLocaleString() + " skipped, " +
+          warned.length.toLocaleString() + " flagged)</p>" +
+        '<p class="small" style="margin:0 0 6px;color:#92400e;">' +
+          "Nothing here is patched up automatically. Fix these at the source and import the file again &mdash; " +
+          "re-importing updates the same rows rather than duplicating them.</p>" +
+        (skipped.length ? '<ul class="small" style="margin:4px 0 0 16px;">' + listFor(skipped, 15) + "</ul>" : "") +
+        (warned.length  ? '<ul class="small" style="margin:4px 0 0 16px;color:#78350f;">' + listFor(warned, 10) + "</ul>" : "") +
+      "</div>";
+  }
+
+  var totUnits = chosen.reduce(function(t, c) { return t + c.units; }, 0);
+  var totFt    = chosen.reduce(function(t, c) { return t + c.ft;    }, 0);
+  var totRows  = chosen.reduce(function(t, c) { return t + c.rowCount; }, 0);
+
+  host.innerHTML =
+    '<p class="small" style="margin:0 0 8px;">Read from:</p>' +
+    '<ul class="small" style="margin:0 0 12px 16px;">' + fileLines + "</ul>" +
+    '<div class="scroll"><table><thead><tr>' +
+      "<th>Import</th><th>Cycle</th><th>Counted</th><th>Counted By</th>" +
+      "<th>Rows</th><th>Items</th><th>Units</th><th>Reel Ft</th><th>Notes</th>" +
+    "</tr></thead><tbody>" + rows + "</tbody></table></div>" +
+    probBlock +
+    '<p class="small" style="margin:12px 0 0;font-weight:700;">' +
+      "Importing " + chosen.length + " cycle" + (chosen.length === 1 ? "" : "s") + ": " +
+      totRows.toLocaleString() + " rows, " + totUnits.toLocaleString() + " units, " +
+      totFt.toLocaleString() + " reel ft." +
+    "</p>";
+
+  var btn = $("invHistCommitBtn");
+  if (btn) {
+    btn.disabled    = !chosen.length;
+    btn.textContent = chosen.length
+      ? "Import " + chosen.length + " cycle" + (chosen.length === 1 ? "" : "s")
+      : "Nothing selected";
+  }
+}
+
+// -- Commit -----------------------------------------------------------
+
+function invHistCommit() {
+  if (!INV_HIST_STAGED) return;
+  var chosen = INV_HIST_STAGED.cycles.filter(function(c) { return c.include; });
+  if (!chosen.length) return;
+
+  var ledgers = chosen.filter(function(c) { return c.ledgerish; });
+  if (ledgers.length && !confirm(
+      "Cycle " + ledgers.map(function(c) { return c.cycleKey; }).join(", ") +
+      " looks like an adjustment ledger rather than a physical count.\n\n" +
+      "Importing it will add a count to the record that may never have happened.\n\nImport it anyway?")) return;
+
+  if (!confirm(
+      "Import " + chosen.length + " historical cycle" + (chosen.length === 1 ? "" : "s") +
+      " into Past Counts?\n\n" +
+      chosen.map(function(c) {
+        return "  " + c.cycleKey + " - " + c.rowCount.toLocaleString() + " rows" +
+               (c.existing ? " (replaces the existing copy)" : "");
+      }).join("\n") +
+      "\n\nThey are marked as imported wherever they appear, and can be removed again from Past Counts.")) return;
+
+  appData.inventory_sessions = appData.inventory_sessions || [];
+  appData.inventory_events   = appData.inventory_events   || [];
+
+  var addedEvents = 0;
+  chosen.forEach(function(cycle) {
+    var built = invHistBuildRecords(cycle);
+    var idx = appData.inventory_sessions.findIndex(function(s) {
+      return s && s.sessionId === built.session.sessionId;
+    });
+    if (idx >= 0) appData.inventory_sessions[idx] = built.session;
+    else          appData.inventory_sessions.push(built.session);
+
+    // Drop this cycle's existing events before inserting, so a row deleted
+    // at source disappears here too instead of lingering as a ghost.
+    appData.inventory_events = appData.inventory_events.filter(function(e) {
+      return !e || e.sessionId !== built.session.sessionId;
+    });
+    appData.inventory_events = appData.inventory_events.concat(built.events);
+    addedEvents += built.events.length;
+  });
+
+  timSaveMasterCache();
+
+  var configured = (typeof ghConfigured === "function") && ghConfigured();
+  invHistClosePreview();
+  invPastPanel = "counts";
+  renderInvPast();
+  renderInvHistImported();
+
+  alert("Imported " + chosen.length + " cycle" + (chosen.length === 1 ? "" : "s") +
+        " (" + addedEvents.toLocaleString() + " rows) into Past Counts." +
+        (configured ? "\n\nPushing to GitHub now so the other devices pick them up."
+                    : "\n\nThese live on this device until you push or export the master file."));
+
+  if (configured) ghPushToGitHub({ auto: true });
+}
+
+// -- Imported-cycle management ----------------------------------------
+
+function invHistImportedSessions() {
+  return (appData.inventory_sessions || []).filter(function(s) { return s && s.imported; })
+    .slice().sort(function(a, b) {
+      var ak = a.cycleKey || "", bk = b.cycleKey || "";
+      return ak > bk ? -1 : ak < bk ? 1 : 0;
+    });
+}
+
+// Removing an import must be possible, or a bad file is permanent. Only
+// ever touches sessions flagged `imported` - a real scanned count can not
+// be deleted from here by any path.
+function invHistRemove(sessionId) {
+  var sess = (appData.inventory_sessions || []).filter(function(s) {
+    return s && s.sessionId === sessionId;
+  })[0];
+  if (!sess) return;
+  if (!sess.imported) { alert("That count was scanned, not imported - it cannot be removed here."); return; }
+  var n = (appData.inventory_events || []).filter(function(e) { return e && e.sessionId === sessionId; }).length;
+  if (!confirm("Remove imported cycle " + (sess.cycleKey || sess.sessionName) + " and its " +
+               n.toLocaleString() + " rows from Past Counts?\n\n" +
+               "The source spreadsheet is untouched, so you can import it again.")) return;
+
+  appData.inventory_sessions = (appData.inventory_sessions || []).filter(function(s) {
+    return !s || s.sessionId !== sessionId;
+  });
+  appData.inventory_events = (appData.inventory_events || []).filter(function(e) {
+    return !e || e.sessionId !== sessionId;
+  });
+  timSaveMasterCache();
+  renderInvPast();
+  renderInvHistImported();
+  if ((typeof ghConfigured === "function") && ghConfigured()) ghPushToGitHub({ auto: true });
+}
+
+function renderInvHistImported() {
+  var host = $("invHistImported");
+  if (!host) return;
+  var sessions = invHistImportedSessions();
+  if (!sessions.length) {
+    host.innerHTML = '<p class="small" style="color:#94a3b8;margin:8px 0 0;">' +
+      "No historical cycles imported yet.</p>";
+    return;
+  }
+  var by = invPastEventsBySession();
+  host.innerHTML =
+    '<div class="scroll" style="margin-top:8px;"><table><thead><tr>' +
+      "<th>Cycle</th><th>Counted</th><th>Rows</th><th>Imported</th><th>From</th><th></th>" +
+    "</tr></thead><tbody>" +
+    sessions.map(function(s) {
+      var n = (by[s.sessionId] || []).length;
+      return "<tr><td><strong>" + escapeHtml(s.cycleKey || s.sessionName) + "</strong></td>" +
+        '<td class="small">' + escapeHtml(s.datesMissing ? "no dates recorded"
+            : (s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "") +
+              (s.closedAt && s.closedAt !== s.createdAt ? " - " + new Date(s.closedAt).toLocaleDateString() : "")) + "</td>" +
+        '<td style="text-align:right">' + n.toLocaleString() + "</td>" +
+        '<td class="small">' + escapeHtml(s.importedAt ? new Date(s.importedAt).toLocaleDateString() : "") +
+          (s.importedBy ? " by " + escapeHtml(s.importedBy) : "") + "</td>" +
+        '<td class="small">' + escapeHtml((s.importedFrom || []).join(", ")) + "</td>" +
+        '<td style="text-align:right"><button class="btn-compact secondary" ' +
+          "onclick=\"invHistRemove('" + escapeHtml(s.sessionId) + "')\">Remove</button></td></tr>";
+    }).join("") +
+    "</tbody></table></div>";
 }
 
 // -- Event creation -------------------------------------------------
@@ -6480,7 +7526,7 @@ function renderInvSummary() {
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
 
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (Number(evt.qty) || 1); }
+    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += invEventUnits(evt); }
     else if (evt.eventType === "cable_reel_count") {
       r.reelFootage += (Number(evt.totalAvailableFt) || 0);
       reelRows.push(evt);
@@ -6653,7 +7699,7 @@ function buildInvSummaryMap(events) {
     if (evt.description && !r.description) r.description = evt.description;
     if (evt.timestamp && evt.timestamp > r.lastCounted) r.lastCounted = evt.timestamp;
     if      (evt.eventType === "serialized_device_scan") { r.countedQty += 1; r.serializedCount += 1; }
-    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += (Number(evt.qty) || 1); }
+    else if (evt.eventType === "bulk_quantity_count")    { r.countedQty += invEventUnits(evt); }
     else if (evt.eventType === "cable_reel_count")       { r.reelFootage += (Number(evt.totalAvailableFt) || 0); }
     else if (evt.eventType === "exception")              { r.exceptions += 1; }
     if (evt.flagged) r.flagged += 1;
@@ -13122,7 +14168,7 @@ function buildOdooAdjustmentRows(events) {
       var f2 = pmFields(evt.itemNumber);
       bulkMap[key] = { extId: f2.extId, defCode: f2.defCode, loc: evt.location || "", qty: 0 };
     }
-    bulkMap[key].qty += (Number(evt.qty) || 1);
+    bulkMap[key].qty += invEventUnits(evt);
   });
   Object.keys(bulkMap).sort().forEach(function(k) {
     var r = bulkMap[k];
@@ -15291,7 +16337,7 @@ function invBuildGapReport() {
       if (!countedBulk[bk]) {
         countedBulk[bk] = { defCode: f, loc: e.location || "", qty: 0, description: e.description || "", seq: null, seqLast: null };
       }
-      countedBulk[bk].qty += (Number(e.qty) || 1);
+      countedBulk[bk].qty += invEventUnits(e);
       // A bulk gap aggregates several scans, so keep the first and last sequence
       // rather than one: the row then spans where in the count it happened.
       if (countedBulk[bk].seq == null) countedBulk[bk].seq = e.sequence;

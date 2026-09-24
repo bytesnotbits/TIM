@@ -21,7 +21,7 @@ Single-page PWA. Four files do all the work:
 
 ### Main Tabs / Feature Areas
 - **Receiving** — load vendor/RMA source file, map products, export to Odoo
-- **Inventory** — sub-tabbed section (`invShowSubview`): Count (active session scanning — serial, reel, bulk, box, MAC) · In Progress (live cross-device counts) · **Past Counts** (read-only record of finalized counts, by count or by item — v2.59.00) · Exceptions · Summary · Gap Analysis · Recount · Event Log
+- **Inventory** — sub-tabbed section (`invShowSubview`): Count (active session scanning — serial, reel, bulk, box, MAC) · In Progress (live cross-device counts) · **Past Counts** (read-only record of finalized counts, by count or by item — v2.59.00; + historical spreadsheet import, `invHist*` — v2.60.00) · Exceptions · Summary · Gap Analysis · Recount · Event Log
 - **Products** — sub-tabbed section (indented sidebar sub-nav, `prodShowSubview`): Product Catalog editor (`PRODUCT_MAP`) · Product Mapping (Mapping Editor + Unknown-Products) · Serial/Device Lookup · Reel Lookup · Catalog Health · New Item — Dup Check · Architecture Notes. **Product Mapping folded in here from its former top-level tab (v2.48.00).**
 - **Barcodes** — barcode batch management (barcode-to-item assignment)
 
@@ -211,7 +211,35 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `INV_PAST_SUMMARY_HEADERS` / `INV_PAST_ITEM_HEADERS` (+ `_NUMERIC`) | Column sets for the two rollup exports; count columns go out as real numbers so they pivot |
 | `_invPastFileStamp(s)` / `_invPastRequireSession()` | Filename slug from the session name / selected-session guard |
 
+| `_invPastSortStamp(s)` | Ordering key: `cycleEnd` first, then `closedAt`/`updatedAt`/`createdAt`. **A cycle is routinely counted after its quarter closes** (2025.4 was counted 1/2–1/6, 2024.4 on 1/14/2025), so the count date cannot order the record — sorting on it files a late-counted Q4 among the next year's Q1. Imported cycles carry `cycleEnd` (end of the labelled quarter) as the sort key while `closedAt` stays the day people actually counted. Live sessions have no `cycleEnd` and behave exactly as before (v2.60.00) |
+| `invPastImportedBadge(s)` | The `IMPORTED` pill rendered in all three Past Counts tables. A reconstructed rollup line must never be indistinguishable from a scan |
+| `invEventUnits(evt)` | Units a `bulk_quantity_count` is worth. Replaced the inline `Number(evt.qty) \|\| 1` at **six** call sites (`invPastRollup`, `buildInvSummaryMap`, `renderInvProgressDetail`, `renderInvSummary`, `buildOdooAdjustmentRows`, `invBuildGapReport`), which could not tell "no qty recorded, assume 1" from "counted, found ZERO" — `0 \|\| 1` is 1. No *scanned* event ever hits it (the scan path hard-codes qty 1; the keypad clamps `qty < 1` to 1), but 322 historical rows are a deliberate zero and every one was landing as one unit found (v2.60.00) |
+
 CSS: `.panel-toggle` / `.panel-toggle-btn` (`styles.css`) — the in-card segmented control. The sidebar sub-nav classes are styled for the dark sidebar and are nearly invisible on a white card.
+
+---
+
+### Historical count import (`invHist*`, v2.60.00)
+
+> Loads count cycles kept in spreadsheets **before TIM** into Past Counts, under **Inventory → Past Counts → Import historical counts**. Writes `appData.inventory_sessions`/`inventory_events` only — one synthesised **closed** session per cycle — and never touches `invSession`/`invEvents` or the reel registry (`appData.reels` holds *current* state under the sticky-sequence rule; feeding it 2025 markers would let an old reading overwrite a newer one). Shipped against three real sheets spanning 2024.2–2026.2: 9,171 rows over 7 cycles.
+>
+> **The `xxxx.x` cycle label is a fact, not a hypothesis.** A count date outside its own quarter is ordinary and is never evidence the label is wrong. A calendar quarter is only ever *derived* from a date when a file carries no label at all, and is then flagged `cycleAssumed` for the user to confirm in the preview.
+
+| Function / Variable | Purpose |
+|---|---|
+| `INV_HIST_SOURCES` | The three file shapes, each detected by header signature and normalised to one intermediate row. Adding a fourth shape = one array entry, not builder changes |
+| `_invHistParseCsv(text)` | Full CSV state machine — **not** `_parseCsvToRowObjects`, which splits on newlines before parsing quotes. The reel export has multi-line `NOTES` cells and a line-first split tears every one into a broken row plus a phantom |
+| `_invHistNum(v)` / `_invHistDate(v)` | `"1,304"` → 1304; blank, the literal `"null"` (a spreadsheet artefact) and non-numeric → `null` so the caller *reports* instead of silently zeroing. One real row has a location (`WH04500`) sitting in the quantity column |
+| `_invHistQuarterStart/End(cycleKey)` | Period bounds, built in **UTC** — a local 23:59:59 stringifies to the next day, so `2024.2` would store a cycleEnd of 2024-07-01 |
+| `_invHistHash` / `_invHistEventId(cycle,row,ordinal)` | Event ids from row **identity** (cycle + item + serial/reel + location + ordinal), deliberately **excluding quantity**, so a corrected re-import updates rows in place instead of orphaning them |
+| `_invHistParseCycleRollup` | The item/serial sheet. **Location lives in two columns and they are not rivals**: where both are filled, `Location` is the parent warehouse and `Ticket` is the actual bin (Y01, S04, FG) — Ticket wins, Location becomes `locationParent`. Strings stored **verbatim**: the same bin is written four ways (`W367/Stock/3900`, `W367/S/3900`, `WH03900`, `3800`), there is no formula to an Odoo location, and the column also holds non-locations (`NISC`, `CAPTURE`, `XFER TO W367`) |
+| `_invHistParseReelExport` / `_invHistParseReelLegacy` | The two reel sheets. Export: `Quantity` is authoritative, `\|inner−outer\|` is a cross-check that flags but never overwrites. Legacy: **COUNTED**, which matches `\|OUTER−INNER\|` on every checkable row; `CAPTURED` (what reached the system) goes in the note where it differs |
+| `invHistBuildPlan(parsedFiles)` | Groups rows into cycles and computes the preview. Flags **`ledgerish`**: a "cycle" that is really a relocation pass (+1 new location, −1 old) nets to ~zero while looking row-for-row like a count — detected by *shape*, never by name, and defaulted **off**. Found 2025.3 this way: 2,035 of its 2,091 serials appear twice and net to zero |
+| `invHistBuildRecords(cycle)` | Synthesises the session + events. **A serial row that isn't exactly qty 1 is not a device count** — the rollup scores one unit per serialized event and ignores qty, so `-1` ("could not find it") and `0` ("gone to RMA") would both land as `+1` found; both become quantity rows keeping their own number, serial preserved in `adjustedSerial` |
+| `invHistStageFiles` / `invHistPickFiles` / `invHistFinishStaging` | File intake → parse → plan → preview. Unrecognised shape or zero rows is fatal and named |
+| `renderInvHistPreview()` / `invHistToggleCycle` / `invHistRelabelCycle` | The review modal: per-cycle include checkbox, editable label for a guessed cycle, and the skipped/flagged row list. **Nothing is patched up automatically** — problems are reported for fixing at source |
+| `invHistCommit()` | Writes the chosen cycles. Drops each cycle's existing events before inserting, so a row deleted at source disappears rather than lingering |
+| `invHistImportedSessions()` / `invHistRemove(id)` / `renderInvHistImported()` | Imported-cycle list + removal. `invHistRemove` refuses any session not flagged `imported` — a scanned count cannot be deleted from here by any path |
 
 ---
 ---
