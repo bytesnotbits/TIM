@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.64.00";
+const APP_VERSION = "v2.65.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -8737,27 +8737,36 @@ function invSaveEditRowModal() {
 // ===================================================================
 
 // -- Scan type auto-detection ---------------------------------------
+// Classification is TIERED by how trustworthy the evidence is. Higher tiers win:
+//
+//   1. Namespaces WE mint       — shape is a contract we control (WH, BOX).
+//   2. Device identity          — we hold a fact about this exact object.
+//   3. Registry membership      — a vendor carton/reel learned by scanning.
+//   4. Shape heuristics         — format guesses; the weakest evidence.
+//
+// The ordering rule that matters: a MANUFACTURER'S shape must never outrank a
+// fact we hold. Calix can change its nomenclature without notice, so CXNK sits
+// in tier 4, not at the top — a CXNK-shaped value that is actually a known
+// device, catalog item or registered carton resolves as what it IS. Known FSANs
+// already resolve in tier 2, so the prefix test only has to catch FSANs from a
+// shipment that hasn't been imported yet; if Calix ever changes it, those scans
+// fail loudly at receiving rather than silently misclassifying.
+//
+// Boxes are split across two tiers on purpose: "BOX…" labels are OURS (tier 1),
+// while a vendor Carton No. is a box only because the registry says so (tier 3).
+// Reels have no mintable prefix at all — their numbers are arbitrary
+// alphanumerics — so a reel is known ONLY by having been counted before.
 function invClassifyScan(raw) {
   var v = String(raw || "").trim().toUpperCase();
   if (!v) return "unknown";
 
-  // FSAN: Calix CXNK prefix — check before anything else
-  if (/^CXNK/i.test(v)) return "fsan";
+  // ---- Tier 1: namespaces we mint ------------------------------------
+  if (/^WH/i.test(v))  return "location";   // warehouse shelf locations
+  if (/^BOX/i.test(v)) return "box_id";     // cartons WE pack and label
 
-  // Box ID prefix
-  if (/^BOX/i.test(v)) return "box_id";
-
-  // Known carton/container in the box registry → box scan (sealed fast-count)
-  if (boxGet(v)) return "box_id";
-
-  // Location prefix (warehouse locations start with WH)
-  if (/^WH/i.test(v)) return "location";
-
-  // Reel number prefix
-  if (/^REEL/i.test(v)) return "reel_number";
-
-  // History lookup comes BEFORE MAC detection so known serials/FSANs
-  // are never misidentified as MAC addresses
+  // ---- Tier 2: device identity ---------------------------------------
+  // History lookup also comes BEFORE MAC detection so known serials/FSANs
+  // are never misidentified as MAC addresses.
   var vKey = normKey(v);
   var records = history.records || [];
 
@@ -8775,11 +8784,26 @@ function invClassifyScan(raw) {
   if (findProductMapMatch(v)) return "item_number";
 
   // Barcode map check — after product map to avoid misclassifying item numbers
-  if (BARCODE_MAP[normKey(v)]) return "barcode";
+  if (BARCODE_MAP[vKey]) return "barcode";
+
+  // ---- Tier 3: registry membership -----------------------------------
+  // A vendor carton is a box because the registry says so, never because of its
+  // shape. Only a NON-EMPTY box classifies here: an empty box is a half-built
+  // or abandoned record, and letting one classify would hand it the power to
+  // hijack any scan whose value happens to match its key (the stale-test-box
+  // collision). An empty box can't be counted anyway — invHandleBoxScan rejects
+  // it — so nothing is lost by declining to recognize it. Box STATUS is checked
+  // by the handler, not here, so a still-capturing box gets a real explanation.
+  var bx = boxGet(v);
+  if (bx && boxDeviceList(bx).length) return "box_id";
 
   // Known reel number (matches a counted reel in the DB) — before MAC/serial so
   // serial-shaped reel numbers like 48R37 are recognized as reels, not serials.
   if (invFindReelMaster(v)) return "reel_number";
+
+  // ---- Tier 4: shape heuristics --------------------------------------
+  // FSAN: Calix CXNK prefix (see the tier note above for why it ranks here).
+  if (/^CXNK/i.test(v)) return "fsan";
 
   // MAC detection — only after history/product map checks to avoid false positives.
   // Formatted MAC (AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF): accept unambiguously.
@@ -9534,6 +9558,25 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
       notes);
     invSetScanFeedback("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
     invSpeak("Box not found");
+    return false;
+  }
+
+  // A sealed fast-count asserts the carton is COMPLETE. A box still in capture
+  // is a half-built list, so counting it would under-count silently. Box mode
+  // already gated on this (it only fast-counts "ready"); auto-detect used to
+  // skip the check and count whatever the registry held, so the same box could
+  // be counted two different ways depending on the scan mode. Gate it here
+  // instead, where every caller passes through.
+  if (b.status !== "ready") {
+    invCreateExceptionEvent(boxId, "box_id",
+      "Box is still being built (not sealed)",
+      "Finish the carton first (Boxes → open it → Done), then scan it again. " +
+      "Until it's sealed, scan its devices individually.",
+      notes);
+    invSetScanFeedback("Box " + b.boxId + " isn't sealed yet (" + snapshot.length +
+      " device(s) captured so far) — it can't be fast-counted. Finish it, or scan its devices.",
+      "warn", "", "box");
+    invSpeak("Box not sealed");
     return false;
   }
 
@@ -12909,13 +12952,16 @@ function invProcessScan() {
     return;
   }
 
-  // In serial mode with no override, default unknown scans to serial. Also
-  // catch a "box_id" classification — that only means the value coincidentally
-  // matches a key in the box registry (per-device, never GitHub-synced, so a
-  // stale/empty test box left over on one device can collide with a real
-  // serial on that device only) — it must never intercept an explicit
-  // Serial/FSAN-mode scan.
-  if (invScanMode === "serial" && !override && (scanType === "unknown" || scanType === "box_id")) {
+  // In serial mode with no override, default unknown scans to serial.
+  //
+  // This used to demote "box_id" to "serial" as well, to stop a stale/empty
+  // test box in the registry from hijacking a real serial. That cost a genuine
+  // sealed-box fast-count from Serial/FSAN mode — scanning a carton label here
+  // returned "Unknown device / Item not found". The collision is now handled
+  // where it belongs, in invClassifyScan: device identity (tier 2) outranks
+  // registry membership (tier 3), and an empty box no longer classifies at all.
+  // So a box label is safe to honor in any mode.
+  if (invScanMode === "serial" && !override && scanType === "unknown") {
     scanType = "serial";
   }
   // In item mode with no override, treat any non-location scan as a bulk item number
