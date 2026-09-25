@@ -633,7 +633,7 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxManagerToggleContents(key)` / `invBoxManagerDelete(boxId)` | Expand a box's editor / delete a box (voids its current-session counts, clears active if it was the one) |
 | `invBoxRename(oldBoxId, btn)` | Rename a box's ID: rekeys the registry, retargets this session's count events' `boxId`, fixes active/last pointers, rejects collisions (finalized history untouched) |
 | `invBoxRemoveSerial(boxId, serial)` / `invBoxAddSerialManual(boxId, btn)` | Editor: remove one device (voids its session count event) / add a device (resolves serial-FSAN-MAC, moves from other box, creates a session count event) |
-| `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event. **v2.65.00:** refuses a box that isn't `ready` (auto-detect used to skip the seal check Box mode enforced) and refuses one whose manifest is contradicted (`invBoxFindOverlap`) |
+| `invHandleBoxScan(boxId, ctx, notes, loc, opts)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event. **v2.65.00:** refuses a box that isn't `ready` (auto-detect used to skip the seal check Box mode enforced) and refuses one whose manifest is contradicted (`invBoxFindOverlap`). **v2.69.00:** `opts.quiet` silences this carton's own tone/flash/activity/speech (set by the pallet fan-out); success now speaks "Box of N" |
 | `invIsContainerMarker(evt)` | True for `box_scan`/`pallet_scan` — audit markers, never counts. Every rollup skips them or a sealed carton counts twice; centralized so a new container type can't miss a site |
 | `invBoxFindOverlap(b)` | Devices on this box's manifest already counted this session by something other than this same box's own sealed count → the manifest is stale. A dup carrying this `boxId` is a benign re-scan and is ignored |
 | `invBoxHandleStale(boxId, trigger, how)` | Void the box's sealed counts (`invBoxVoidSessionCounts`), flag it on `invSession.auditBoxes`, raise an exception. Called from BOTH scan orders so the outcome is order-independent |
@@ -674,8 +674,8 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 | `invPalletValidate(palletId)` | All gates in one place → `{ok, pallet, boxes, deviceCount, problems[]}`. Refuses: unknown pallet, pallet not `ready`, no cartons, a member carton missing/tombstoned/empty/unsealed, or any carton with a stale manifest |
 | `invHandlePalletScan(palletId, notes, loc)` | Scan-dispatch entry for `pallet_id`. Refuses on any problem (exception + specific feedback); refuses a re-scan; otherwise opens the confirmation or commits |
 | `invPalletCountedThisSession(palletId)` | Non-voided `pallet_scan` for this pallet in the live session — stops a re-scan re-crediting it |
-| `invPalletCommitCount(res, notes, loc)` | Writes the `pallet_scan` audit marker, then runs each carton through `invHandleBoxScan` so dedup + seal gate + stale detection apply per carton exactly as if scanned individually; records a pallet `audit[]` entry |
-| `invPalletConfirmOpen/Close/Accept/Reject()` | The read-against-the-placard confirmation. **Reject is a finding, not a cancel** — records an exception carrying what TIM expected, since a disagreeing placard means a carton left the pallet or the record drifted |
+| `invPalletCommitCount(res, notes, loc)` | Writes the `pallet_scan` audit marker, then runs each carton through `invHandleBoxScan` (`{quiet:true}` — the pallet announces once, not once per carton) so dedup + seal gate + stale detection apply per carton exactly as if scanned individually; records a pallet `audit[]` entry. Speaks "Pallet counted, N boxes, M devices" (v2.69.00) |
+| `invPalletConfirmOpen/Close/Accept/Reject()` | The read-against-the-placard confirmation. **Reject is a finding, not a cancel** — records an exception carrying what TIM expected, since a disagreeing placard means a carton left the pallet or the record drifted. Open speaks "Pallet, N boxes, M devices" so the totals can be checked against the placard without looking away (v2.69.00) |
 | `invPalletConfirmDisabled()` / `invPalletSetConfirmDisabled(on)` / `invRenderPalletAdmin()` | Confirmation is ON by default; admin-only opt-out stored in `invSettings.palletConfirmDisabled`, rendered into `#palletAdminSettings` on the Pallets tab |
 
 **Pallets tab UI + build/dissolve modals.** Sidebar tab renders the registry list + admin-only deleted archive; a build modal (scan/generate pallet ID → scan boxes onto it, with the **nested unknown-box build** that opens the box capture modal and auto-returns) and a dissolve modal (same/different per-box location assignment). Local-only when GitHub isn't configured.
@@ -726,7 +726,7 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 |----------|---------|
 | `invHandleSerializedScan(value, type, ctx, notes, loc)` | Process serial/FSAN scan → event or exception. Resolution order: **history → Odoo quants baseline (`invResolveQuantSerial`, v2.50.00) → unknown-device prompt**; loose scan of a box member stamps `formerBoxId` + flags the box opened (v2.36.00) |
 | `invBoxNoteLooseCount(serial, fsan)` | Phase 1 box lifecycle: a box member counted loose → flag its box `opened`, return box ID for `formerBoxId` stamp (v2.36.00) |
-| `invHandleBoxScan(boxId, ctx, notes, loc)` | Sealed fast-count of a known box (see Box Registry section) |
+| `invHandleBoxScan(boxId, ctx, notes, loc, opts)` | Sealed fast-count of a known box (see Box Registry section) |
 | `invHandleBulkCount(itemNum, qty, notes, loc)` | Record bulk quantity count |
 | `invHandleMacScan(mac, ctx, notes, loc)` | Process MAC scan → resolve → serial handler |
 | `invHandleReelScan(reelNum, notes, loc)` | Process reel scan → open reel entry panel |
@@ -1288,7 +1288,8 @@ Scan feedback is **mandatory + dual-channel** (tone + full-screen flash). Tones 
 | `timFeedback(type, toneVariant)` | **Unified entry**: drives tone + flash; severity from `type`, success tone from `toneVariant` |
 | `timUpdateAudioStatus()` / `timTestSound()` | Audio status chip / "Test sound" button handler |
 | `playBeep(type)` | Receiving/blind-scan feedback → routes to `timFeedback` |
-| `invSpeak(text)` | Optional spoken feedback (Web Speech); speaks SIGNIFICANT events only, cancels in-flight phrase; no-op unless enabled. Rapid device scans stay tone-only |
+| `invSpeak(text)` | Optional spoken feedback (Web Speech); speaks SIGNIFICANT events only; no-op unless enabled. Rapid device scans stay tone-only. **Debounced `TIM_VOICE_DELAY_MS` (v2.69.00)** — a burst of phrases collapses to the LAST one, spoken after the tone finishes, so phrases can't clip each other |
+| `_timVoiceFlush()` / `_timVoiceSpeakNow(text)` | Debounce flush / speak immediately (gesture-bound toggle + preview); cancels only when speech is actually in flight, then waits a tick — Safari drops a same-tick-after-cancel utterance |
 | `timVoiceSetEnabled(on)` / `timVoiceLoadPref()` | Toggle handler / load persisted `tim_voice_enabled` pref |
 | `timVoicePrime()` | Warm speechSynthesis inside a user gesture (iOS first-utterance unlock) |
 | `timVoiceUpdateStatus()` / `timTestVoice()` / `timInitVoice()` | Voice toggle+chip sync / "Test voice" button / startup init |

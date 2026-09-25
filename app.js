@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.68.00";
+const APP_VERSION = "v2.69.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -4479,15 +4479,51 @@ function timVoicePrime() {
   } catch(e) {}
 }
 
-// Speak a short phrase. Cancels any in-flight utterance first so phrases never
-// queue up and lag behind the action. No-op unless the user enabled voice.
+// Speak a short phrase — ONE utterance per action, never two stitched together.
+//
+// Two things clipped speech before v2.69.00:
+//   1. Every phrase called speechSynthesis.cancel() immediately before speak().
+//      On iOS Safari an utterance started in the same tick as a cancel() is
+//      routinely dropped or truncated mid-word ("Bo…" then silence).
+//   2. A burst of actions (a pallet crediting 32 cartons) fired 32 phrases that
+//      each cancelled the one before it, so only a fragment of the last survived.
+// So: coalesce a burst — the LAST phrase wins — and start speaking only after the
+// tone has finished instead of on top of it. That delay is also why phrases are
+// now one self-contained clause ("Box of 8"), not two clauses run together.
+var _timVoiceTimer     = null;
+var _timVoicePending   = "";
+var TIM_VOICE_DELAY_MS = 260;   // >= the longest tone pattern (~0.25s), so they never overlap
+
 function invSpeak(text) {
   if (!_timVoiceEnabled || !_timVoiceSupported || !text) return;
+  _timVoicePending = String(text);
+  clearTimeout(_timVoiceTimer);
+  _timVoiceTimer = setTimeout(_timVoiceFlush, TIM_VOICE_DELAY_MS);
+}
+
+function _timVoiceFlush() {
+  var text = _timVoicePending;
+  _timVoicePending = "";
+  if (text) _timVoiceSpeakNow(text);
+}
+
+// Speak right now (the gesture-bound toggle/preview, and the flush above).
+// Cancels ONLY when something is actually in flight, then lets the queue settle
+// for a tick before speaking — Safari drops a same-tick-after-cancel utterance.
+function _timVoiceSpeakNow(text) {
+  if (!_timVoiceSupported || !text) return;
   try {
-    window.speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance(String(text));
-    u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
-    window.speechSynthesis.speak(u);
+    var synth = window.speechSynthesis;
+    var busy  = synth.speaking || synth.pending;
+    if (busy) synth.cancel();
+    var go = function() {
+      try {
+        var u = new SpeechSynthesisUtterance(String(text));
+        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+        synth.speak(u);
+      } catch(e) {}
+    };
+    if (busy) setTimeout(go, 90); else go();
   } catch(e) {}
 }
 
@@ -4517,7 +4553,7 @@ function timVoiceUpdateStatus() {
 function timVoiceSetEnabled(on) {
   _timVoiceEnabled = !!on && _timVoiceSupported;
   try { localStorage.setItem("tim_voice_enabled", _timVoiceEnabled ? "1" : "0"); } catch(e) {}
-  if (_timVoiceEnabled) { timVoicePrime(); invSpeak("Voice on"); }  // runs inside the change gesture
+  if (_timVoiceEnabled) { timVoicePrime(); _timVoiceSpeakNow("Voice on"); }  // runs inside the change gesture
   timVoiceUpdateStatus();
 }
 
@@ -4525,12 +4561,7 @@ function timTestVoice() {
   timVoicePrime();            // within this click gesture
   if (!_timVoiceSupported) { timVoiceUpdateStatus(); return; }
   // Speak regardless of the toggle so users can preview before enabling.
-  try {
-    window.speechSynthesis.cancel();
-    var u = new SpeechSynthesisUtterance("Voice feedback test");
-    u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
-    window.speechSynthesis.speak(u);
-  } catch(e) {}
+  _timVoiceSpeakNow("Voice feedback test");
 }
 
 // Load persisted pref + sync the UI control at startup.
@@ -9661,7 +9692,14 @@ function boxAuditLastLabel(b) {
 // registry manifest in one action. Counted on trust (the box is sealed); the
 // asserted serial list is snapshotted onto the box_scan event for audit, and
 // each device gets its own serialized_device_scan (so dedup/reporting work).
-function invHandleBoxScan(boxId, contextItem, notes, location) {
+// `opts.quiet` suppresses this carton's OWN feedback channels (tone, flash,
+// activity line, speech). The pallet fan-out sets it: a pallet is one scan to
+// the operator, so it announces itself once instead of once per carton. Events,
+// exceptions and dedup are untouched — only the announcement is silenced.
+function invHandleBoxScan(boxId, contextItem, notes, location, opts) {
+  var quiet = !!(opts && opts.quiet);
+  var _show = function(m, t, d, bt) { if (!quiet) invSetScanFeedback(m, t, d, bt); };
+  var _say  = function(t)           { if (!quiet) invSpeak(t); };
   var b = boxGet(boxId);
   var snapshot = b ? boxDeviceList(b).slice() : [];   // device records {serial,cxnk,mac}
 
@@ -9670,8 +9708,8 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
       "Box not found or empty in the box registry",
       "Build this box first (Boxes → New Box: scan the carton, then its devices), or scan devices individually.",
       notes);
-    invSetScanFeedback("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
-    invSpeak("Box not found");
+    _show("Box \"" + boxId + "\" is unknown or empty. Exception created.", "warn");
+    _say("Box not found");
     return false;
   }
 
@@ -9687,10 +9725,10 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
       "Finish the carton first (Boxes → open it → Done), then scan it again. " +
       "Until it's sealed, scan its devices individually.",
       notes);
-    invSetScanFeedback("Box " + b.boxId + " isn't sealed yet (" + snapshot.length +
+    _show("Box " + b.boxId + " isn't sealed yet (" + snapshot.length +
       " device(s) captured so far) — it can't be fast-counted. Finish it, or scan its devices.",
       "warn", "", "box");
-    invSpeak("Box not sealed");
+    _say("Box not sealed");
     return false;
   }
 
@@ -9705,12 +9743,12 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
     var more  = overlap.length - names.length;
     invBoxHandleStale(b.boxId, names.join(", "),
       overlap.length + " of its " + snapshot.length + " device(s) were already counted separately");
-    invSetScanFeedback(
+    _show(
       "Box " + b.boxId + " can't be fast-counted — " + overlap.length + " of its " + snapshot.length +
       " device(s) were already counted loose (" + names.join(", ") + (more > 0 ? " +" + more + " more" : "") +
       "). The manifest is stale. Open box and count what's actually inside.",
       "error", "", "box");
-    invSpeak("Box needs audit");
+    _say("Box needs audit");
     return false;
   }
 
@@ -9756,20 +9794,22 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
   invLastScannedBox = boxNormId(boxId);
   if (counted === 0 && dups > 0) {
     // Whole box was already counted this session — make that the headline.
-    invSetScanFeedback(
+    _show(
       "Box " + b.boxId + " was already counted this session — all " + dups +
       ' device(s) skipped (not double-counted). Tap "Open box" only if it was opened.',
       "warn", "", "box");
-    invSpeak("Box already counted");
+    _say("Box already counted");
   } else {
-    invSetScanFeedback(
+    _show(
       "Sealed box " + b.boxId + ": counted " + counted + " of " + snapshot.length + " device(s)" +
       (dups ? " (" + dups + " already counted this session)" : "") +
       '. Tap "Open box" if it was opened.',
       "ok", "", "box");
-    invSpeak("Box found, " + counted + " counted");
+    // One self-contained phrase. Was "Box found, N counted" — two clauses that
+    // read as two stitched announcements and clipped on iOS (v2.69.00).
+    _say(dups ? ("Box of " + counted + ", " + dups + " skipped") : ("Box of " + counted));
   }
-  invBoxRenderBar();
+  if (!quiet) invBoxRenderBar();
   return true;
 }
 
@@ -9887,11 +9927,16 @@ function invPalletCommitCount(res, notes, location) {
     notes:         notes
   });
 
+  // Quiet fan-out (v2.69.00): a pallet is ONE scan to the operator. Each carton
+  // used to fire its own tone + phrase, so a 32-carton pallet produced 32
+  // overlapping "Box found…" announcements over a single restarted beep. The
+  // pallet announces itself once, below.
   var countedBoxes = 0, refusedBoxes = 0;
   res.boxes.forEach(function(b) {
-    if (invHandleBoxScan(b.boxId, "", "Pallet " + p.palletId, location)) countedBoxes++;
+    if (invHandleBoxScan(b.boxId, "", "Pallet " + p.palletId, location, { quiet: true })) countedBoxes++;
     else refusedBoxes++;
   });
+  invBoxRenderBar();   // once, after the whole pallet
 
   palletRecordAudit(p.palletId, "counted", { location: location || "" });
   invLastScannedBox = null;   // the pallet, not any one carton, was the unit scanned
@@ -9900,7 +9945,10 @@ function invPalletCommitCount(res, notes, location) {
     "Pallet " + p.palletId + ": counted " + countedBoxes + " of " + res.boxes.length + " carton(s)" +
     (refusedBoxes ? " — " + refusedBoxes + " refused, see Exceptions" : "") + ".",
     refusedBoxes ? "warn" : "ok", "", "box");
-  invSpeak(refusedBoxes ? "Pallet counted with problems" : "Pallet counted");
+  invSpeak(refusedBoxes
+    ? ("Pallet counted with problems, " + refusedBoxes + " box" + (refusedBoxes === 1 ? "" : "es") + " refused")
+    : ("Pallet counted, " + countedBoxes + " box" + (countedBoxes === 1 ? "" : "es") +
+       ", " + res.deviceCount + " device" + (res.deviceCount === 1 ? "" : "s")));
   return true;
 }
 
@@ -9967,6 +10015,10 @@ function invPalletConfirmOpen(res, notes, location) {
              boxDeviceList(b).length + '</span></div>';
     }).join("");
   }
+  // Read-against-the-placard: speak the totals so the operator can check them
+  // against the printed placard without looking away from the pallet (v2.69.00).
+  invSpeak("Pallet, " + res.boxes.length + " box" + (res.boxes.length === 1 ? "" : "es") +
+           ", " + res.deviceCount + " device" + (res.deviceCount === 1 ? "" : "s"));
   modal.classList.remove("hidden");
 }
 
