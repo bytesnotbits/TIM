@@ -949,7 +949,8 @@
         <!-- By Item: one row per cycle — "how many last time, and the time before?" -->
         <div id="invPastItemPanel" class="hidden">
           <div class="event-log-filters" style="margin-bottom:10px;">
-            <input id="invPastItemQuery" type="search" placeholder="Item number or description&hellip;" oninput="invPastItemSearch()" style="width:260px;" />
+            <input id="invPastItemQuery" type="search" placeholder="Item, description, or location&hellip;" oninput="invPastItemSearch()" style="width:260px;" />
+            <button id="invPastItemClearBtn" class="btn-compact secondary" onclick="invPastItemClear()" style="display:none;">Clear</button>
             <span id="invPastItemCount" class="small">0 items</span>
           </div>
           <div class="scroll">

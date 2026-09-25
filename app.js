@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.62.00";
+const APP_VERSION = "v2.63.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5616,6 +5616,21 @@ function renderInvPast() {
   renderInvHistImported();
 }
 
+// One matcher behind BOTH Past Counts searches, so the two panels can never
+// drift into answering the same query differently. Every term must appear
+// somewhere in the row, so "cable y01" narrows instead of widening, and
+// location is searched alongside item and description — "what did we count in
+// FG" gets asked as often as "how many of item A".
+function _invPastTerms(q) {
+  return String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function _invPastHayMatches(hay, terms) {
+  if (!terms.length) return true;
+  hay = String(hay).toLowerCase();
+  return terms.every(function(t) { return hay.indexOf(t) !== -1; });
+}
+
 // -- By Count ---------------------------------------------------------
 
 function invPastSelect(sessionId) {
@@ -5745,19 +5760,16 @@ function renderInvPastDetail() {
   renderInvPastDetailRows();
 }
 
-// Every term must appear somewhere in the row, so "cable 3900" narrows instead
-// of widening. Item, description and location are all searched: "where did we
-// count this" is asked as often as "what was in bin Y01".
+// Rows for this panel carry their locations inline; see _invPastHayMatches for
+// the matching rule the two searches share.
 function _invPastDetailMatches(r, terms) {
-  if (!terms.length) return true;
-  var hay = (r.item + " " + r.description + " " + invPastLocText(r.locs)).toLowerCase();
-  return terms.every(function(t) { return hay.indexOf(t) !== -1; });
+  return _invPastHayMatches(r.item + " " + r.description + " " + invPastLocText(r.locs), terms);
 }
 
 function renderInvPastDetailRows() {
   var tbody = $("invPastDetailBody");
   if (!tbody) return;
-  var terms = invPastDetailQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  var terms = _invPastTerms(invPastDetailQuery);
   var all   = _invPastDetailItems;
   var items = all.filter(function(r) { return _invPastDetailMatches(r, terms); });
 
@@ -5806,7 +5818,6 @@ function invPastDetailClear() {
 }
 
 // -- By Item ----------------------------------------------------------
-
 // item -> { item, description, rows: [{ session, qty, serialized, ft, locs, last }] }
 // Rows arrive newest-cycle-first because invPastSessions() is already sorted,
 // which is the order the question is asked in: last cycle, then the one before.
@@ -5823,40 +5834,72 @@ function invPastItemIndex() {
                          ft: r.ft, locs: r.locs, last: r.last, exceptions: r.exceptions });
     });
   });
+  // Search haystack, built ONCE here rather than per keystroke. An item's
+  // locations are spread across its cycles and all of them go in, so "jumper fg"
+  // finds an item counted in FG in ANY cycle, not just the latest.
+  Object.keys(idx).forEach(function(k) {
+    var r = idx[k], locs = {};
+    r.rows.forEach(function(x) {
+      Object.keys(x.locs || {}).forEach(function(l) { locs[l] = 1; });
+    });
+    r._hay = (r.item + " " + r.description + " " + Object.keys(locs).join(" ")).toLowerCase();
+  });
   return idx;
 }
 
+// The index rolls up EVERY finalized session — thousands of events once the
+// historical cycles are loaded — so it is built on panel entry and after a sync,
+// never on a keystroke. Typing and picking a row both re-filter this cache.
+var _invPastItemIdx = null;
+
 function invPastItemSearch() {
   invPastSelectedItem = "";
-  renderInvPastItem();
+  renderInvPastItemList();
 }
 
 function invPastItemSelect(item) {
   invPastSelectedItem = item || "";
-  renderInvPastItem();
+  renderInvPastItemList();
+}
+
+function invPastItemClear() {
+  var el = $("invPastItemQuery");
+  if (el) { el.value = ""; el.focus(); }
+  invPastSelectedItem = "";
+  renderInvPastItemList();
 }
 
 function renderInvPastItem() {
+  _invPastItemIdx = invPastItemIndex();
+  renderInvPastItemList();
+}
+
+function renderInvPastItemList() {
   var listEl = $("invPastItemBody");
   if (!listEl) return;
-  var q   = normKey(($("invPastItemQuery") ? $("invPastItemQuery").value : "") || "");
-  var idx = invPastItemIndex();
+  var idx = _invPastItemIdx || (_invPastItemIdx = invPastItemIndex());
+  var terms = _invPastTerms($("invPastItemQuery") ? $("invPastItemQuery").value : "");
   var sessionCount = invPastSessions().length;
+  var all = Object.keys(idx).map(function(k) { return idx[k]; });
 
-  var matches = Object.keys(idx).map(function(k) { return idx[k]; }).filter(function(r) {
-    if (!q) return true;
-    return normKey(r.item).indexOf(q) !== -1 || normKey(r.description).indexOf(q) !== -1;
+  var matches = all.filter(function(r) {
+    return _invPastHayMatches(r._hay, terms);
   }).sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
 
+  var clearBtn = $("invPastItemClearBtn");
+  if (clearBtn) clearBtn.style.display = terms.length ? "" : "none";
+
   var cnt = $("invPastItemCount");
-  if (cnt) cnt.textContent = matches.length + " item" + (matches.length === 1 ? "" : "s") +
-                             " across " + sessionCount + " finalized count" +
-                             (sessionCount === 1 ? "" : "s");
+  if (cnt) cnt.textContent =
+    (terms.length ? matches.length.toLocaleString() + " of " + all.length.toLocaleString()
+                  : matches.length.toLocaleString()) +
+    " item" + (matches.length === 1 && !terms.length ? "" : "s") +
+    " across " + sessionCount + " finalized count" + (sessionCount === 1 ? "" : "s");
 
   if (!matches.length) {
     listEl.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px;">' +
-      (q ? "No counted item matches that search."
-         : "Nothing counted yet in any finalized count.") + "</td></tr>";
+      (terms.length ? "No counted item matches that search."
+                    : "Nothing counted yet in any finalized count.") + "</td></tr>";
     var d = $("invPastItemDetail"); if (d) d.innerHTML = "";
     return;
   }
@@ -5883,7 +5926,8 @@ function renderInvPastItem() {
   }).join("") +
   (matches.length > CAP
     ? '<tr><td colspan="5" class="small" style="text-align:center;color:#94a3b8;padding:8px;">' +
-      "Showing the first " + CAP + " of " + matches.length + " — narrow the search to see the rest.</td></tr>"
+      "Showing the first " + CAP + " of " + matches.length.toLocaleString() +
+      " — narrow the search to see the rest.</td></tr>"
     : "");
 
   renderInvPastItemDetail(idx);
