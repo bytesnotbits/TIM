@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.66.00";
+const APP_VERSION = "v2.67.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -10015,6 +10015,68 @@ function invBoxResolveDevice(v) {
          invResolveByMac(normKey(String(v).replace(/[:\-\.]/g, "")));
 }
 
+// -- Container ID collision check -----------------------------------
+// A container ID has to be unique across EVERY namespace TIM can scan, not just
+// among containers. Two of those namespaces are outside our control and can
+// collide with each other: vendor carton numbers (a Calix Carton No. is an
+// arbitrary string) and reel numbers (arbitrary alphanumerics — reels have no
+// prefix we mint, and legacy reels won't match the new numbering for years). A
+// container ID that doubles as a reel number or a device serial is the one
+// mistake that can credit ~24 devices (box) or ~200 (pallet) off a single
+// mis-scan, so it is refused at creation rather than resolved at scan time.
+//
+// The classifier's tiering is still the second line of defence — it handles IDs
+// created before this check existed, and ones arriving from another device via
+// GitHub sync, which never pass through this function.
+//
+// opts: { ignoreBox, ignorePallet } — the same-kind duplicate is handled by the
+// callers, which offer to open the existing record for editing instead.
+function timFindIdConflicts(value, opts) {
+  opts = opts || {};
+  var v = String(value || "").trim().toUpperCase();
+  if (!v) return [];
+  var key = normKey(v), out = [];
+
+  if (/^WH/i.test(v)) {
+    out.push({ kind: "location", detail: "IDs starting with WH are reserved for shelf locations." });
+  } else if (invLocationMap && Object.keys(invLocationMap).some(function(p) { return normKey(invLocationMap[p] || "") === key; })) {
+    out.push({ kind: "location", detail: "This matches a location barcode in the loaded location map." });
+  }
+
+  var dev = invBoxResolveDevice(v);
+  if (dev) {
+    out.push({ kind: "device", detail: "This is a known device (serial / FSAN / MAC) in history." });
+  } else if (typeof invResolveQuantSerial === "function" && invResolveQuantSerial(key)) {
+    out.push({ kind: "device", detail: "Odoo has this on hand as a lot/serial number." });
+  } else if (/^CXNK/i.test(v)) {
+    out.push({ kind: "device", detail: "CXNK is the Calix FSAN prefix — this reads as a device, not a container." });
+  }
+
+  if (findProductMapMatch(v))  out.push({ kind: "item",    detail: "This matches an item number in the product catalog." });
+  if (BARCODE_MAP[key])        out.push({ kind: "barcode", detail: "This is mapped to an item in the barcode map." });
+
+  // Reels: the highest-risk collision, because reel numbers are arbitrary and
+  // TIM only knows a reel by having counted it before.
+  if (typeof invFindReelMaster === "function" && invFindReelMaster(v)) {
+    out.push({ kind: "reel", detail: "A reel with this number has been counted before." });
+  }
+
+  if (!opts.ignoreBox && boxGet(v))       out.push({ kind: "box",    detail: "A carton is already registered under this ID." });
+  if (!opts.ignorePallet && palletGet(v)) out.push({ kind: "pallet", detail: "A pallet is already registered under this ID." });
+
+  return out;
+}
+
+// Shared refusal message. Vendor carton numbers can't be changed, so the way
+// out is always the same: put our own BOX-/PAL- label on it and scan that.
+function timIdConflictMessage(value, conflicts, what) {
+  return '"' + value + '" can\'t be used as ' + (what || "a container ID") + ".\n\n" +
+    conflicts.map(function(c) { return "• " + c.detail; }).join("\n") +
+    "\n\nScanning it later would be ambiguous, and a wrong match here credits " +
+    "every device in the container at once. Put your own label on it " +
+    "(BOX-… for a carton, PAL-… for a pallet) and scan that instead.";
+}
+
 function invBoxModeScan(rawValue, notes) {
   var v = sanitizeScannerValue(rawValue, { uppercase: true });
   if (!v) return false;
@@ -10022,11 +10084,17 @@ function invBoxModeScan(rawValue, notes) {
   // ARMED: box mode with nothing being captured — this scan is the carton/box ID
   // itself (auto-armed on entering the empty state; no "Save & New" tap needed).
   if (invBoxArmed) {
-    // Guard: a "carton ID" that resolves to a known device/MAC is almost
-    // certainly a mis-scan (the device was scanned instead of the carton label).
-    if (invBoxResolveDevice(v)) {
-      invSetScanFeedback('"' + v + '" looks like a device, not a carton ID. ' +
-        "Scan the carton label first, then its devices.", "warn");
+    // Guard: a "carton ID" that collides with any other namespace is either a
+    // mis-scan (the device was scanned instead of the carton label) or an ID
+    // that would be ambiguous every time it's scanned afterwards. Widened from
+    // a device-only check in v2.67.00 — reels and item numbers matter just as
+    // much, and a reel number is arbitrary enough to look like a carton no.
+    var armedConflicts = timFindIdConflicts(v, { ignoreBox: true });
+    if (armedConflicts.length) {
+      invSetScanFeedback('"' + v + '" can\'t be a carton ID — ' +
+        armedConflicts[0].detail + " Scan the carton label, or put your own BOX- label on it.",
+        "warn");
+      invSpeak("Not a carton ID");
       return false; // stay armed so the next scan can be the real carton
     }
     invBoxArmed = false;
@@ -10394,6 +10462,15 @@ function boxCapSetBoxId(input) {
           ' device(s). Open it for editing instead?')) { input.value = boxCapState.boxId; return; }
       boxCapClose();
       boxCapOpen(v);
+      return;
+    }
+    // Cross-namespace collision: a carton ID that also reads as a device, item,
+    // location, reel or pallet would make every later scan of it ambiguous.
+    var conflicts = timFindIdConflicts(v, { ignoreBox: true });
+    if (conflicts.length) {
+      alert(timIdConflictMessage(v, conflicts, "a carton ID"));
+      if (input) { input.value = boxCapState.boxId || ""; input.focus(); input.select(); }
+      if (typeof timFeedback === "function") timFeedback("warn");
       return;
     }
   }
@@ -12635,6 +12712,15 @@ function palletCapSetPalletId(input) {
           ' box(es). Open it for editing instead?')) { if (input) input.value = palletCapState.palletId; return; }
       palletCapClose();
       palletCapOpen(v);
+      return;
+    }
+    // Cross-namespace collision — same rule as cartons. A pallet ID is the
+    // highest-stakes one: a false match credits every device on the pallet.
+    var palConflicts = timFindIdConflicts(v, { ignorePallet: true });
+    if (palConflicts.length) {
+      alert(timIdConflictMessage(v, palConflicts, "a pallet ID"));
+      if (input) { input.value = palletCapState.palletId || ""; input.focus(); input.select(); }
+      if (typeof timFeedback === "function") timFeedback("warn");
       return;
     }
   }
