@@ -1112,6 +1112,19 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `rcLoadWorklistData()` | Restore the 3 source files from IDB on startup |
 | `rcClearCountData/MoveData/NiscData()` | Clear a source file (confirm + IDB remove) |
 | `rcBuildWorklist(focusSet, extraRows, locRecounts)` | **Core join engine**: countByItem + moveByItem (per-item since-count gating) → `{ flat[], absent[], niscDrops[] }`; outbound auto-subtracted, inbound flagged. `extraRows` = session `addedCountRows` (walk-time found-at rows) folded into totals + flagged `added`. `locRecounts` = `{ITEM\|\|LOC:qty}` per-location walk counts that override that shelf's file qty → Item Total + Short self-correct |
+
+**Stale-carton recounts (v2.68.00).** When a carton's manifest is contradicted mid-count, `invBoxHandleStale` voids its sealed count — so its devices are UNCOUNTED until someone opens it. Rather than leave that in a finalize warning, the carton is pushed onto a recount attached to the **live** count (`rcSession.parentId` already pointed at the running session, so the model needed no change). Container rows live in their own bucket because a carton audit is not an item quantity — see Data Dictionary `RcItem — container variant`.
+
+| Function | Purpose |
+|----------|---------|
+| `rcAllItems(s)` | **All four buckets** (serialized/bulk/reels/containers). Every total and pending count reads this, so a new bucket can't be missed at one site and skew a progress figure |
+| `rcEnsureAnomalySession()` | Find-or-create the `autoAnomaly` recount for the live count — one per `parentId`, so six stale cartons make six rows in one recount, not six recounts |
+| `rcAddStaleBox(b, reason, location)` | Append a `gapType:"stale_box"` container row (idempotent per carton); snapshots the manifest and device count at flag time |
+| `rcCompleteStaleBox(boxId, result, counts)` | Close the row once audited. Fires from `boxRecordAudit`, so BOTH audit paths complete it. `resolutionStatus` stays null on purpose — the item resolution enum describes quantity outcomes |
+| `rcPendingStaleBoxes()` | Cartons still awaiting audit across active recounts; drives the `invFinalizeSession` block |
+| `rcRenderStaleBoxSection(session)` | Renders "Cartons to audit" **above** the discrepancy sections — blocking work, not reconciliation |
+| `rcAuditStaleBox(boxId)` | Jump to Inventory → **Count** subview and open that carton for audit, focused on the scan input |
+| `invBoxOpenById(boxId)` | Open a SPECIFIC carton for audit (split out of `invBoxOpen`, which still acts on the last-scanned one) so a worklist row can launch the audit without re-scanning the carton |
 | `rcWlSetLocRecount(id,itemUp,loc,val)` | Per-location recount box (every shelf row): store/clear `session.locRecounts[item\|\|loc]`; sets item status |
 | `rcWlOpenAddRow / rcWlCloseAddRow / rcWlCommitAddRow(id,itemUp) / rcWlRemoveAddedRow(id,idx)` | "＋loc" add-a-found-location flow: modal → append to `session.addedCountRows` (isRecount, dated today) → Short self-corrects; undo via removal |
 | `rcSessionFocusSet(session)` / `rcFindItemByNumber(session, up)` | Session helpers: item-number set / lookup |

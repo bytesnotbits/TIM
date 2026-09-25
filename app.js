@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.67.00";
+const APP_VERSION = "v2.68.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -8989,6 +8989,12 @@ function invBoxHandleStale(boxId, triggerLabel, how) {
     'Open box ' + b.boxId + ' and count what is actually inside (Open box → scan → Done). ' +
     "Its sealed count has been voided so nothing is credited on the old manifest.",
     triggerLabel ? ("triggered by " + triggerLabel) : "");
+
+  // Push it onto the anomaly recount so it resolves during the walk instead of
+  // waiting in a finalize warning.
+  if (typeof rcAddStaleBox === "function") {
+    rcAddStaleBox(b, how || "a device from it was counted separately", invCurrentLocation);
+  }
   return b;
 }
 
@@ -9631,6 +9637,8 @@ function boxRecordAudit(boxId, result, counts, location) {
   b.updatedAt = invNow();
   b.updatedBy = boxWho();
   boxSaveToStorage();
+  // Close the loop on a stale-carton recount row, if this carton was on one.
+  if (typeof rcCompleteStaleBox === "function") rcCompleteStaleBox(boxId, result, counts);
   return entry;
 }
 // One-line "last audited" label for the registry list (empty if never audited).
@@ -10249,6 +10257,16 @@ function invBoxFinish() {
     if (extra.length) invCreateExceptionEvent(b.boxId, "box_id",
       "Open box " + b.boxId + ": " + extra.length + " unexpected device(s) found",
       "Extra: " + extra.join(", "), "");
+    // Record the audit here too. The Boxes-tab audit modal was the only caller
+    // of boxRecordAudit, so an in-count "Open box → scan → Done" left no audit
+    // trail on the box and never closed out a stale-carton recount row — which
+    // is the very path rcAuditStaleBox sends the operator down.
+    var _matched = curKeys.filter(function(k) { return priorKeys.indexOf(k) !== -1; }).length;
+    boxRecordAudit(b.boxId,
+      (missing.length === 0 && extra.length === 0) ? "match" : "diff",
+      { matched: _matched, missing: missing.length, extra: extra.length },
+      invCurrentLocation || b.location || "");
+
     if (missing.length || extra.length) {
       invSetScanFeedback("Box " + b.boxId + " updated: " + n + " device(s). " +
         missing.length + " missing, " + extra.length + " extra — flagged.", "warn", "", "box");
@@ -10269,11 +10287,20 @@ function invBoxFinish() {
 // "Open box" — reopen the last-scanned box for correction. Voids this session's
 // sealed-count events for that box so re-scans aren't flagged as duplicates,
 // snapshots prior contents for the diff, and clears them so re-scan rebuilds.
+// "Open box" on the scan bar — acts on whatever carton was last scanned.
 function invBoxOpen() {
-  if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return; }
   var key = invLastScannedBox || invActiveBox;
-  var b   = key ? boxGet(key) : null;
-  if (!b) { invSetScanFeedback("No box to open — scan a known box first.", "warn"); return; }
+  if (!key) { invSetScanFeedback("No box to open — scan a known box first.", "warn"); return; }
+  invBoxOpenById(key);
+}
+
+// Open a SPECIFIC carton for audit. Split out from invBoxOpen so a stale-carton
+// row on the recount worklist can launch the same audit without the operator
+// having to find and re-scan the carton first.
+function invBoxOpenById(boxId) {
+  if (!invSession) { invSetScanFeedback("Start a session first.", "error"); return false; }
+  var b = boxId ? boxGet(boxId) : null;
+  if (!b) { invSetScanFeedback("No box to open — scan a known box first.", "warn"); return false; }
 
   invBoxVoidSessionCounts(b.boxId);
   invBoxOverridePrior = boxDeviceList(b).slice();   // device records, for the Done diff
@@ -10282,9 +10309,30 @@ function invBoxOpen() {
   invActiveBox     = boxNormId(b.boxId);
   invLastScannedBox = invActiveBox;
   invBoxIsOverride = true;
-  invSetScanFeedback("Box " + b.boxId + " opened — scan the devices actually inside, then tap Done.", "info", "", "box");
+  if (invScanMode !== "box") invSetScanMode("box");
+  invSetScanFeedback("Box " + b.boxId + " opened — scan the devices actually inside, then tap Done.", "warn", "", "box");
   invSpeak("Box ready for edit");
   invBoxRenderBar();
+  return true;
+}
+
+// Launch the audit for a stale-carton recount row: jump to Inventory and open
+// the carton. Called from the recount worklist.
+function rcAuditStaleBox(boxId) {
+  if (!invSession) {
+    alert("Start (or resume) the inventory session first — a carton audit records its counts into a live session.");
+    return;
+  }
+  // Land on the Count subview, not Recount — the audit is done by scanning, so
+  // the operator needs the scan input in front of them, not the worklist they
+  // just tapped from.
+  if (typeof switchTab === "function") switchTab("inventory");
+  if (typeof invShowSubview === "function") invShowSubview("count");
+  setTimeout(function() {
+    if (invBoxOpenById(boxId)) {
+      var si = $("invScanInput"); if (si) { si.focus(); si.select(); }
+    }
+  }, 60);
 }
 
 // Silently void (not via the confirm dialog) this session's counts for a box,
@@ -18332,7 +18380,7 @@ function rcRenderWorklistHome() {
     html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Existing Worklists</div>';
     wls.slice().reverse().forEach(function(s) {
       var focus = rcSessionFocusSet(s);
-      var done = [].concat(s.items.serialized, s.items.bulk, s.items.reels).filter(function(i){ return i.status === "complete"; }).length;
+      var done = rcAllItems(s).filter(function(i){ return i.status === "complete"; }).length;
       html += '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;">' +
         '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:14px;">' + escapeHtml(s.recountName) + '</div>' +
           '<div class="small" style="color:#64748b;">' + (s.createdAt ? new Date(s.createdAt).toLocaleDateString() : '') + ' &bull; ' + focus.size + ' items &bull; ' + done + ' recounted</div></div>' +
@@ -18859,6 +18907,117 @@ function rcShowDetail(recountId) {
 
 // ── Card rendering ─────────────────────────────────────────────────
 
+// ---- Stale-carton recounts ----------------------------------------
+// A carton flagged stale during a count has had its sealed count VOIDED, so its
+// contents are sitting uncounted. Rather than leave that in a finalize warning
+// for someone to act on later, the carton is pushed straight onto a recount
+// attached to the LIVE count, so it resolves during the walk like any other
+// discrepancy. (rcSession already carries parentId = the running session, so
+// nothing about the recount model had to change to allow a mid-count recount.)
+//
+// Container items get their own bucket because a carton audit is not an item
+// quantity: no itemNumber, no expected-vs-counted number, and the resolution is
+// "open it and scan what's actually inside", not "type a figure".
+
+// Every bucket, including containers. Used everywhere totals/pending are
+// computed so a new bucket can't be missed at one site and skew a count.
+function rcAllItems(s) {
+  if (!s || !s.items) return [];
+  return [].concat(s.items.serialized || [], s.items.bulk || [],
+                   s.items.reels || [], s.items.containers || []);
+}
+
+// Find (or create) the recount that collects anomalies auto-detected during the
+// live count. One per parent session — a count with six stale cartons produces
+// one recount with six rows, not six recounts.
+function rcEnsureAnomalySession() {
+  if (!invSession) return null;
+  var parent = invSession.sessionId;
+  var found = rcSessions.find(function(s) {
+    return s.autoAnomaly && s.parentId === parent && s.status === "active";
+  });
+  if (found) return found;
+  var s = {
+    recountId:   rcGenSessionId(),
+    recountName: "Anomalies — " + (invSession.sessionName || parent),
+    cycleId:     invSession.cycleId || parent,
+    parentId:    parent,
+    counters:    [],
+    createdAt:   invNow(),
+    status:      "active",
+    autoAnomaly: true,          // distinguishes auto-built from user-created
+    items: { serialized: [], bulk: [], reels: [], containers: [] }
+  };
+  rcSessions.push(s);
+  rcSaveStorage();
+  return s;
+}
+
+// Add a stale carton to the anomaly recount. Idempotent per carton.
+function rcAddStaleBox(b, reason, location) {
+  if (!b) return null;
+  var s = rcEnsureAnomalySession();
+  if (!s) return null;
+  s.items.containers = s.items.containers || [];
+  var key = boxNormId(b.boxId);
+  var existing = s.items.containers.find(function(i) { return boxNormId(i.boxId || "") === key; });
+  if (existing) return existing;
+
+  var devs = boxDeviceList(b);
+  var item = {
+    rcItemId:        rcGenItemId(),
+    containerType:   "box",
+    boxId:           b.boxId,
+    itemNumber:      "",
+    description:     "Carton " + b.boxId + " — " + devs.length + " device(s) on the manifest",
+    location:        location || b.location || "",
+    gapType:         "stale_box",
+    staleReason:     reason || "",
+    deviceCount:     devs.length,
+    expectedDevices: devs.map(boxDevPrimary).filter(Boolean),
+    niscExpectedQty: null,
+    status:          "pending",
+    resolutionStatus: null,
+    movementIds:     []
+  };
+  s.items.containers.push(item);
+  rcSaveStorage();
+  if (typeof rcRenderCard === "function") rcRenderCard();
+  return item;
+}
+
+// Close the loop: once the carton has actually been audited, its row completes.
+// resolutionStatus is deliberately left null rather than mapped onto the item
+// resolution enum — those values describe quantity outcomes and would be a lie
+// here; the audit result is recorded in its own field instead.
+function rcCompleteStaleBox(boxId, auditResult, counts) {
+  var key = boxNormId(boxId), changed = false;
+  rcSessions.forEach(function(s) {
+    ((s.items && s.items.containers) || []).forEach(function(i) {
+      if (boxNormId(i.boxId || "") !== key || i.status === "complete") return;
+      i.status      = "complete";
+      i.auditResult = auditResult || "audited";
+      i.auditCounts = counts || null;
+      i.auditedAt   = invNow();
+      changed = true;
+    });
+  });
+  if (changed) { rcSaveStorage(); if (typeof rcRenderCard === "function") rcRenderCard(); }
+  return changed;
+}
+
+// Cartons still awaiting an audit across every active recount.
+function rcPendingStaleBoxes() {
+  var out = [];
+  rcSessions.forEach(function(s) {
+    if (s.status !== "active") return;
+    ((s.items && s.items.containers) || []).forEach(function(i) {
+      if (i.status !== "complete") out.push(i);
+    });
+  });
+  return out;
+}
+
 function rcRenderCard() {
   var createForm   = $("rcCreateForm");
   var listView     = $("rcListView");
@@ -18898,8 +19057,8 @@ function rcRenderList() {
     return;
   }
   el.innerHTML = rcSessions.slice().reverse().map(function(s) {
-    var total = s.items.serialized.length + s.items.bulk.length + s.items.reels.length;
-    var pending = [].concat(s.items.serialized, s.items.bulk, s.items.reels).filter(function(i){ return i.status === "pending"; }).length;
+    var total = rcAllItems(s).length;
+    var pending = rcAllItems(s).filter(function(i){ return i.status === "pending"; }).length;
     var date  = s.createdAt ? new Date(s.createdAt).toLocaleDateString() : "";
     var statusBadge = s.status === "active"
       ? '<span style="background:#dbeafe;color:#1d4ed8;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Active</span>'
@@ -19201,14 +19360,61 @@ function boxReconcileRenderResults(session) {
   return html;
 }
 
+// Cartons flagged stale during the count. Rendered ahead of the discrepancy
+// sections because they are blocking work rather than reconciliation: each one's
+// devices are UNCOUNTED right now (its sealed count was voided the moment the
+// manifest was contradicted), so the count is short until the carton is opened.
+function rcRenderStaleBoxSection(session) {
+  var items = (session && session.items && session.items.containers) || [];
+  if (!items.length) return "";
+
+  var pending = items.filter(function(i) { return i.status !== "complete"; });
+  var devsOut = pending.reduce(function(s, i) { return s + (i.deviceCount || 0); }, 0);
+
+  var rows = items.map(function(i) {
+    var done = i.status === "complete";
+    var badge = done
+      ? '<span style="background:#dcfce7;color:#15803d;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Audited</span>'
+      : '<span style="background:#fef3c7;color:#b45309;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:600;">Needs audit</span>';
+    var resultTxt = done && i.auditCounts
+      ? ' <span class="small" style="color:#6b7280;">' + (i.auditResult === "match" ? "matched" :
+          ((i.auditCounts.missing || 0) + " missing / " + (i.auditCounts.extra || 0) + " extra")) + '</span>'
+      : "";
+    return '<div style="display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border-bottom:1px solid #f1f5f9;">' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="font-family:monospace;font-weight:600;">' + escapeHtml(i.boxId || "") + '</div>' +
+        '<div class="small" style="color:#6b7280;">' + escapeHtml(i.description || "") +
+          (i.location ? " · " + escapeHtml(i.location) : "") + '</div>' +
+        '<div class="small" style="color:#b45309;">' + escapeHtml(i.staleReason || "") + '</div>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;white-space:nowrap;">' + badge + resultTxt +
+        (done ? "" : '<button style="padding:5px 12px;font-size:12px;" onclick="rcAuditStaleBox(\'' +
+                     escapeHtml(String(i.boxId || "").replace(/'/g, "\\'")) + '\')">Open &amp; audit</button>') +
+      '</div>' +
+    '</div>';
+  }).join("");
+
+  return '<div class="card" style="margin-top:14px;border-left:4px solid #f59e0b;">' +
+    '<h3 style="margin:0 0 4px;">Cartons to audit' +
+      (pending.length ? ' <span style="color:#b45309;">(' + pending.length + ')</span>' : "") + '</h3>' +
+    '<p class="small" style="margin:0 0 10px;color:#6b7280;">' +
+      (pending.length
+        ? "A device from each of these was counted separately, so its manifest disagrees with the floor. " +
+          "Their sealed counts were voided — about <b>" + devsOut + "</b> device(s) are uncounted until they're opened."
+        : "All flagged cartons have been audited.") +
+    '</p>' +
+    '<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">' + rows + '</div>' +
+  '</div>';
+}
+
 function rcRenderDetail() {
   var el = $("rcDetailContent");
   if (!el) return;
   var session = rcSessions.find(function(s){ return s.recountId === rcActiveId; });
   if (!session) { el.innerHTML = "<p>Session not found.</p>"; return; }
 
-  var total   = session.items.serialized.length + session.items.bulk.length + session.items.reels.length;
-  var pending = [].concat(session.items.serialized, session.items.bulk, session.items.reels).filter(function(i){ return i.status === "pending"; }).length;
+  var total   = rcAllItems(session).length;
+  var pending = rcAllItems(session).filter(function(i){ return i.status === "pending"; }).length;
 
   var html = "";
 
@@ -19227,6 +19433,10 @@ function rcRenderDetail() {
       '<button onclick="rcExportXlsx(\'' + session.recountId + '\')" style="font-size:12px;padding:4px 12px;">&#8595; Export XLSX</button>' +
     '</div>' +
   '</div>';
+
+  // Cartons to audit first — these are blocking work (their contents are
+  // uncounted right now), unlike the discrepancy sections which are reconciliation.
+  html += rcRenderStaleBoxSection(session);
 
   // Three discrepancy type sections
   html += rcRenderDiscrepancySection(session, "serialized");
@@ -20131,15 +20341,16 @@ function invFinalizeSession() {
   // opening them ships a count that is short by whatever is actually in them —
   // a silent undercount, which is exactly what the voiding was meant to avoid
   // becoming a silent OVERcount. Surface it before the session closes.
-  var _audit = invBoxesNeedingAudit();
+  var _audit = (typeof rcPendingStaleBoxes === "function") ? rcPendingStaleBoxes() : [];
   if (_audit.length) {
     var _devTotal = _audit.reduce(function(s, a) { return s + (a.deviceCount || 0); }, 0);
     if (!confirm(
-      "⚠ " + _audit.length + " BOX(ES) STILL NEED AN AUDIT.\n\n" +
-      _audit.map(function(a) { return "  • " + a.boxId + " (" + (a.deviceCount || 0) + " device(s)) — " + a.reason; }).join("\n") +
+      "⚠ " + _audit.length + " CARTON(S) STILL NEED AN AUDIT.\n\n" +
+      _audit.map(function(a) { return "  • " + a.boxId + " (" + (a.deviceCount || 0) + " device(s))"; }).join("\n") +
       "\n\nTheir sealed counts were voided when the manifest was contradicted, so about " +
       _devTotal + " device(s) are currently UNCOUNTED.\n\n" +
-      "Open each box and count what's actually inside (Open box → scan → Done), then finalize.\n\n" +
+      "They're on the \"Anomalies\" recount — open each one there (Open & audit) and scan " +
+      "what's actually inside, then finalize.\n\n" +
       "Finalize anyway and leave them uncounted?"
     )) return;
   }
