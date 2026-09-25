@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.69.00";
+const APP_VERSION = "v2.69.01";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -9945,10 +9945,12 @@ function invPalletCommitCount(res, notes, location) {
     "Pallet " + p.palletId + ": counted " + countedBoxes + " of " + res.boxes.length + " carton(s)" +
     (refusedBoxes ? " — " + refusedBoxes + " refused, see Exceptions" : "") + ".",
     refusedBoxes ? "warn" : "ok", "", "box");
+  // No totals here: the confirmation already spoke them, and the operator just
+  // agreed they match the placard. Repeating them makes the tap feel unfinished
+  // and adds a second announcement to an action that only needs "done" (v2.69.01).
   invSpeak(refusedBoxes
     ? ("Pallet counted with problems, " + refusedBoxes + " box" + (refusedBoxes === 1 ? "" : "es") + " refused")
-    : ("Pallet counted, " + countedBoxes + " box" + (countedBoxes === 1 ? "" : "es") +
-       ", " + res.deviceCount + " device" + (res.deviceCount === 1 ? "" : "s")));
+    : "Pallet counted");
   return true;
 }
 
