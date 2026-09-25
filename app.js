@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.61.01";
+const APP_VERSION = "v2.62.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5436,6 +5436,9 @@ function invClaimRemoteSession(sessionId) {
 var invPastPanel        = "counts";   // "counts" | "item"
 var invPastSelectedId   = "";         // selected session (By Count)
 var invPastSelectedItem = "";         // selected item    (By Item)
+var invPastDetailQuery  = "";         // filter inside the By Count drill-down
+var _invPastDetailItems = [];         // that drill-down's rolled-up rows, held so a
+                                      // keystroke filters without re-rolling
 
 // Finalized sessions, most recent cycle first. Never sort on sessionName —
 // it leads with the username, so it orders by person, then date.
@@ -5617,6 +5620,9 @@ function renderInvPast() {
 
 function invPastSelect(sessionId) {
   invPastSelectedId = sessionId || "";
+  // A new drill-down starts unfiltered — a query left over from the last count
+  // would silently hide rows in this one.
+  invPastDetailQuery = "";
   renderInvPastSessions();
 }
 
@@ -5660,19 +5666,31 @@ function renderInvPastSessions() {
   renderInvPastDetail();
 }
 
+// The drill-down runs to hundreds of rows for a real cycle, so it carries its
+// own filter. Rendered as TWO functions on purpose: the shell (heading, export
+// buttons, search box, table frame) is painted by renderInvPastDetail, the rows
+// by renderInvPastDetailRows, and typing calls only the latter. Rebuilding the
+// shell on each keystroke would destroy the very input being typed into and
+// take focus and caret with it — the By Item search dodges this by living in
+// static markup, which this panel cannot do because it only exists once a count
+// is picked.
 function renderInvPastDetail() {
   var host = $("invPastDetail");
   if (!host) return;
   if (!invPastSelectedId) {
+    _invPastDetailItems = [];
     host.innerHTML = '<p class="small" style="color:#94a3b8;margin-top:12px;">' +
       "Pick a count above to see what it found, item by item.</p>";
     return;
   }
   var sess = invPastSessions().filter(function(s) { return s.sessionId === invPastSelectedId; })[0];
-  if (!sess) { invPastSelectedId = ""; host.innerHTML = ""; return; }
+  if (!sess) { invPastSelectedId = ""; _invPastDetailItems = []; host.innerHTML = ""; return; }
 
   var roll  = invPastRollup(invPastEvents(sess.sessionId));
-  var items = Object.keys(roll).map(function(k) { return roll[k]; })
+  // Held for the filter so a keystroke re-renders rows without rolling the
+  // whole event list up again — a full cycle is thousands of events, and the
+  // iPad feels every one of them.
+  _invPastDetailItems = Object.keys(roll).map(function(k) { return roll[k]; })
     .sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
   var closed = sess.closedAt || sess.updatedAt || "";
 
@@ -5699,29 +5717,92 @@ function renderInvPastDetail() {
           ? '<button class="btn-compact" onclick="invHistEditOpen(\'' + escapeHtml(sess.sessionId) +
             '\')">Edit rows</button>'
           : "") +
+        // NOTE: the exports below re-derive from the session's events, so they
+        // deliberately ignore the filter — a search narrows what you are
+        // LOOKING at, never what you ship out of here.
         '<button class="btn-compact" onclick="invPastExportSummary(\'xlsx\')">Export Items (XLSX)</button>' +
         '<button class="btn-compact secondary" onclick="invPastExportSummary(\'csv\')">CSV</button>' +
         '<button class="btn-compact" onclick="invPastExportEvents(\'xlsx\')">Export Event Log (XLSX)</button>' +
         '<button class="btn-compact secondary" onclick="invPastExportEvents(\'csv\')">CSV</button>' +
       "</div>" +
     "</div>" +
+    '<div class="event-log-filters" style="margin:6px 0 10px;">' +
+      '<input id="invPastDetailQuery" type="search" placeholder="Item, description, or location&hellip;" ' +
+        'value="' + escapeHtml(invPastDetailQuery) + '" oninput="invPastDetailSearch()" style="width:260px;" />' +
+      // Explicit Clear alongside the native type="search" &times;: that one is a
+      // 10px glyph that only shows while the field has focus, which is a poor
+      // target on the warehouse iPad. A filter you cannot see how to undo reads
+      // as missing data, so the way out stays visible.
+      '<button id="invPastDetailClearBtn" class="btn-compact secondary" ' +
+        'onclick="invPastDetailClear()" style="display:none;">Clear</button>' +
+      '<span id="invPastDetailCount" class="small"></span>' +
+    "</div>" +
     '<div class="scroll"><table><thead><tr>' +
       "<th>Item</th><th>Description</th><th>Counted Qty</th><th>Serialized</th>" +
       "<th>Reel Footage</th><th>Where It Was Counted</th><th>Last Counted</th>" +
-    "</tr></thead><tbody>" +
-    (items.length ? items.map(function(r) {
-      return "<tr><td>" +
-          "<a href=\"#\" onclick=\"prodShowItemHistory('" + escapeHtml(r.item) + "');return false;\">" +
-          escapeHtml(r.item) + "</a></td>" +
-        "<td>" + escapeHtml(r.description) + "</td>" +
-        "<td style=\"text-align:right\">" + (r.qty ? r.qty.toLocaleString() : "") + "</td>" +
-        "<td style=\"text-align:right\">" + (r.serialized ? r.serialized.toLocaleString() : "") + "</td>" +
-        "<td style=\"text-align:right\">" + (r.ft ? r.ft.toLocaleString() : "") + "</td>" +
-        "<td>" + escapeHtml(invPastLocText(r.locs)) + "</td>" +
-        "<td style=\"white-space:nowrap\">" + escapeHtml(r.last ? new Date(r.last).toLocaleString() : "") + "</td></tr>";
-    }).join("")
-      : '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:12px;">This count has no items on record.</td></tr>') +
-    "</tbody></table></div>";
+    '</tr></thead><tbody id="invPastDetailBody"></tbody></table></div>';
+
+  renderInvPastDetailRows();
+}
+
+// Every term must appear somewhere in the row, so "cable 3900" narrows instead
+// of widening. Item, description and location are all searched: "where did we
+// count this" is asked as often as "what was in bin Y01".
+function _invPastDetailMatches(r, terms) {
+  if (!terms.length) return true;
+  var hay = (r.item + " " + r.description + " " + invPastLocText(r.locs)).toLowerCase();
+  return terms.every(function(t) { return hay.indexOf(t) !== -1; });
+}
+
+function renderInvPastDetailRows() {
+  var tbody = $("invPastDetailBody");
+  if (!tbody) return;
+  var terms = invPastDetailQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  var all   = _invPastDetailItems;
+  var items = all.filter(function(r) { return _invPastDetailMatches(r, terms); });
+
+  var counter = $("invPastDetailCount");
+  if (counter) {
+    counter.textContent = !all.length ? ""
+      : terms.length ? items.length.toLocaleString() + " of " + all.length.toLocaleString() + " items"
+                     : all.length.toLocaleString() + " items";
+  }
+
+  var clearBtn = $("invPastDetailClearBtn");
+  if (clearBtn) clearBtn.style.display = terms.length ? "" : "none";
+
+  tbody.innerHTML = items.length
+    ? items.map(function(r) {
+        return "<tr><td>" +
+            "<a href=\"#\" onclick=\"prodShowItemHistory('" + escapeHtml(r.item) + "');return false;\">" +
+            escapeHtml(r.item) + "</a></td>" +
+          "<td>" + escapeHtml(r.description) + "</td>" +
+          "<td style=\"text-align:right\">" + (r.qty ? r.qty.toLocaleString() : "") + "</td>" +
+          "<td style=\"text-align:right\">" + (r.serialized ? r.serialized.toLocaleString() : "") + "</td>" +
+          "<td style=\"text-align:right\">" + (r.ft ? r.ft.toLocaleString() : "") + "</td>" +
+          "<td>" + escapeHtml(invPastLocText(r.locs)) + "</td>" +
+          "<td style=\"white-space:nowrap\">" + escapeHtml(r.last ? new Date(r.last).toLocaleString() : "") + "</td></tr>";
+      }).join("")
+    : '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:12px;">' +
+      (!all.length
+        ? "This count has no items on record."
+        : "No item in this count matches &ldquo;" + escapeHtml(invPastDetailQuery.trim()) + "&rdquo;.") +
+      "</td></tr>";
+}
+
+function invPastDetailSearch() {
+  var el = $("invPastDetailQuery");
+  invPastDetailQuery = el ? el.value : "";
+  renderInvPastDetailRows();
+}
+
+// Clears without repainting the shell, so focus stays in the box and the next
+// search can just be typed.
+function invPastDetailClear() {
+  invPastDetailQuery = "";
+  var el = $("invPastDetailQuery");
+  if (el) { el.value = ""; el.focus(); }
+  renderInvPastDetailRows();
 }
 
 // -- By Item ----------------------------------------------------------
