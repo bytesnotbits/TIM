@@ -580,6 +580,7 @@
               <option value="mac">MAC Address</option>
               <option value="item_number">Item Number (bulk count)</option>
               <option value="box_id">Box ID</option>
+              <option value="pallet_id">Pallet ID</option>
               <option value="location">Location</option>
               <option value="reel_number">Reel Number</option>
             </select>
@@ -1593,6 +1594,10 @@
         Type to filter the list (by pallet ID or location), or scan a pallet to tick it. Check the pallets you want and <b>Export XLSX</b> flattens each to one row per device across all its member boxes. With none checked, Export sends every pallet.
       </p>
       <div id="palletTabList"></div>
+      <!-- Admin-only: the count-time confirmation is ON by default. Shown here
+           rather than in a settings screen so it sits next to the thing it
+           governs; hidden entirely for non-admins (invRenderPalletAdmin). -->
+      <div id="palletAdminSettings"></div>
     </div>
     <div id="palletTabDeleted"></div><!-- admin-only Deleted-pallets archive (palletRenderDeletedInto) -->
   </div><!-- /tabPallets -->
@@ -1904,6 +1909,36 @@
       </div>
       <div class="modal-body">
         <div id="invBoxManagerList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pallet count confirmation: one scan can credit ~200 devices, so the
+       operator compares TIM's totals against the placard printed on the pallet
+       before it is credited. Deliberately NOT the same as boxes (which have no
+       per-scan confirmation) — the magnitude is what justifies the check. -->
+  <div id="invPalletConfirmModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin:0;">Count this pallet?</h2>
+          <div class="small">Check these against the placard on the pallet.</div>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="ipc-card">
+          <div class="ipc-id" id="invPalletConfirmId">—</div>
+          <div class="ipc-counts" id="invPalletConfirmCounts"></div>
+          <div class="small" id="invPalletConfirmLoc" style="margin-top:6px;"></div>
+        </div>
+        <details class="ipc-details">
+          <summary>Cartons on this pallet</summary>
+          <div class="ipc-boxlist" id="invPalletConfirmBoxes"></div>
+        </details>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="danger" onclick="invPalletConfirmReject()">Doesn't match</button>
+        <button onclick="invPalletConfirmAccept()">Matches — count it</button>
       </div>
     </div>
   </div>

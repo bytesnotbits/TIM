@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.65.00";
+const APP_VERSION = "v2.66.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -5262,7 +5262,7 @@ function renderInvProgress() {
     var mine     = invIsMySession(s);
     var heldHere = (s.holderDevice || "") === me || !s.holderDevice;
     var evCount  = invProgressEvents(s.sessionId).filter(function(e) {
-      return e.status !== "voided" && e.eventType !== "void_event" && e.eventType !== "box_scan";
+      return e.status !== "voided" && e.eventType !== "void_event" && !invIsContainerMarker(e);
     }).length;
     var stamp = s.checkpointAt || s.updatedAt || s.createdAt || "";
 
@@ -5330,7 +5330,7 @@ function renderInvProgressDetail() {
   invProgressEvents(sess.sessionId).forEach(function(evt) {
     if (evt.status === "voided")        return;
     if (evt.eventType === "void_event") return;
-    if (evt.eventType === "box_scan")   return;   // audit marker; its devices carry the count
+    if (invIsContainerMarker(evt))      return;   // audit marker; its devices carry the count
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) map[key] = { item: key, description: evt.description || "", qty: 0, ft: 0, last: "" };
     var r = map[key];
@@ -5546,7 +5546,7 @@ function invPastRollup(events) {
     if (!evt)                           return;
     if (evt.status === "voided")        return;
     if (evt.eventType === "void_event") return;
-    if (evt.eventType === "box_scan")   return;   // audit marker; its devices carry the count
+    if (invIsContainerMarker(evt))      return;   // audit marker; its devices carry the count
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) map[key] = { item: key, description: "", qty: 0, serialized: 0, ft: 0,
                                 exceptions: 0, flagged: 0, last: "", locs: {} };
@@ -8234,9 +8234,9 @@ function renderInvSummary() {
   invEvents.forEach(function(evt) {
     if (evt.status === "voided")           return;
     if (evt.eventType === "void_event")    return;
-    // box_scan is an audit marker only; its per-device fromSealedBox
-    // serialized_device_scan events carry the actual count.
-    if (evt.eventType === "box_scan")      return;
+    // box_scan/pallet_scan are audit markers only; their per-device
+    // fromSealedBox serialized_device_scan events carry the actual count.
+    if (invIsContainerMarker(evt))         return;
 
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) {
@@ -8419,9 +8419,9 @@ function buildInvSummaryMap(events) {
   events.forEach(function(evt) {
     if (evt.status === "voided")        return;
     if (evt.eventType === "void_event") return;
-    // box_scan is an audit marker only; its per-device fromSealedBox
-    // serialized_device_scan events carry the actual count.
-    if (evt.eventType === "box_scan")   return;
+    // box_scan/pallet_scan are audit markers only; their per-device
+    // fromSealedBox serialized_device_scan events carry the actual count.
+    if (invIsContainerMarker(evt))      return;
     var key = evt.itemNumber || evt.scannedValue || "(unknown)";
     if (!map[key]) map[key] = { item: key, description: evt.description || "", countedQty: 0, serializedCount: 0, reelFootage: 0, exceptions: 0, flagged: 0, lastCounted: evt.timestamp || "" };
     var r = map[key];
@@ -8761,8 +8761,9 @@ function invClassifyScan(raw) {
   if (!v) return "unknown";
 
   // ---- Tier 1: namespaces we mint ------------------------------------
-  if (/^WH/i.test(v))  return "location";   // warehouse shelf locations
-  if (/^BOX/i.test(v)) return "box_id";     // cartons WE pack and label
+  if (/^WH/i.test(v))  return "location";     // warehouse shelf locations
+  if (/^BOX/i.test(v)) return "box_id";       // cartons WE pack and label
+  if (/^PAL-/i.test(v)) return "pallet_id";   // palletGenId mints PAL-YY-XXXX
 
   // ---- Tier 2: device identity ---------------------------------------
   // History lookup also comes BEFORE MAC detection so known serials/FSANs
@@ -8796,6 +8797,11 @@ function invClassifyScan(raw) {
   // by the handler, not here, so a still-capturing box gets a real explanation.
   var bx = boxGet(v);
   if (bx && boxDeviceList(bx).length) return "box_id";
+
+  // A pallet hand-labelled with something other than a minted PAL- id is known
+  // the same way a vendor carton is: by being in the registry with contents.
+  var pl = palletGet(v);
+  if (pl && palletBoxKeys(pl).length) return "pallet_id";
 
   // Known reel number (matches a counted reel in the DB) — before MAC/serial so
   // serial-shaped reel numbers like 48R37 are recognized as reels, not serials.
@@ -8910,6 +8916,87 @@ function invFindSerializedDuplicate(serial, fsan) {
   }) || null;
 }
 
+// Container scans (box_scan, pallet_scan) are AUDIT MARKERS, not counts — the
+// per-device serialized_device_scan events they generate carry the actual
+// quantities. Every rollup must skip them or a sealed carton is counted twice.
+// Centralized so a future container type can't be missed at one of the sites.
+function invIsContainerMarker(evt) {
+  return !!evt && (evt.eventType === "box_scan" || evt.eventType === "pallet_scan");
+}
+
+// -- Stale-box detection -------------------------------------------
+// A sealed fast-count asserts "every device on this manifest is in this carton".
+// If any device on that manifest turns up counted SEPARATELY in the same
+// session, the assertion is broken: the carton was opened and partly emptied,
+// the device was miscaptured into the wrong box, or it was re-packed without
+// rescanning. One discrepancy is a sample, not the population — nothing says
+// the rest of the manifest is intact — so the whole box needs an audit.
+//
+// Detection must be ORDER-INDEPENDENT. Scans arrive in whatever order the walk
+// produces, and requiring boxes before loose devices is not a workflow anyone
+// can follow. Both directions therefore reach the same outcome:
+//   loose first, then box  → invBoxFindOverlap refuses the fast-count
+//   box first, then loose  → invBoxHandleStale voids the fast-count
+// Either way the box ends up flagged and its untrusted count is not credited.
+
+// Devices on this box's manifest that are ALREADY counted this session by
+// something other than this same box's own sealed count. A dup whose event
+// carries this boxId is just a re-scan of the same carton (benign, and handled
+// separately) — only a dup credited loose or through a DIFFERENT box is stale.
+function invBoxFindOverlap(b) {
+  if (!b) return [];
+  var key = normKey(b.boxId || "");
+  var out = [];
+  boxDeviceList(b).forEach(function(dev) {
+    var serial = normalize(dev.serial || "");
+    var fsan   = normalize(dev.fsan   || "");
+    var dup    = invFindSerializedDuplicate(serial, fsan) ||
+                 (!serial && !fsan && dev.mac ? invFindSerializedDuplicate(normalize(dev.mac), "") : null);
+    if (!dup) return;
+    if (normKey(dup.boxId || "") === key) return;   // same carton re-scanned — not stale
+    out.push({ dev: dev, dupEvt: dup });
+  });
+  return out;
+}
+
+// Flag a box as needing an audit and stop crediting anything it asserted.
+// Voiding is deliberate: once the manifest is known to disagree with the floor,
+// the honest count is the one that leaves those devices uncounted until someone
+// opens the carton. Devices actually scanned loose keep their own events.
+function invBoxHandleStale(boxId, triggerLabel, how) {
+  var b = boxGet(boxId);
+  if (!b) return null;
+  var key = boxNormId(b.boxId);
+
+  invBoxVoidSessionCounts(b.boxId, false, "stale manifest — pending audit");
+
+  if (invSession) {
+    invSession.auditBoxes = invSession.auditBoxes || [];
+    var already = invSession.auditBoxes.some(function(a) { return a.boxKey === key; });
+    if (!already) {
+      invSession.auditBoxes.push({
+        boxKey: key, boxId: b.boxId, at: invNow(), by: boxWho(),
+        deviceCount: boxDeviceList(b).length,
+        trigger: triggerLabel || "", reason: how || "manifest disagrees with the floor"
+      });
+      invSession.updatedAt = invNow();
+      scheduleInvAutosave();
+    }
+  }
+
+  invCreateExceptionEvent(b.boxId, "box_id",
+    "Box manifest is stale — " + (how || "a device from it was counted separately"),
+    'Open box ' + b.boxId + ' and count what is actually inside (Open box → scan → Done). ' +
+    "Its sealed count has been voided so nothing is credited on the old manifest.",
+    triggerLabel ? ("triggered by " + triggerLabel) : "");
+  return b;
+}
+
+// Boxes flagged for audit in the live session (drives the finalize warning).
+function invBoxesNeedingAudit() {
+  return (invSession && invSession.auditBoxes) ? invSession.auditBoxes.slice() : [];
+}
+
 // -- Exception events ----------------------------------------------
 function invCreateExceptionEvent(scannedValue, scanType, problem, suggestedAction, notes) {
   var evt = invCreateEvent("exception", {
@@ -8973,6 +9060,25 @@ function invHandleSerializedScan(value, scanType, contextItem, notes, location) 
 
   // Duplicate check
   var dupEvt = invFindSerializedDuplicate(serial || value, fsan);
+
+  // Stale-box direction 2: this device is already credited through a sealed
+  // box's manifest, but it was just scanned loose — so it is NOT in that box.
+  // Void the box's fast-count and flag it for audit, then re-check: with the
+  // box's events voided this is no longer a duplicate, and the loose scan is
+  // allowed to count normally. The device in your hand is the trustworthy
+  // evidence; the manifest is what's in doubt.
+  if (dupEvt && dupEvt.fromSealedBox && dupEvt.boxId) {
+    var staleBox = invBoxHandleStale(dupEvt.boxId, value, "it was counted loose, not in the carton");
+    if (staleBox) {
+      dupEvt = invFindSerializedDuplicate(serial || value, fsan);
+      invSetScanFeedback(
+        "Box " + staleBox.boxId + " is stale — " + value + " was counted as inside it. " +
+        "Its sealed count is voided and it needs an audit. Counting " + value + " here.",
+        "warn", "", "box");
+      invSpeak("Box needs audit");
+    }
+  }
+
   if (dupEvt) {
     invCreateExceptionEvent(value, scanType,
       "Device already counted at " + invFormatTime(dupEvt.timestamp) + " (event #" + dupEvt.sequence + ")",
@@ -9580,6 +9686,26 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
     return false;
   }
 
+  // Stale-box direction 1: part of this manifest was already counted loose (or
+  // through another carton), so the manifest is known-wrong BEFORE anything is
+  // credited. Refuse rather than fast-count — the alternative is knowingly
+  // trusting a list the floor has already contradicted. Nothing to void here;
+  // this box hasn't counted anything yet.
+  var overlap = invBoxFindOverlap(b);
+  if (overlap.length) {
+    var names = overlap.slice(0, 3).map(function(o) { return boxDevPrimary(o.dev); }).filter(Boolean);
+    var more  = overlap.length - names.length;
+    invBoxHandleStale(b.boxId, names.join(", "),
+      overlap.length + " of its " + snapshot.length + " device(s) were already counted separately");
+    invSetScanFeedback(
+      "Box " + b.boxId + " can't be fast-counted — " + overlap.length + " of its " + snapshot.length +
+      " device(s) were already counted loose (" + names.join(", ") + (more > 0 ? " +" + more + " more" : "") +
+      "). The manifest is stale. Open box and count what's actually inside.",
+      "error", "", "box");
+    invSpeak("Box needs audit");
+    return false;
+  }
+
   invCreateEvent("box_scan", {
     scanType:            "box_id",
     scannedValue:        boxId,
@@ -9637,6 +9763,239 @@ function invHandleBoxScan(boxId, contextItem, notes, location) {
   }
   invBoxRenderBar();
   return true;
+}
+
+// ===================================================================
+// PALLET SCAN — sealed fast-count of a whole pallet
+// -------------------------------------------------------------------
+// One scan credits every device in every carton on the pallet. That is trust of
+// trust, so it is gated harder than a box. The physical seal is the shrink
+// wrap: if the wrap is cut, the pallet's box list is a guess and its cartons
+// must be scanned individually instead.
+//
+// Every gate below is a HARD refusal, never a warn-and-count-anyway. A pallet
+// counted on a stale list is wrong in a way nobody notices, which is far worse
+// than the cost of the fallback — opening one pallet and scanning its boxes.
+// ===================================================================
+
+// Validate a pallet for fast-counting. Returns { ok, pallet, boxes, deviceCount,
+// problems[] } — problems is empty only when every gate passes.
+function invPalletValidate(palletId) {
+  var p = palletGet(palletId);
+  if (!p) return { ok: false, pallet: null, boxes: [], deviceCount: 0,
+                   problems: ['Pallet "' + palletId + '" is not in the registry.'] };
+
+  var problems = [], boxes = [], deviceCount = 0;
+
+  // A "capturing" pallet is a half-built list, not a sealed unit.
+  if (p.status !== "ready") {
+    problems.push("Pallet " + p.palletId + " is still being built — seal it on the Pallets tab first.");
+  }
+
+  var keys = palletBoxKeys(p);
+  if (!keys.length) problems.push("Pallet " + p.palletId + " has no cartons on it.");
+
+  keys.forEach(function(k) {
+    var b = boxGetRaw(k);
+    if (!b || b.deleted) { problems.push("Carton " + k + " is on this pallet but missing from the registry."); return; }
+    var devs = boxDeviceList(b).length;
+    if (!devs)              { problems.push("Carton " + b.boxId + " is empty."); return; }
+    if (b.status !== "ready") { problems.push("Carton " + b.boxId + " is still being built (not sealed)."); return; }
+    // One unfinished or contradicted carton invalidates the pallet total.
+    var overlap = invBoxFindOverlap(b);
+    if (overlap.length) {
+      problems.push("Carton " + b.boxId + " has a stale manifest — " + overlap.length +
+                    " of its " + devs + " device(s) were already counted separately.");
+      return;
+    }
+    boxes.push(b);
+    deviceCount += devs;
+  });
+
+  return { ok: !problems.length, pallet: p, boxes: boxes, deviceCount: deviceCount, problems: problems };
+}
+
+// Entry point from the scan dispatcher.
+function invHandlePalletScan(palletId, notes, location) {
+  var v = sanitizeScannerValue(palletId, { uppercase: true });
+  var res = invPalletValidate(v);
+
+  if (!res.ok) {
+    invCreateExceptionEvent(v, "pallet_id",
+      "Pallet can't be fast-counted",
+      res.problems.join(" ") + " Scan this pallet's cartons individually instead.",
+      notes);
+    invSetScanFeedback(
+      (res.pallet ? "Pallet " + res.pallet.palletId : 'Pallet "' + v + '"') +
+      " can't be fast-counted. " + res.problems[0] +
+      (res.problems.length > 1 ? " (+" + (res.problems.length - 1) + " more — see Exceptions.)" : "") +
+      " Scan its cartons individually.",
+      "error", "", "box");
+    invSpeak("Pallet cannot be counted");
+    return false;
+  }
+
+  // Already counted this session? Say so instead of silently re-crediting.
+  if (invPalletCountedThisSession(res.pallet.palletId)) {
+    invSetScanFeedback(
+      "Pallet " + res.pallet.palletId + " was already counted this session — nothing double-counted.",
+      "warn", "", "box");
+    invSpeak("Pallet already counted");
+    return false;
+  }
+
+  // The placard on the pallet side lists its carton and device counts, so this
+  // is a read-against-the-label check, not a bare consent tap. Admin can turn
+  // it off once the flow is trusted; default is ON.
+  if (!invPalletConfirmDisabled()) {
+    invPalletConfirmOpen(res, notes, location);
+    return false;   // the modal completes (or abandons) the count
+  }
+  return invPalletCommitCount(res, notes, location);
+}
+
+// Has this pallet already been fast-counted in the live session?
+function invPalletCountedThisSession(palletId) {
+  var k = palletNormId(palletId);
+  return (invEvents || []).some(function(e) {
+    return e.eventType === "pallet_scan" && e.status !== "voided" && palletNormId(e.palletId || "") === k;
+  });
+}
+
+// Credit every carton on the pallet. Each box goes through invHandleBoxScan, so
+// dedup, the seal gate and stale detection all apply per carton exactly as they
+// would if the cartons were scanned one at a time.
+function invPalletCommitCount(res, notes, location) {
+  var p = res.pallet;
+  invCreateEvent("pallet_scan", {
+    scanType:      "pallet_id",
+    scannedValue:  p.palletId,
+    palletId:      p.palletId,
+    location:      location || "",
+    boxCount:      res.boxes.length,
+    resolvedDeviceCount: res.deviceCount,
+    expectedBoxes: res.boxes.map(function(b) { return b.boxId; }),
+    sealedTrust:   true,
+    notes:         notes
+  });
+
+  var countedBoxes = 0, refusedBoxes = 0;
+  res.boxes.forEach(function(b) {
+    if (invHandleBoxScan(b.boxId, "", "Pallet " + p.palletId, location)) countedBoxes++;
+    else refusedBoxes++;
+  });
+
+  palletRecordAudit(p.palletId, "counted", { location: location || "" });
+  invLastScannedBox = null;   // the pallet, not any one carton, was the unit scanned
+
+  invSetScanFeedback(
+    "Pallet " + p.palletId + ": counted " + countedBoxes + " of " + res.boxes.length + " carton(s)" +
+    (refusedBoxes ? " — " + refusedBoxes + " refused, see Exceptions" : "") + ".",
+    refusedBoxes ? "warn" : "ok", "", "box");
+  invSpeak(refusedBoxes ? "Pallet counted with problems" : "Pallet counted");
+  return true;
+}
+
+// -- Pallet count confirmation --------------------------------------
+// Boxes deliberately have no per-scan seal confirmation — the operator signals
+// when one is open. A pallet breaks that consistency on purpose: one scan can
+// credit ~200 devices, and the pallet carries a printed placard listing its
+// carton and device counts, so this is a read-against-the-label comparison
+// rather than a bare consent tap. Admin-disablable once the flow is trusted.
+var invPalletConfirmState = null;   // { res, notes, location }
+
+function invPalletConfirmDisabled() {
+  return !!(invSettings && invSettings.palletConfirmDisabled);
+}
+function invPalletSetConfirmDisabled(on) {
+  if (typeof timIsAdmin === "function" && !timIsAdmin()) return;
+  invSettings = invSettings || {};
+  invSettings.palletConfirmDisabled = !!on;
+  if (invSession) { invSession.updatedAt = invNow(); scheduleInvAutosave(); }
+  if (typeof palletRender === "function") palletRender();
+}
+
+// Admin-only control for the confirmation, rendered into the Pallets tab.
+function invRenderPalletAdmin() {
+  var el = $("palletAdminSettings");
+  if (!el) return;
+  if (!(typeof timIsAdmin === "function" && timIsAdmin())) { el.innerHTML = ""; return; }
+  var off = invPalletConfirmDisabled();
+  el.innerHTML =
+    '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e5e7eb;">' +
+      '<label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;">' +
+        '<input type="checkbox" style="margin-top:3px;"' + (off ? " checked" : "") +
+          ' onchange="invPalletSetConfirmDisabled(this.checked)" />' +
+        '<span><b class="small">Skip the count confirmation for pallets</b>' +
+          '<div class="small" style="color:#6b7280;margin-top:2px;">' +
+            'Admin only. By default, scanning a pallet during a count shows its carton and device ' +
+            'totals so they can be checked against the placard before ~200 devices are credited on ' +
+            'one scan. Turning this off makes a pallet scan count immediately.' +
+          '</div></span>' +
+      '</label>' +
+    '</div>';
+}
+
+function invPalletConfirmOpen(res, notes, location) {
+  var modal = $("invPalletConfirmModal");
+  if (!modal) return invPalletCommitCount(res, notes, location);   // no modal in DOM → don't block the count
+  invPalletConfirmState = { res: res, notes: notes, location: location };
+
+  var p = res.pallet;
+  var idEl = $("invPalletConfirmId");    if (idEl) idEl.textContent = p.palletId;
+  var sumEl = $("invPalletConfirmCounts");
+  if (sumEl) {
+    sumEl.innerHTML = '<span class="ipc-num">' + res.boxes.length + '</span> carton' +
+      (res.boxes.length === 1 ? "" : "s") + ' <span class="ipc-dot">·</span> ' +
+      '<span class="ipc-num">' + res.deviceCount + '</span> device' +
+      (res.deviceCount === 1 ? "" : "s");
+  }
+  var locEl = $("invPalletConfirmLoc");
+  if (locEl) locEl.textContent = location ? ("Counting at " + location) : "";
+  var listEl = $("invPalletConfirmBoxes");
+  if (listEl) {
+    listEl.innerHTML = res.boxes.map(function(b) {
+      return '<div class="ipc-box"><span>' + escapeHtml(b.boxId) + '</span><span>' +
+             boxDeviceList(b).length + '</span></div>';
+    }).join("");
+  }
+  modal.classList.remove("hidden");
+}
+
+function invPalletConfirmClose() {
+  var modal = $("invPalletConfirmModal");
+  if (modal) modal.classList.add("hidden");
+  invPalletConfirmState = null;
+  setTimeout(function() { var si = $("invScanInput"); if (si) { si.focus(); si.select(); } }, 50);
+}
+
+// "Matches the placard" — credit the pallet.
+function invPalletConfirmAccept() {
+  var st = invPalletConfirmState;
+  if (!st) return;
+  invPalletConfirmClose();
+  invPalletCommitCount(st.res, st.notes, st.location);
+}
+
+// "Doesn't match" — the placard and the registry disagree, which means a carton
+// left the pallet or the record drifted. That is a finding, not a cancel, so it
+// is recorded with what TIM expected rather than silently backing out.
+function invPalletConfirmReject() {
+  var st = invPalletConfirmState;
+  if (!st) return;
+  var p = st.res.pallet;
+  invPalletConfirmClose();
+  invCreateExceptionEvent(p.palletId, "pallet_id",
+    "Pallet placard does not match the registry — TIM expected " + st.res.boxes.length +
+    " carton(s) / " + st.res.deviceCount + " device(s)",
+    "A carton probably left the pallet, or the record drifted. Scan this pallet's cartons " +
+    "individually for the count, then reconcile it on the Pallets tab.",
+    st.notes);
+  invSetScanFeedback(
+    "Pallet " + p.palletId + " flagged — placard disagrees with TIM (" + st.res.boxes.length +
+    " carton(s) / " + st.res.deviceCount + " device(s) expected). Scan its cartons individually.",
+    "error", "", "box");
+  invSpeak("Pallet mismatch recorded");
 }
 
 // ===================================================================
@@ -11904,6 +12263,7 @@ function _palletDrill(btn, targetId) {
 function palletRender() {
   _palletRenderListInto($("palletTabList"), $("palletTabSummary"), true);   // export checkboxes + filter
   palletRenderDeletedInto($("palletTabDeleted"));
+  if (typeof invRenderPalletAdmin === "function") invRenderPalletAdmin();
 }
 
 // selectable=true prepends an export checkbox to each card and honours the tab's
@@ -12983,6 +13343,8 @@ function invProcessScan() {
     ok = invHandleSerializedScan(rawValue, scanType, contextItem, notes, invCurrentLocation);
   } else if (scanType === "box_id") {
     ok = invHandleBoxScan(rawValue, contextItem, notes, invCurrentLocation);
+  } else if (scanType === "pallet_id") {
+    ok = invHandlePalletScan(rawValue, notes, invCurrentLocation);
   } else if (scanType === "item_number") {
     // In reel mode, item number scans prefill the reel entry item field
     // In auto mode, reel-tracked products open the reel entry panel instead of bulk counting
@@ -19675,6 +20037,24 @@ function invFinalizeSession() {
       "Finalizing now will merge this session into an empty master. If you meant " +
       "to add to your existing catalog/history, cancel and load your master JSON " +
       "first (Receiving tab, Step 1).\n\nContinue anyway?"
+    )) return;
+  }
+
+  // Boxes whose manifest was contradicted during the walk had their sealed
+  // counts voided, so their contents are sitting UNCOUNTED. Finalizing without
+  // opening them ships a count that is short by whatever is actually in them —
+  // a silent undercount, which is exactly what the voiding was meant to avoid
+  // becoming a silent OVERcount. Surface it before the session closes.
+  var _audit = invBoxesNeedingAudit();
+  if (_audit.length) {
+    var _devTotal = _audit.reduce(function(s, a) { return s + (a.deviceCount || 0); }, 0);
+    if (!confirm(
+      "⚠ " + _audit.length + " BOX(ES) STILL NEED AN AUDIT.\n\n" +
+      _audit.map(function(a) { return "  • " + a.boxId + " (" + (a.deviceCount || 0) + " device(s)) — " + a.reason; }).join("\n") +
+      "\n\nTheir sealed counts were voided when the manifest was contradicted, so about " +
+      _devTotal + " device(s) are currently UNCOUNTED.\n\n" +
+      "Open each box and count what's actually inside (Open box → scan → Done), then finalize.\n\n" +
+      "Finalize anyway and leave them uncounted?"
     )) return;
   }
 

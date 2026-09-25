@@ -1018,3 +1018,21 @@ tr.inv-flagged-row { outline:2px solid #fca5a5; outline-offset:-1px; }
 .panel-toggle-btn { background: #f1f5f9; color: #475569; border: 1px solid #e5e7eb; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0; white-space: nowrap; transition: background .12s, color .12s, border-color .12s; }
 .panel-toggle-btn:hover:not(.active) { background: #e2e8f0; color: #1e40af; }
 .panel-toggle-btn.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+
+/* ---- Pallet count confirmation -----------------------------------
+   Read-against-the-placard check before a pallet's ~200 devices are
+   credited on one scan. The numbers are deliberately oversized: this is
+   meant to be compared to a printed label at arm's length on a warehouse
+   floor, not read carefully. */
+.modal-footer { padding: 14px 18px 18px; border-top: 1px solid #e5e7eb; }
+.ipc-card { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; text-align: center; }
+.ipc-id { font-size: 20px; font-weight: 700; letter-spacing: .02em; color: #0f172a; word-break: break-all; }
+.ipc-counts { margin-top: 8px; font-size: 15px; color: #475569; }
+.ipc-counts .ipc-num { font-size: 30px; font-weight: 700; color: #1d4ed8; vertical-align: -2px; }
+.ipc-counts .ipc-dot { margin: 0 8px; color: #94a3b8; }
+.ipc-details { margin-top: 12px; }
+.ipc-details summary { cursor: pointer; font-size: 13px; color: #475569; }
+.ipc-boxlist { margin-top: 8px; max-height: 210px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; }
+.ipc-box { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; font-size: 13px; border-bottom: 1px solid #f1f5f9; }
+.ipc-box:last-child { border-bottom: 0; }
+.ipc-box span:last-child { color: #64748b; font-variant-numeric: tabular-nums; }

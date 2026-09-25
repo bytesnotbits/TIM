@@ -522,8 +522,8 @@ CSS: `.panel-toggle` / `.panel-toggle-btn` (`styles.css`) — the in-card segmen
 
 | Function | Purpose |
 |----------|---------|
-| `invProcessScan()` | **Main scan entry point** — reads input, routes to handler. In Serial/FSAN mode, forces `unknown` and coincidental `box_id` classifications (a value colliding with a key in the per-device, unsynced box registry) back to `serial` — an explicit mode choice always wins over an auto-detected box hit |
-| `invClassifyScan(raw)` | Detect scan type: `fsan \| box_id \| location \| reel_number \| serial \| item_number \| barcode \| mac \| unknown` |
+| `invProcessScan()` | **Main scan entry point** — reads input, routes to handler. In Serial/FSAN mode, forces `unknown` classifications to `serial`; a `box_id` is NO LONGER demoted (v2.65.00) — the collision it guarded is handled by the classifier's tiering, so a carton label fast-counts from any mode |
+| `invClassifyScan(raw)` | Detect scan type: `fsan \| box_id \| pallet_id \| location \| reel_number \| serial \| item_number \| barcode \| mac \| unknown`. **Tiered by evidence quality (v2.65.00):** 1 namespaces we mint (`WH`/`BOX`/`PAL-`), 2 device identity (history/product/barcode map), 3 registry membership (non-empty box, pallet with boxes, counted reel), 4 shape heuristics (`CXNK`, MAC, serial). A manufacturer's prefix never outranks a fact we hold — Calix can change nomenclature without notice |
 | `invUpdateDetectedBadge(raw)` | Update scan-type badge in UI |
 | `invGetScanMeta(type, value)` | Resolve item/description metadata for scan value |
 | `invShowScanMeta(meta)` | Display metadata badge below scan field |
@@ -631,7 +631,11 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxManagerToggleContents(key)` / `invBoxManagerDelete(boxId)` | Expand a box's editor / delete a box (voids its current-session counts, clears active if it was the one) |
 | `invBoxRename(oldBoxId, btn)` | Rename a box's ID: rekeys the registry, retargets this session's count events' `boxId`, fixes active/last pointers, rejects collisions (finalized history untouched) |
 | `invBoxRemoveSerial(boxId, serial)` / `invBoxAddSerialManual(boxId, btn)` | Editor: remove one device (voids its session count event) / add a device (resolves serial-FSAN-MAC, moves from other box, creates a session count event) |
-| `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event |
+| `invHandleBoxScan(boxId, ctx, notes, loc)` | **Sealed fast-count** (rewritten v2.11.00): count all of a `ready` box's `expectedSerials` in one action; snapshots the list onto the `box_scan` event. **v2.65.00:** refuses a box that isn't `ready` (auto-detect used to skip the seal check Box mode enforced) and refuses one whose manifest is contradicted (`invBoxFindOverlap`) |
+| `invIsContainerMarker(evt)` | True for `box_scan`/`pallet_scan` — audit markers, never counts. Every rollup skips them or a sealed carton counts twice; centralized so a new container type can't miss a site |
+| `invBoxFindOverlap(b)` | Devices on this box's manifest already counted this session by something other than this same box's own sealed count → the manifest is stale. A dup carrying this `boxId` is a benign re-scan and is ignored |
+| `invBoxHandleStale(boxId, trigger, how)` | Void the box's sealed counts (`invBoxVoidSessionCounts`), flag it on `invSession.auditBoxes`, raise an exception. Called from BOTH scan orders so the outcome is order-independent |
+| `invBoxesNeedingAudit()` | Boxes flagged for audit in the live session; drives the `invFinalizeSession` warning (their contents sit uncounted until opened) |
 
 **Open-box gate (v2.17.00)** — a box left `capturing` (interrupted capture; `invActiveBox` is in-memory only while the box record persists) is surfaced in a blocking, no-dismiss modal that must be resolved before scanning resumes. Fires on load + on entering Inventory; scoped to the active session so stale registry boxes don't nag. Re-scanning an already-counted-this-session box now warns instead of silently resuming.
 
@@ -660,6 +664,17 @@ One level up from the Box Registry: a pallet is a shrink-wrapped, barcoded (or a
 | `palletDelete(id)` / `palletRestore(id)` / `palletPurge(id)` / `palletPurgeExpiredTombstones()` | Soft-delete tombstone / undelete / hard-remove / load-time GC (>`PALLET_TOMBSTONE_TTL_DAYS`=90, silent no-push) |
 | `palletDissolve(id, plan)` | Revert every member box → individual box: stamp `formerPalletId` + assigned location (`plan.byBoxKey`, blank keeps prior) + `pallet_dissolved` audit; then tombstone the pallet (retains `boxKeys`) |
 | `palletSaveToStorage()` / `palletLoadFromStorage()` / `schedulePalletPush()` | Persist/restore `appData.pallets`; save schedules a debounced GitHub push (mirrors boxes) |
+
+**Pallet fast-count in a session (v2.65.00 — the Phase 2 "transitive sealed trust" noted above).** Scanning a pallet during a count credits every device in every carton on it. Gated harder than a box because it is trust of trust: the shrink wrap is the seal, and the placard printed on the pallet side is its manifest. **Every gate is a HARD refusal, never warn-and-count** — a pallet counted on a stale list is wrong in a way nobody notices, and the fallback (scan its cartons) is cheap.
+
+| Function | Purpose |
+|----------|---------|
+| `invPalletValidate(palletId)` | All gates in one place → `{ok, pallet, boxes, deviceCount, problems[]}`. Refuses: unknown pallet, pallet not `ready`, no cartons, a member carton missing/tombstoned/empty/unsealed, or any carton with a stale manifest |
+| `invHandlePalletScan(palletId, notes, loc)` | Scan-dispatch entry for `pallet_id`. Refuses on any problem (exception + specific feedback); refuses a re-scan; otherwise opens the confirmation or commits |
+| `invPalletCountedThisSession(palletId)` | Non-voided `pallet_scan` for this pallet in the live session — stops a re-scan re-crediting it |
+| `invPalletCommitCount(res, notes, loc)` | Writes the `pallet_scan` audit marker, then runs each carton through `invHandleBoxScan` so dedup + seal gate + stale detection apply per carton exactly as if scanned individually; records a pallet `audit[]` entry |
+| `invPalletConfirmOpen/Close/Accept/Reject()` | The read-against-the-placard confirmation. **Reject is a finding, not a cancel** — records an exception carrying what TIM expected, since a disagreeing placard means a carton left the pallet or the record drifted |
+| `invPalletConfirmDisabled()` / `invPalletSetConfirmDisabled(on)` / `invRenderPalletAdmin()` | Confirmation is ON by default; admin-only opt-out stored in `invSettings.palletConfirmDisabled`, rendered into `#palletAdminSettings` on the Pallets tab |
 
 **Pallets tab UI + build/dissolve modals.** Sidebar tab renders the registry list + admin-only deleted archive; a build modal (scan/generate pallet ID → scan boxes onto it, with the **nested unknown-box build** that opens the box capture modal and auto-returns) and a dissolve modal (same/different per-box location assignment). Local-only when GitHub isn't configured.
 
