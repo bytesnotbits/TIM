@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.69.01";
+const APP_VERSION = "v2.70.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -69,7 +69,16 @@ const TimDB = (() => {
       req.onerror = e => reject(e.target.error);
     }));
   }
-  return { get, set, remove };
+  // Every key currently in the store. Lets "Clear All Data" wipe what is
+  // actually there rather than a hand-maintained list that drifts (v2.70.00).
+  function keys() {
+    return open().then(db => new Promise((resolve, reject) => {
+      const req = db.transaction(STORE, "readonly").objectStore(STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = e => reject(e.target.error);
+    }));
+  }
+  return { get, set, remove, keys };
 })();
 
 // -- Batch draft persistence ----------------------------------------
@@ -4658,6 +4667,7 @@ let invLastScannedBox = "";        // normalized boxId of the last box scanned (
 let invBoxIsOverride = false;      // active capture is an open-box override (diff vs prior on Done)
 let invBoxOverridePrior = [];      // pre-open serial snapshot, for the override diff
 let invBoxArmed = false;           // "New Box" tapped — next scan is taken as the carton/box ID
+let invBoxModeBeforeOpen = "";     // scan mode an audit switched away from, restored on Done (v2.70.00)
 let invLastBulkEventId = null;     // eventId of most recent bulk_quantity_count
 var invOdooQuantMap = {};          // normKey(defCode+"||"+loc+"||"+lot) → { id, onHandQty }
 const INV_QUANT_MAP_KEY = "tim_odoo_quant_map_v1";
@@ -7736,6 +7746,7 @@ function invResetSessionState() {
   invLastBulkEventId = null;
   invSerialPromptStickyItem = "";
   invSerialPromptStickyOn   = false;
+  invBoxModeBeforeOpen = "";
   invBoxClearActive();      // resets invActiveBox/override/prior + re-renders box bar
   invSetScanMode("auto");   // resets scan mode + its toggle UI
   invSetLocation("");       // clears current location + its UI
@@ -7957,21 +7968,36 @@ function invClearSession() {
     if (!confirm(gapWarnMsg)) return;
   }
 
+  // A recount exists to resolve discrepancies THIS count found, so it is part
+  // of the count, not a separate record — clearing the session and leaving its
+  // recounts behind strands them against events that no longer exist. Named in
+  // the confirm rather than done silently, because recounts sync: removing them
+  // here removes them for every device on the next push (v2.70.00).
+  var rcN = (typeof rcCountForSession === "function") ? rcCountForSession(invSession.sessionId) : 0;
+  var rcLine = rcN
+    ? ("\n\nAlso removes " + rcN + " recount" + (rcN === 1 ? "" : "s") + " created from this session" +
+       " (including any auto-created stale-carton recount). Recounts are shared — they will disappear" +
+       " for everyone on the next sync.")
+    : "";
+
   var confirmMsg = isClosed
     ? "Clear this finalized session from view?\n\nIts events are already merged into your master data — " +
       "this only removes it from the screen so you can start fresh. Nothing is lost — the count stays " +
-      "readable under Inventory → Past Counts (v2.59.00)."
+      "readable under Inventory → Past Counts (v2.59.00)." + rcLine
     : "Clear the active inventory session?\n\nThis removes all events from memory. " +
-      "Export a backup JSON first if you need to keep the data.";
+      "Export a backup JSON first if you need to keep the data." + rcLine;
   if (!confirm(confirmMsg)) return;
   var clearedId = invSession.sessionId;
+  var rcRemoved = (typeof rcClearForSession === "function") ? rcClearForSession(clearedId) : 0;
   invSession    = null;
   invResetSessionState();
   TimDB.remove(INV_STORAGE_KEY).catch(function(){});
   var bar = $("invAutosaveBar");
   if (bar) bar.classList.add("hidden");
   renderInvSessionUI();
-  alert("Session " + clearedId + " has been cleared from memory.");
+  alert("Session " + clearedId + " has been cleared from memory." +
+        (rcRemoved ? ("\n\n" + rcRemoved + " recount" + (rcRemoved === 1 ? " was" : "s were") +
+                      " removed with it.") : ""));
 }
 
 function invExportBackup() {
@@ -10336,6 +10362,22 @@ function invBoxFinish() {
     invSpeak("Box saved, " + n + " counted");
   }
   invBoxClearActive();
+  invBoxRestoreScanMode();
+}
+
+// An audit BORROWS box mode — invBoxOpenById switches into it so the carton's
+// devices can be scanned. Finishing has to give it back. It didn't, so after a
+// perfectly good audit the box bar stayed on screen in its armed "Scan a new
+// carton ID to start" state with Done greyed out: the audit reads as still
+// waiting for something, and there is no dismiss control on that bar — the
+// operator has to know to change scan mode to get rid of it. Only a mode the
+// audit itself switched away from is restored; a deliberate Box-mode capture
+// run stays in box mode so the next carton can be scanned (v2.70.00).
+function invBoxRestoreScanMode() {
+  if (!invBoxModeBeforeOpen) return;
+  var m = invBoxModeBeforeOpen;
+  invBoxModeBeforeOpen = "";
+  invSetScanMode(m);
 }
 
 // "Open box" — reopen the last-scanned box for correction. Voids this session's
@@ -10363,7 +10405,8 @@ function invBoxOpenById(boxId) {
   invActiveBox     = boxNormId(b.boxId);
   invLastScannedBox = invActiveBox;
   invBoxIsOverride = true;
-  if (invScanMode !== "box") invSetScanMode("box");
+  // Remember the mode the audit is borrowing, so Done can hand it back.
+  if (invScanMode !== "box") { invBoxModeBeforeOpen = invScanMode; invSetScanMode("box"); }
   invSetScanFeedback("Box " + b.boxId + " opened — scan the devices actually inside, then tap Done.", "warn", "", "box");
   invSpeak("Box ready for edit");
   invBoxRenderBar();
@@ -13041,6 +13084,8 @@ function palletDissolveClose() {
 
 function invSetScanMode(mode) {
   invScanMode = mode;
+  // Leaving box mode by choice means there is no borrowed mode to give back.
+  if (mode !== "box") invBoxModeBeforeOpen = "";
   if (mode !== "box") invBoxArmed = false;        // leaving box mode disarms
   else if (!invActiveBox) invBoxArmed = true;     // empty box mode: the first scan IS the carton ID (no Save & New tap needed)
   var modeActiveClass = { auto: "active", serial: "active-serial", reel: "active-reel", item: "active-item", box: "active-box" };
@@ -19060,6 +19105,29 @@ function rcCompleteStaleBox(boxId, auditResult, counts) {
   return changed;
 }
 
+// How many recounts belong to an inventory session (for confirm text).
+function rcCountForSession(sessionId) {
+  if (!sessionId || !Array.isArray(rcSessions)) return 0;
+  return rcSessions.filter(function(s) { return s && s.parentId === sessionId; }).length;
+}
+
+// Remove the recounts that belong to an inventory session. Scoped by parentId
+// ON PURPOSE: an older session's still-open recount is somebody's unfinished
+// work and must survive a clear of a different count. Movements are global
+// (attached to items by id, shared across recounts), so they are left alone.
+// v2.70.00 — called from invClearSession.
+function rcClearForSession(sessionId) {
+  if (!sessionId || !Array.isArray(rcSessions)) return 0;
+  var doomed = rcSessions.filter(function(s) { return s && s.parentId === sessionId; });
+  if (!doomed.length) return 0;
+  var ids = doomed.map(function(s) { return s.recountId; });
+  rcSessions = rcSessions.filter(function(s) { return ids.indexOf(s.recountId) === -1; });
+  if (ids.indexOf(rcActiveId) !== -1) { rcActiveId = null; rcView = "list"; }
+  rcSaveStorage();
+  if (typeof rcRenderCard === "function") rcRenderCard();
+  return doomed.length;
+}
+
 // Cartons still awaiting an audit across every active recount.
 function rcPendingStaleBoxes() {
   var out = [];
@@ -21362,26 +21430,38 @@ function updateClearBtns() {
   show("clearBarcodeImportBtn",  bcLoaded || Object.keys(BARCODE_MAP).length > 0);
 }
 
+// The only things a full wipe keeps: the GitHub connection, so the device can
+// re-sync without being re-paired. Everything else in TimDB goes.
+const TIM_CLEAR_KEEP_KEYS = [GH_CONFIG_KEY, GH_TOKEN_KEY];
+
+// "Clear ALL app data" now means ALL of it. This used to remove nine
+// hand-listed keys and had drifted badly behind the store: recounts and the
+// recount worklist imports, the box/pallet/reel registries, the quants
+// baseline, both location maps, catalog-health review state, the NISC catalog
+// and the numbering legend all survived a "clear everything" and came back on
+// reload. Enumerating the store means a key added later is wiped automatically
+// instead of quietly outliving the next wipe (v2.70.00).
 function clearAllData() {
-  if (!confirm("Clear ALL app data and start fresh?\n\nThis will permanently delete:\n• Active batch and receiving data\n• Inventory sessions\n• Master data (products, history, barcodes)\n• Sync conflicts and sync state (merge base)\n• Your username\n\nYour GitHub connection (repo + token) is kept so you can re-sync.\n\nThis cannot be undone.")) return;
+  if (!confirm("Clear ALL app data and start fresh?\n\nThis will permanently delete everything this device has stored:\n• Active batch and receiving data\n• Inventory sessions, recounts and recount worklist imports\n• Master data (products, history, barcodes)\n• Box, pallet and reel registries\n• Quants baseline, location maps, catalog health, NISC catalog\n• Sync conflicts and sync state (merge base)\n• Your username and screen preferences\n\nYour GitHub connection (repo + token) is kept so you can re-sync, and Testing Mode stays ON if it is on.\n\nThis cannot be undone.")) return;
   // Drop the stale sync bookkeeping too: keeping the merge base (GH_BASE_KEY)
   // after a wipe makes the next pull read the now-empty local as deletions and
   // silently drop unchanged records on push. Connection (config/token) is kept.
   ghConflictLog = [];
-  Promise.all([
-    TimDB.remove(BATCH_DRAFT_KEY),
-    TimDB.remove(INV_STORAGE_KEY),
-    TimDB.remove(TIM_MASTER_CACHE_KEY),
-    TimDB.remove(BC_STORAGE_KEY),
-    TimDB.remove(BC_BATCH_DRAFT_KEY),
-    TimDB.remove(GH_CONFLICTS_KEY),
-    TimDB.remove(GH_PENDING_KEY),
-    TimDB.remove(GH_SHAS_KEY),
-    TimDB.remove(GH_BASE_KEY)
-  ]).catch(function(){}).then(function() {
-    try { localStorage.removeItem(TIM_USERNAME_KEY); } catch(e) {}
-    try { localStorage.removeItem("tim_active_tab"); } catch(e) {}
-    try { localStorage.removeItem("tim_sidebar_collapsed"); } catch(e) {}
+  TimDB.keys().then(function(all) {
+    return Promise.all((all || [])
+      .filter(function(k) { return TIM_CLEAR_KEEP_KEYS.indexOf(k) === -1; })
+      .map(function(k) { return TimDB.remove(k); }));
+  }).catch(function(){}).then(function() {
+    try {
+      // Every tim_* UI preference goes too — EXCEPT the Testing Mode guard.
+      // Silently switching that off would let a device that was just emptied
+      // push its empty state over everyone's shared data on the next sync.
+      var lsKeys = [];
+      for (var i = 0; i < localStorage.length; i++) lsKeys.push(localStorage.key(i));
+      lsKeys.forEach(function(k) {
+        if (k && k.indexOf("tim_") === 0 && k !== TIM_TESTING_MODE_KEY) localStorage.removeItem(k);
+      });
+    } catch(e) {}
     location.reload();
   });
 }

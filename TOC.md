@@ -143,6 +143,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `TimDB.get(key)` | Read from IndexedDB — grep `TimDB` |
 | `TimDB.set(key, val)` | Write to IndexedDB |
 | `TimDB.remove(key)` | Delete from IndexedDB |
+| `TimDB.keys()` | Every key currently in the store (`getAllKeys`); lets `clearAllData` wipe what is actually there rather than a hand-list that drifts (v2.70.00) |
 | `saveBatchDraft()` | Persist receiving batch to IDB |
 | `clearBatchDraft()` | Delete receiving batch from IDB |
 | `loadBatchDraft()` | Restore receiving batch from IDB |
@@ -487,7 +488,7 @@ CSS: `.panel-toggle` / `.panel-toggle-btn` (`styles.css`) — the in-card segmen
 | `invAutoRestoreSession()` | **Silent auto-restore on page load** from IDB; guards with `_invAutoRestoreStarted` |
 | `invStartNewSession()` | Create fresh session + autosave |
 | `invResumeSession()` | Manual "Resume Session" button (shows alert) |
-| `invClearSession()` | Clear session from memory + IDB; confirm wording branches on closed (already durably merged — safe) vs. active (real data-loss risk); if closed and Gap Analysis hasn't been run for this session — or was run but is now stale because events were added since (`invActiveEventCount()` mismatch) — an extra warning fires first, since clearing empties `invEvents`, which Gap Analysis/`rcOpenCreateFromGaps` read |
+| `invClearSession()` | Clear session from memory + IDB; confirm wording branches on closed (already durably merged — safe) vs. active (real data-loss risk); if closed and Gap Analysis hasn't been run for this session — or was run but is now stale because events were added since (`invActiveEventCount()` mismatch) — an extra warning fires first, since clearing empties `invEvents`, which Gap Analysis/`rcOpenCreateFromGaps` read. **v2.70.00: also removes the session's recounts** (`rcClearForSession`, scoped by `parentId`); the count is named in the confirm because recounts sync |
 | `invFinalizeSession()` | Close session + merge events into master data; **releases the write lease and cancels any armed checkpoint** (v2.57.00 — `_ghMergeInvSessionsLWW` then makes "closed" beat a checkpoint still in flight from another device); persists via `timSaveMasterCache()`/`scheduleInvAutosave()` immediately and auto-pushes to GitHub when configured (same durability pattern as the reel-importer/history-commit actions), falling back to the manual "replace your master file" download only when GitHub sync isn't set up |
 | `invGoToRecountManager()` | Sidebar "Recount Manager" button target (enabled once session is closed) — navigates to the Recount subview instead of launching the legacy walkthrough |
 | `invResetSessionState()` | Zero out events/exceptions/recounts/sequence |
@@ -623,7 +624,8 @@ Maps a scannable container ID (Calix "Carton No." or master carton/bin) → the 
 | `invBoxNewBox()` | "Save & New": auto-finish (save) the active capture, then arm the next scan as the carton/box ID |
 | `invBoxStartCapture(boxId, isOverride)` | Set active capture box (new or resume) |
 | `invBoxCaptureDevice(rec, value, notes)` | Count a device + add to active box (dedup-aware) |
-| `invBoxFinish()` | "Done/Close box" → `boxFinalize`; for override, diffs vs pre-open snapshot and flags missing/extra |
+| `invBoxFinish()` | "Done/Close box" → `boxFinalize`; for override, diffs vs pre-open snapshot and flags missing/extra; then `invBoxRestoreScanMode()` (v2.70.00) |
+| `invBoxRestoreScanMode()` | Hands back the scan mode an audit borrowed (`invBoxModeBeforeOpen`, stashed by `invBoxOpenById`). Without it, finishing an audit left the operator in Box mode with the box bar stuck in its armed state and Done greyed out — no way to dismiss it (v2.70.00). A deliberate Box-mode capture run is untouched |
 | `invBoxOpen()` | "Open box" → void this session's sealed-count events for the box, snapshot+clear contents, reopen for override |
 | `invBoxVoidSessionCounts(boxId)` | Silently void (no confirm) the box's `box_scan` + `fromSealedBox` events |
 | `invBoxSetExpectedQty(v)` / `invBoxClearActive()` / `invBoxRenderBar()` | Optional qty / cancel active capture / refresh the `#invBoxBar` UI (incl. Boxes count + Undo/Done enable) |
@@ -1122,9 +1124,10 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `rcAddStaleBox(b, reason, location)` | Append a `gapType:"stale_box"` container row (idempotent per carton); snapshots the manifest and device count at flag time |
 | `rcCompleteStaleBox(boxId, result, counts)` | Close the row once audited. Fires from `boxRecordAudit`, so BOTH audit paths complete it. `resolutionStatus` stays null on purpose — the item resolution enum describes quantity outcomes |
 | `rcPendingStaleBoxes()` | Cartons still awaiting audit across active recounts; drives the `invFinalizeSession` block |
+| `rcCountForSession(sessionId)` / `rcClearForSession(sessionId)` | Count / delete the recounts belonging to one inventory session, matched on `parentId` (v2.70.00, from `invClearSession`). Scoped on purpose — an older session's open recount survives. Movements are global and left alone; resets `rcActiveId`/`rcView` if the open recount was deleted |
 | `rcRenderStaleBoxSection(session)` | Renders "Cartons to audit" **above** the discrepancy sections — blocking work, not reconciliation |
 | `rcAuditStaleBox(boxId)` | Jump to Inventory → **Count** subview and open that carton for audit, focused on the scan input |
-| `invBoxOpenById(boxId)` | Open a SPECIFIC carton for audit (split out of `invBoxOpen`, which still acts on the last-scanned one) so a worklist row can launch the audit without re-scanning the carton |
+| `invBoxOpenById(boxId)` | Open a SPECIFIC carton for audit (split out of `invBoxOpen`, which still acts on the last-scanned one) so a worklist row can launch the audit without re-scanning the carton. Stashes the current scan mode in `invBoxModeBeforeOpen` before switching to Box mode, so Done can restore it (v2.70.00) |
 | `rcWlSetLocRecount(id,itemUp,loc,val)` | Per-location recount box (every shelf row): store/clear `session.locRecounts[item\|\|loc]`; sets item status |
 | `rcWlOpenAddRow / rcWlCloseAddRow / rcWlCommitAddRow(id,itemUp) / rcWlRemoveAddedRow(id,idx)` | "＋loc" add-a-found-location flow: modal → append to `session.addedCountRows` (isRecount, dated today) → Short self-corrects; undo via removal |
 | `rcSessionFocusSet(session)` / `rcFindItemByNumber(session, up)` | Session helpers: item-number set / lookup |
@@ -1300,7 +1303,7 @@ Scan feedback is **mandatory + dual-channel** (tone + full-screen flash). Tones 
 
 | Function | Purpose |
 |----------|---------|
-| `clearAllData()` | Wipe everything (products, history, batch, barcodes) |
+| `clearAllData()` | Wipe everything. **v2.70.00: enumerates the store (`TimDB.keys()`) instead of a hand-list** — the old nine-key list had drifted, leaving recounts, worklist imports, box/pallet/reel registries, the quants baseline, location maps, catalog health and the NISC catalog alive through a "clear all". Keeps only `TIM_CLEAR_KEEP_KEYS` (GitHub config + token) and, in localStorage, `tim_testing_mode` — clearing that guard would let a just-emptied device push over shared data |
 | `clearMasterData()` | Clear products + history + barcodes only |
 | `clearSourceData()` | Clear source file + batch only |
 | `clearProductCatalog()` | Clear product map only |
