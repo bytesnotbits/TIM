@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.63.00";
+const APP_VERSION = "v2.64.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -152,6 +152,22 @@ $("mapPreview").value = JSON.stringify(PRODUCT_MAP, null, 2);
 
 function normalize(v) { return String(v ?? "").trim(); }
 function normKey(v) { return normalize(v).toUpperCase(); }
+
+// One matcher behind EVERY in-app list search (Past Counts By Count, Past
+// Counts By Item, Recount worklist), so panels asking the same question can
+// never drift into answering it differently. Whitespace-split, and every term
+// must appear somewhere in the row — "cable y01" narrows instead of widening.
+// Callers decide the haystack, but all of them include location alongside item
+// and description: "what's in FG" gets asked as often as "where's item A".
+function _timSearchTerms(q) {
+  return String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function _timSearchMatches(hay, terms) {
+  if (!terms.length) return true;
+  hay = String(hay).toLowerCase();
+  return terms.every(function(t) { return hay.indexOf(t) !== -1; });
+}
 function getField(row, names) {
   const keys = Object.keys(row);
   for (const n of names) {
@@ -5616,21 +5632,6 @@ function renderInvPast() {
   renderInvHistImported();
 }
 
-// One matcher behind BOTH Past Counts searches, so the two panels can never
-// drift into answering the same query differently. Every term must appear
-// somewhere in the row, so "cable y01" narrows instead of widening, and
-// location is searched alongside item and description — "what did we count in
-// FG" gets asked as often as "how many of item A".
-function _invPastTerms(q) {
-  return String(q || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-}
-
-function _invPastHayMatches(hay, terms) {
-  if (!terms.length) return true;
-  hay = String(hay).toLowerCase();
-  return terms.every(function(t) { return hay.indexOf(t) !== -1; });
-}
-
 // -- By Count ---------------------------------------------------------
 
 function invPastSelect(sessionId) {
@@ -5760,16 +5761,16 @@ function renderInvPastDetail() {
   renderInvPastDetailRows();
 }
 
-// Rows for this panel carry their locations inline; see _invPastHayMatches for
+// Rows for this panel carry their locations inline; see _timSearchMatches for
 // the matching rule the two searches share.
 function _invPastDetailMatches(r, terms) {
-  return _invPastHayMatches(r.item + " " + r.description + " " + invPastLocText(r.locs), terms);
+  return _timSearchMatches(r.item + " " + r.description + " " + invPastLocText(r.locs), terms);
 }
 
 function renderInvPastDetailRows() {
   var tbody = $("invPastDetailBody");
   if (!tbody) return;
-  var terms = _invPastTerms(invPastDetailQuery);
+  var terms = _timSearchTerms(invPastDetailQuery);
   var all   = _invPastDetailItems;
   var items = all.filter(function(r) { return _invPastDetailMatches(r, terms); });
 
@@ -5878,12 +5879,12 @@ function renderInvPastItemList() {
   var listEl = $("invPastItemBody");
   if (!listEl) return;
   var idx = _invPastItemIdx || (_invPastItemIdx = invPastItemIndex());
-  var terms = _invPastTerms($("invPastItemQuery") ? $("invPastItemQuery").value : "");
+  var terms = _timSearchTerms($("invPastItemQuery") ? $("invPastItemQuery").value : "");
   var sessionCount = invPastSessions().length;
   var all = Object.keys(idx).map(function(k) { return idx[k]; });
 
   var matches = all.filter(function(r) {
-    return _invPastHayMatches(r._hay, terms);
+    return _timSearchMatches(r._hay, terms);
   }).sort(function(a, b) { return a.item < b.item ? -1 : a.item > b.item ? 1 : 0; });
 
   var clearBtn = $("invPastItemClearBtn");
@@ -17346,6 +17347,8 @@ let rcNiscMeta  = { importedAt: null, fileName: null };
 let rcWlSort        = "location"; // worklist sort: "location" | "item"
 let rcWlIsolate     = "";          // isolate a single item (UPPER), "" = show all
 let rcWlCountFilter = "all";       // "all" | "counted" | "uncounted" (recount entered vs not)
+let rcWlQuery       = "";          // worklist free-text filter (item / desc / location)
+let _rcWlCache      = null;        // { wl, recByItem } for the open worklist — see rcRenderWorklistRows
 
 // ── number / date helpers ──────────────────────────────────────────
 function rcNum(v) { var n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? 0 : n; }
@@ -17678,7 +17681,7 @@ function rcShowWorklistHome() {
   var card = $("rcSessionsCard"); if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
   rcRenderCard();
 }
-function rcOpenWorklist(recountId) { rcView = "worklist"; rcActiveId = recountId; rcWlIsolate = ""; rcWlSort = "location"; rcRenderCard(); }
+function rcOpenWorklist(recountId) { rcView = "worklist"; rcActiveId = recountId; rcWlIsolate = ""; rcWlQuery = ""; rcWlSort = "location"; rcRenderCard(); }
 function rcWlSetSort(v)        { rcWlSort = v; rcRenderWorklist(); }
 function rcWlSetIsolate(v)     { rcWlIsolate = v || ""; rcRenderWorklist(); }
 function rcWlSetCountFilter(v) { rcWlCountFilter = v || "all"; rcRenderWorklist(); }
@@ -17732,7 +17735,7 @@ function rcConfirmWorklistCreate() {
     worklist: true, wlAllItems: !!all, items: items
   };
   rcSessions.push(session); rcSaveStorage();
-  rcActiveId = session.recountId; rcView = "worklist"; rcWlIsolate = ""; rcWlSort = "location";
+  rcActiveId = session.recountId; rcView = "worklist"; rcWlIsolate = ""; rcWlQuery = ""; rcWlSort = "location";
   rcRenderCard();
 }
 
@@ -17848,9 +17851,11 @@ function rcRenderWorklistHome() {
   el.innerHTML = html;
 }
 
-function rcRenderWorklistTable(session) {
-  var el = $("rcWorklistContent");
-  if (!el) return;
+// Build the join + the recount overlay ONCE per structural render and hold it.
+// rcBuildWorklist is the expensive part of this screen, and a search keystroke
+// must never pay for it: filtering is a display concern, applied in
+// rcRenderWorklistRows against this cache.
+function _rcWlBuild(session) {
   var focus = rcSessionFocusSet(session);
   var wl = rcBuildWorklist(focus, session.addedCountRows || [], session.locRecounts || {});
 
@@ -17861,13 +17866,56 @@ function rcRenderWorklistTable(session) {
       if (it.itemNumber) recByItem[it.itemNumber.toUpperCase()] = { rcItemId: it.rcItemId, type: t, recountedQty: it.recountedQty, status: it.status };
     });
   });
+  _rcWlCache = { recountId: session.recountId, focus: focus, wl: wl, recByItem: recByItem };
+  return _rcWlCache;
+}
 
-  var rows = wl.flat.slice();
-  if (rcWlIsolate) rows = rows.filter(function(r){ return r.itemUpper === rcWlIsolate; });
-  if (rcWlCountFilter === "counted")   rows = rows.filter(function(r){ return r.recountVal != null || r.added; });
-  else if (rcWlCountFilter === "uncounted") rows = rows.filter(function(r){ return r.recountVal == null && !r.added; });
-  if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
-  else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
+function rcWlActiveSession() {
+  return rcActiveId ? rcSessions.find(function(x){ return x.recountId === rcActiveId; }) : null;
+}
+
+// Repainting a full worklist costs ~40ms on a desktop (534 shelf lines plus the
+// zero-count and NISC-drop tables), which is several frames on the warehouse
+// iPad — rendering once per keystroke visibly stutters. Keystrokes arrive in
+// bursts, so render when the burst stops. The Past Counts searches repaint in
+// ~6ms and are left undebounced: a filter that reacts instantly is better when
+// you can afford it.
+var _rcWlSearchTimer = null;
+
+function rcWlRenderRowsNow() {
+  if (_rcWlSearchTimer) { clearTimeout(_rcWlSearchTimer); _rcWlSearchTimer = null; }
+  var s = rcWlActiveSession();
+  if (s) rcRenderWorklistRows(s);
+}
+
+function rcWlSearch() {
+  var el = $("rcWlQuery");
+  rcWlQuery = el ? el.value : "";
+  if (_rcWlSearchTimer) clearTimeout(_rcWlSearchTimer);
+  _rcWlSearchTimer = setTimeout(function () {
+    _rcWlSearchTimer = null;
+    var s = rcWlActiveSession();
+    if (s) rcRenderWorklistRows(s);
+  }, 120);
+}
+
+// Clears without repainting the shell, so focus stays in the box — a walk is a
+// sequence of searches, not one. Renders immediately: a Clear is a deliberate
+// act, not a burst, and waiting on it would feel broken.
+function rcWlClear() {
+  rcWlQuery = "";
+  var el = $("rcWlQuery");
+  if (el) { el.value = ""; el.focus(); }
+  rcWlRenderRowsNow();
+}
+
+function rcRenderWorklistTable(session) {
+  var el = $("rcWorklistContent");
+  if (!el) return;
+  // A structural render supersedes any keystroke still waiting to paint.
+  if (_rcWlSearchTimer) { clearTimeout(_rcWlSearchTimer); _rcWlSearchTimer = null; }
+  var c = _rcWlBuild(session);
+  var focus = c.focus, wl = c.wl;
 
   var html = '';
   // Header
@@ -17897,8 +17945,48 @@ function rcRenderWorklistTable(session) {
       '<option value="uncounted"' + (rcWlCountFilter === "uncounted" ? " selected" : "") + '>Not yet recounted</option>' +
       '<option value="counted"' +   (rcWlCountFilter === "counted" ? " selected" : "") +   '>Recounted</option>' +
     '</select>' +
+    // Free text, unlike Isolate's exact-item dropdown: on the floor what you
+    // remember is "the 12-fibre reels" or the bin you are standing at, not the
+    // item number. Same matcher as both Past Counts searches.
+    '<span style="font-size:12px;font-weight:600;margin-left:8px;">Find:</span>' +
+    '<input id="rcWlQuery" type="search" placeholder="Item, description, or location&hellip;" value="' + escapeHtml(rcWlQuery) + '" oninput="rcWlSearch()" style="font-size:13px;padding:4px 8px;width:210px;" />' +
+    '<button id="rcWlClearBtn" class="secondary" onclick="rcWlClear()" style="font-size:12px;padding:4px 8px;display:none;">Clear</button>' +
+    '<span id="rcWlMatchCount" class="small" style="color:#64748b;"></span>' +
   '</div>';
 
+  // Everything below the controls re-renders on a keystroke; the controls
+  // themselves must not, or the search box dies mid-word.
+  html += '<div id="rcWlRowsHost"></div>';
+
+  el.innerHTML = html;
+  rcRenderWorklistRows(session);
+}
+
+function rcRenderWorklistRows(session) {
+  var host = $("rcWlRowsHost");
+  if (!host) return;
+  var c = (_rcWlCache && _rcWlCache.recountId === session.recountId) ? _rcWlCache : _rcWlBuild(session);
+  var wl = c.wl, recByItem = c.recByItem;
+  var terms = _timSearchTerms(rcWlQuery);
+
+  var rows = wl.flat.slice();
+  if (rcWlIsolate) rows = rows.filter(function(r){ return r.itemUpper === rcWlIsolate; });
+  if (terms.length) rows = rows.filter(function(r){
+    return _timSearchMatches(r.item + " " + r.desc + " " + r.loc + " " + (r.classification || ""), terms);
+  });
+  if (rcWlCountFilter === "counted")   rows = rows.filter(function(r){ return r.recountVal != null || r.added; });
+  else if (rcWlCountFilter === "uncounted") rows = rows.filter(function(r){ return r.recountVal == null && !r.added; });
+  if (rcWlSort === "item") rows.sort(function(a,b){ return a.item.localeCompare(b.item) || a.loc.localeCompare(b.loc); });
+  else rows.sort(function(a,b){ return a.loc.localeCompare(b.loc) || a.item.localeCompare(b.item); });
+
+  var clearBtn = $("rcWlClearBtn");
+  if (clearBtn) clearBtn.style.display = terms.length ? "" : "none";
+  var cntEl = $("rcWlMatchCount");
+  if (cntEl) cntEl.textContent = terms.length
+    ? rows.length.toLocaleString() + " of " + wl.flat.length.toLocaleString() + " shelf lines"
+    : "";
+
+  var html = '';
   // Worktable
   html += '<div class="scroll"><table style="font-size:13px;width:100%;">' +
     '<thead><tr>' +
@@ -17910,7 +17998,9 @@ function rcRenderWorklistTable(session) {
     '</tr></thead><tbody>';
 
   if (!rows.length) {
-    html += '<tr><td colspan="14" style="color:#94a3b8;padding:12px;text-align:center;">No matching shelf lines.</td></tr>';
+    html += '<tr><td colspan="14" style="color:#94a3b8;padding:12px;text-align:center;">' +
+      (terms.length ? 'No shelf line matches &ldquo;' + escapeHtml(rcWlQuery.trim()) + '&rdquo;.'
+                    : 'No matching shelf lines.') + '</td></tr>';
   }
   rows.forEach(function(r) {
     var rec = recByItem[r.itemUpper] || {};
@@ -17952,6 +18042,9 @@ function rcRenderWorklistTable(session) {
   // Zero-count / not-found items (hidden when filtering to already-recounted rows)
   var absent = (rcWlCountFilter === "counted") ? [] : wl.absent.slice();
   if (rcWlIsolate) absent = absent.filter(function(a){ return a.item === rcWlIsolate; });
+  if (terms.length) absent = absent.filter(function(a){
+    return _timSearchMatches(a.item + " " + a.description + " " + (a.aisleBin || ""), terms);
+  });
   if (absent.length) {
     html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;color:#b91c1c;margin-bottom:2px;">⚑ Counted ZERO / not found (' + absent.length + ') — walk to confirm truly absent</div>' +
       '<div class="small" style="color:#94a3b8;margin-bottom:6px;">NISC Aisle/Bin is <b>reference only and out of date</b> — a faint hint, not a location to trust.</div>' +
@@ -17975,6 +18068,9 @@ function rcRenderWorklistTable(session) {
   // Secondary: NISC row-drop candidates
   var drops = wl.niscDrops.slice();
   if (rcWlIsolate) drops = drops.filter(function(d){ return d.item.toUpperCase() === rcWlIsolate; });
+  if (terms.length) drops = drops.filter(function(d){
+    return _timSearchMatches(d.item + " " + d.description, terms);
+  });
   if (drops.length) {
     var dropId = "rcWlDrops_" + session.recountId.slice(-6);
     html += '<div style="margin-top:16px;"><div class="collapsible-header" onclick="var b=document.getElementById(\'' + dropId + '\');if(b)b.classList.toggle(\'hidden\');" style="cursor:pointer;padding:6px 0;border-bottom:1px solid #e2e8f0;">' +
@@ -17986,7 +18082,9 @@ function rcRenderWorklistTable(session) {
     html += '</tbody></table></div></div></div>';
   }
 
-  // Rows added during the walk (found-at locations) — with undo
+  // Rows added during the walk (found-at locations) — with undo. Deliberately
+  // NOT filtered: it is a short audit list of what you changed, and hiding part
+  // of it behind a search is how an accidental add goes unnoticed.
   var added = (session.addedCountRows || []);
   if (added.length) {
     html += '<div style="margin-top:16px;"><div style="font-weight:700;font-size:12px;color:#15803d;margin-bottom:6px;">&#43; Added on walk (' + added.length + ')</div>' +
@@ -18004,7 +18102,7 @@ function rcRenderWorklistTable(session) {
     html += '</tbody></table></div></div>';
   }
 
-  el.innerHTML = html;
+  host.innerHTML = html;
 }
 
 // ── Add a "found-at" location row during the walk ───────────────────

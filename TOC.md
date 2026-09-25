@@ -15,7 +15,7 @@ Single-page PWA. Four files do all the work:
 | File | Role |
 |------|------|
 | `index.html` | All HTML markup; inline `oninput`/`onclick` handlers wire to `app.js` functions |
-| `app.js` | All application logic (~8400 lines); no framework |
+| `app.js` | All application logic (~22,800 lines — never read whole; grep the symbol); no framework |
 | `styles.css` | All styling |
 | `sw.js` | Service worker: network-first for local files, cache-first for CDN, bypass for api.github.com; cache key `tim-v5` |
 
@@ -100,7 +100,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `RC_COUNT_KEY` / `RC_MOVE_KEY` / `RC_NISC_KEY` | IDB keys for the 3 worklist source files |
 | `rcCountMeta` / `rcMoveMeta` / `rcNiscMeta` | `{ importedAt, fileName }` per source file |
 | `rcWlSort` | Worklist sort `"location" \| "item"` |
-| `rcWlIsolate` | Worklist single-item isolate filter (UPPER item; `""` = all) |
+| `rcWlIsolate` / `rcWlQuery` | Worklist single-item isolate filter (UPPER item; `""` = all) / worklist free-text Find filter (`""` = all) |
 
 ---
 
@@ -204,7 +204,7 @@ rcConfirmCreate() → rcSessions[] → rcSaveStorage() → TimDB
 | `invPastLocText(locs)` | `"WH04900 (180), WH06200 (40)"` / `"YARD-A (3,100 ft)"` |
 | `invPastOpenCountNote()` | The disclosure line: counts still open are NOT in this record. Silence there is its own bug — an item counted this morning must not look like it was never counted |
 | `invPastShowPanel(name)` / `renderInvPast()` | Panel switch + top-level render. **By Count** = "what did that cycle come to, and where?"; **By Item** = "how many of item A last cycle — and the cycle before?" |
-| `_invPastTerms(q)` / `_invPastHayMatches(hay, terms)` | The one matcher behind **both** Past Counts searches (v2.63.00), so the two panels cannot drift into answering the same query differently. Whitespace-split, every term must match somewhere in the row — `cable y01` narrows instead of widening — and location is in the haystack alongside item and description |
+| `_timSearchTerms(q)` / `_timSearchMatches(hay, terms)` | The one matcher behind **every** in-app list search — Past Counts By Count, Past Counts By Item, and the Recount worklist Find box — so panels asking the same question cannot drift into answering it differently. Whitespace-split, every term must match somewhere in the row (`cable y01` narrows instead of widening), case-insensitive. Callers choose the haystack; all of them include **location** alongside item and description. Lives with the generic helpers near `normKey`, not inside any one panel |
 | `renderInvPastSessions()` / `renderInvPastDetail()` / `invPastSelect(id)` | By Count: session list (items/units/reel-ft per count) + per-item detail with locations. `renderInvPastDetail` paints the **shell only** (heading, export buttons, search box, table frame) — see the split below. `invPastSelect` clears the drill-down filter, so a query from the last count can't silently hide rows in this one |
 | `renderInvPastDetailRows()` / `invPastDetailSearch()` / `invPastDetailClear()` / `_invPastDetailMatches(r, terms)` / `_invPastDetailItems` | **Search inside a cycle** (v2.62.00) — a real cycle is hundreds of rows and scrolling to find one item number was the only option. Rendered as two functions on purpose: typing re-renders only `<tbody id="invPastDetailBody">`, never the shell, because repainting the shell would destroy the input being typed into and take focus and caret with it (By Item dodges this by living in static markup; this panel can't, it exists only once a count is picked). Rolled-up rows are cached in `_invPastDetailItems` so a keystroke filters without re-rolling thousands of events on an iPad. Every term must match (item + description + location), so `cable y01` narrows rather than widens. **Exports ignore the filter** — they re-derive from the session's events; a search narrows what you LOOK at, never what you ship |
 | `invPastItemIndex()` | item → `{item, description, rows:[{session,qty,serialized,ft,locs,last}]}`, rows already newest-cycle-first (`invPastSessions` is sorted) — the order the question is asked in |
@@ -1102,7 +1102,8 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `rcConfirmWorklistCreate()` | Build session from pasted list (or all counted items); classify items via NISC; seed niscExpectedQty from Captured |
 | `rcWlSetSort(v)` / `rcWlSetIsolate(v)` | Location/item sort toggle / single-item isolate filter |
 | `rcWlSetRecount(id, itemUp, val)` | Save recount qty onto the item's `recountedQty` + status |
-| `rcRenderWorklist()` / `rcRenderWorklistHome()` / `rcRenderWorklistTable(session)` | View dispatch / build-home / worktable + absent + niscDrops |
+| `rcRenderWorklist()` / `rcRenderWorklistHome()` / `rcRenderWorklistTable(session)` / `rcRenderWorklistRows(session)` / `_rcWlBuild(session)` / `_rcWlCache` | View dispatch / build-home / **shell** (header + controls) / **rows** (worktable + absent + niscDrops + added-on-walk). Split at v2.64.00 so the Find box survives typing: the controls must not repaint on a keystroke or the input dies mid-word. `_rcWlBuild` runs `rcBuildWorklist` + the recount overlay once per structural render and caches both; filtering is a display concern applied to that cache |
+| `rcWlSearch()` / `rcWlClear()` / `rcWlRenderRowsNow()` / `rcWlActiveSession()` / `rcWlQuery` / `_rcWlSearchTimer` | **Find box** (v2.64.00) — free text over item + description + location + classification via the shared `_timSearchMatches`, composing with Isolate and Show. Free text rather than another dropdown because on the floor you remember "the 12-fibre reels" or the bin you are at, not the item number. **Debounced 120ms**, unlike the Past Counts searches: a full worklist repaint is ~40ms (534 shelf lines + the zero-count and NISC-drop tables) so a render per keystroke stutters on the iPad — measured 12 keystrokes → 1 render. A structural render cancels any pending paint. `rcWlClear` renders immediately (a Clear is a deliberate act, not a burst). The **Added on walk** list is deliberately NOT filtered — it is the short audit list of what you changed, and hiding part of it behind a search is how an accidental add goes unnoticed |
 | `rcDataStatusRow()` / `rcClsBadge()` | Render helpers |
 | `rcExportWorklistCsv(id)` | Download location-ordered worklist → `recount-worklist-<name>-<date>.xlsx` (XLSX via `timDownloadXlsx`) |
 | `rcNum / rcCountDay / rcMoveDay / rcDayToDisplay / rcMovementDir / rcColIdx` | Parse helpers (comma-number strip, date→int, direction, header lookup) |
