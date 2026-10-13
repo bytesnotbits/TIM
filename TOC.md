@@ -736,9 +736,9 @@ The two registry renderers take a `selectable` 3rd arg: `_boxRenderRegistryInto(
 | `invResolveBySerial(key)` | Look up history record by serial |
 | `invResolveByFsan(key)` | Look up history record by FSAN |
 | `invResolveByMac(mac)` | Look up history record by MAC |
-| `invBuildQuantSerialIndex()` | Cached `normKey(lotId) → quant row` map of **qty-1 unit-serials only** from `invQuantsBaseline` (Option A); rebuilt when the baseline array is reassigned (v2.50.00) |
+| `invBuildQuantSerialIndex()` | Cached `normKey(lotId) → quant row` map from `invQuantsBaseline`, rebuilt when the baseline array is reassigned. Indexes every quantity a **unit serial** can hold — 1, 0 and **negative** — ranked 1 > 0 > negative so an anomalous row can never shadow a clean on-hand unit. **Reels are excluded by `reelItemIsReelTracked` (catalog `tracking_type`), not by quantity** — reel footage goes negative, and a negative is ≤ 1, so a quantity rule admits the very reels it means to exclude (7 did). `qty > 1` is kept only as a backstop for items the catalog does not know (v2.71.00, widened from qty-1-only; the 2026.2 export holds 51 serialized devices at -1 that previously fell through to the unknown-device prompt) |
 | `invResolveQuantSerial(vKey)` | Fallback lookup: device not in history but Odoo has it on hand as a unit-serial → return the quant row (v2.50.00) |
-| `invQuantSerialCoverage()` | `{total, known, unknown}` — on-hand unit-serials vs. what history knows; drives the readiness line on quants load (v2.50.00) |
+| `invQuantSerialCoverage()` | `{total, known, unknown, negative}` — on-hand unit-serials vs. what history knows, plus the count of lot/serials at **negative** on-hand (impossible for a serial; an Odoo data fault surfaced on the readiness line rather than hidden). Drives the readiness line on quants load (v2.50.00; `negative` v2.71.00) |
 | `invCreateExceptionEvent(value, type, problem, action, notes)` | Create exception event |
 
 ---

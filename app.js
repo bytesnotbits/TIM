@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.70.00";
+const APP_VERSION = "v2.71.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -8928,10 +8928,31 @@ var _invQuantSerialIndex = null, _invQuantSerialIndexSrc = null;
 function invBuildQuantSerialIndex() {
   if (_invQuantSerialIndexSrc === invQuantsBaseline && _invQuantSerialIndex) return _invQuantSerialIndex;
   var idx = Object.create(null);
+  // A reel is excluded by its CATALOG TRACKING TYPE, not by its quantity.
+  // Quantity alone is only a proxy and it leaks: reel footage can go negative
+  // (-26, -2098, -4582 in the 2026.2 export), and a negative is <= 1, so a
+  // quantity rule admits the very reels it was meant to keep out. Seven did.
+  // `reelItemIsReelTracked` reads `tracking_type` and is authoritative.
+  //
+  // Quantity stays on as a BACKSTOP for items the catalog does not know:
+  // anything above 1 cannot be a unit serial, so an uncatalogued reel or bulk
+  // lot is still kept out.
+  //
+  // Admitting 0 and negative is the deliberate part (v2.71.00). The 2026.2
+  // export carries 51 serialized devices sitting at -1 — Odoo consumed units
+  // it never had — and the old `qty !== 1` test made a scan of one of those
+  // fall through to the unknown-device prompt for a device Odoo plainly
+  // knows. That is Odoo arithmetic the counter cannot fix and must not be
+  // stopped by; the anomaly is reported on the readiness line instead.
+  //
+  // Rank keeps a clean on-hand unit winning the key: 1 > 0 > negative, so an
+  // anomalous row can never shadow a good one. Equal rank: first wins.
+  function rank(n) { return n === 1 ? 3 : n === 0 ? 2 : 1; }
   (invQuantsBaseline || []).forEach(function(q) {
-    if (!q || !q.lotId || q.odooQty !== 1) return;
-    var k = normKey(q.lotId);
-    if (k && !idx[k]) idx[k] = q;   // unit serials are unique; first wins
+    if (!q || !q.lotId || q.odooQty > 1) return;          // backstop, see above
+    if (reelItemIsReelTracked(q.itemNumber)) return;      // authoritative
+    var k = normKey(q.lotId); if (!k) return;
+    if (!idx[k] || rank(q.odooQty) > rank(idx[k].odooQty)) idx[k] = q;
   });
   _invQuantSerialIndex = idx;
   _invQuantSerialIndexSrc = invQuantsBaseline;
@@ -8951,13 +8972,15 @@ function invQuantSerialCoverage() {
     var s = normKey(r.serial || r.ref  || ""); if (s) known[s] = 1;
     var f = normKey(r.fsan   || r.name || ""); if (f) known[f] = 1;
   });
-  var total = 0, hit = 0;
+  var total = 0, hit = 0, negative = 0;
   (invQuantsBaseline || []).forEach(function(q) {
-    if (!q || !q.lotId || q.odooQty !== 1) return;
+    if (!q || !q.lotId) return;
+    if (q.odooQty < 0) negative++;   // impossible on a serial - Odoo data issue
+    if (q.odooQty !== 1) return;
     total++;
     if (known[normKey(q.lotId)]) hit++;
   });
-  return { total: total, known: hit, unknown: total - hit };
+  return { total: total, known: hit, unknown: total - hit, negative: negative };
 }
 
 // -- Duplicate detection -------------------------------------------
@@ -12446,7 +12469,7 @@ function _palletBoxItems(box) {
   boxDeviceList(box).forEach(function(d) {
     var pr = _contentsResolveProduct(d);
     var item = pr.item || "";
-    var k = item || " ?";
+    var k = item || "\u0000?";
     if (!byItem[k]) { byItem[k] = { item: item, desc: pr.desc || "", count: 0 }; order.push(k); }
     byItem[k].count++;
     if (!byItem[k].desc && pr.desc) byItem[k].desc = pr.desc;
@@ -12461,7 +12484,7 @@ function _palletItemRollup(p) {
     var b = boxGetRaw(k);
     if (!b || b.deleted) return;
     _palletBoxItems(b).forEach(function(it) {
-      var key = it.item || " ?";
+      var key = it.item || "\u0000?";
       if (!byItem[key]) { byItem[key] = { item: it.item, desc: it.desc, count: 0, boxes: 0 }; order.push(key); }
       byItem[key].count += it.count;
       byItem[key].boxes++;
@@ -16145,6 +16168,14 @@ function invProcessQuantsBaselineCsv(text, fileName) {
       statusEl.textContent += " Serialized: " + cov.total.toLocaleString() + " device" +
         (cov.total !== 1 ? "s" : "") + " on hand · " + cov.known.toLocaleString() +
         " known to history · " + cov.unknown.toLocaleString() + " new (auto-count from Odoo).";
+    }
+    // Negative on-hand is impossible for a serial. Surfaced, not hidden: it is
+    // an Odoo data problem to fix at source, but the device still resolves on
+    // scan so a count is never blocked by it.
+    if (cov.negative) {
+      statusEl.textContent += " ⚠ " + cov.negative.toLocaleString() + " lot/serial" +
+        (cov.negative !== 1 ? "s" : "") + " at NEGATIVE on-hand in Odoo - data issue to fix at source; " +
+        "they still resolve on scan.";
     }
   }
 }
