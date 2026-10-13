@@ -10,7 +10,7 @@ shipped without ever being exercised on two real devices:
 Phase A is the newer and riskier half; run it first. **You can stop after Phase A** and still have
 validated everything shipped this cycle. Phase B is the older backlog item.
 
-Deploy branch is `TIM-2.0` (push = deploy). Confirm the live build at
+Deploy branch is `main` (push = deploy). Confirm the live build at
 `https://bytesnotbits.github.io/TIM/app.js` (first lines, `APP_VERSION`).
 
 ---
