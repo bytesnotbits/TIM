@@ -31,3 +31,6 @@
 *.xlsx  binary
 *.xls   binary
 *.pdf   binary
+
+# Batch files MUST be CRLF - cmd.exe can misparse an LF-only .bat.
+*.bat   text eol=crlf
