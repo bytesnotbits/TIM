@@ -45,10 +45,26 @@ that does not currently exist.**
 | **C. Expose the TIM service publicly**, authenticated | Preserves the current topology and asks nothing of the devices — this is effectively what GitHub does today. Largest security review. |
 | **D. Do not migrate the runtime** | Keep data on an external service; use the coop DB only for reporting/integration. Honest option, should not be dismissed by default. |
 
-**Question for Eric / whoever owns the network:** *the warehouse iPads are on guest wifi
-with no DNS for internal hosts — what is the intended path for an internal application to
-reach them?* Also needed: **are these iPads MDM-managed?** That determines whether a CA
-profile, a VPN profile, or a network change is even deployable.
+### A solved path already exists somewhere in the coop
+
+**Other HCTC users already have iPad access to coop services that are not on the public
+internet** (Joe, 2026-10-14 — mechanism unknown). So this is not a request to build
+something new; it is a request to apply an existing arrangement to the warehouse devices.
+That reframes the ask from infrastructure to precedent, and it is why Option A or B is
+more likely than it first appeared.
+
+**The question to ask — a precedent question, not an infrastructure one:**
+
+> Some of our iPads already reach coop services that aren't on the public internet. How is
+> that set up, and can the warehouse iPads be put on the same footing?
+
+Whoever runs the network can answer that from memory. It needs no estimate, no design, and
+no decision from Eric beyond pointing at the right person.
+
+**Second question, needed either way:** *are the warehouse iPads MDM-managed, and by
+which MDM?* That determines whether a CA profile, a VPN profile, or an SSID change can be
+pushed to them at all. Check: **Settings → General → VPN & Device Management** on the
+device — a listed Mobile Device Management profile names the managing organisation.
 
 ---
 
