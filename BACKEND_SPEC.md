@@ -45,6 +45,32 @@ that does not currently exist.**
 | **C. Expose the TIM service publicly**, authenticated | Preserves the current topology and asks nothing of the devices — this is effectively what GitHub does today. Largest security review. |
 | **D. Do not migrate the runtime** | Keep data on an external service; use the coop DB only for reporting/integration. Honest option, should not be dismissed by default. |
 
+### On-device findings, 2026-10-14 (a floor iPad)
+
+| Checked | Result | Means |
+|---|---|---|
+| MDM enrolment | **Managed** | Any profile — VPN, CA, wifi — can be pushed to these devices. |
+| Settings → VPN | **None configured** | The standard warehouse-iPad profile carries no VPN payload. |
+| Settings → Wi-Fi | **No internal SSID visible** — guest plus unrelated protected networks | **Option A is not available** where the iPads physically are. |
+| Certificate Trust Settings | **No HCTC root listed** | Inconclusive on its own: that screen lists only *manually* installed roots; an MDM-pushed CA appears in the configuration profile instead. |
+| Precedent | **Techs use coop devices to reach coop info off-site, via VPN** | The working mechanism is a VPN profile, already in production on managed coop devices. |
+
+**Conclusion: Option B, and it is a configuration request, not a project.** Push the
+existing tech-device VPN profile to the warehouse iPads. Known config, already working,
+deployable because the devices are managed.
+
+### If VPN is the path, TIM needs one change
+
+An always-on VPN introduces a failure TIM does not currently have: **the device looks
+online but cannot reach the backend.** TIM queues locally and survives this, so it is not
+a data-loss risk — but it is a *silent* non-sync risk, which is precisely FinalSpan's
+recorded failure (§3.2). **Requirement: a visible sync-state indicator** — last successful
+sync time, and an unmissable state when pending changes are not reaching the server.
+
+Also worth testing before committing to it: guest wifi with a **captive portal** plus an
+always-on VPN is a known friction combination, and the warehouse iPads would be sitting on
+exactly that.
+
 ### A solved path already exists somewhere in the coop
 
 **Other HCTC users already have iPad access to coop services that are not on the public
