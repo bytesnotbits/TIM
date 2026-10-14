@@ -61,10 +61,15 @@ more likely than it first appeared.
 Whoever runs the network can answer that from memory. It needs no estimate, no design, and
 no decision from Eric beyond pointing at the right person.
 
-**Second question, needed either way:** *are the warehouse iPads MDM-managed, and by
-which MDM?* That determines whether a CA profile, a VPN profile, or an SSID change can be
-pushed to them at all. Check: **Settings → General → VPN & Device Management** on the
-device — a listed Mobile Device Management profile names the managing organisation.
+**CONFIRMED 2026-10-14: the warehouse iPads ARE MDM-managed.** So every option above is
+deployable — CA profile, VPN profile, wifi/SSID payload, per-app VPN. The blocker is a
+configuration decision, not a capability gap.
+
+**Check on the device before asking anyone** — this may resolve without a conversation:
+(1) Settings → General → VPN & Device Management → the MDM profile lists what HCTC already
+pushes as standard; (2) Settings → VPN — if a VPN profile already exists, **enable it and
+retry `https://telcor.hctc.coop:3012`**; (3) Settings → General → About → Certificate
+Trust Settings — an HCTC root listed here answers the certificate question outright.
 
 ---
 
