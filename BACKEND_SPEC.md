@@ -1,6 +1,7 @@
 # TIM Backend Spec — moving off the GitHub-repo database
 
-**Status:** DRAFT v0.1 — 2026-10-14. Not agreed with anyone. Written to be argued with.
+**Status:** DRAFT v0.2 — 2026-10-14. Not agreed with anyone. Written to be argued with.
+**Blocked:** see §1a — the warehouse iPads cannot reach internal servers. Nothing below can be scheduled until that is resolved.
 **Owner:** Joe Herring
 **Purpose:** define what HCTC needs to build so TIM can stop using a private GitHub
 repository as its database, and define how TIM migrates onto it without interrupting
@@ -16,6 +17,38 @@ has to be replaced with a coop-hosted database. This document proposes that TIM 
 onboarded onto **AppStack** — the internal application platform HCTC already runs — rather
 than having a bespoke backend designed for it, and that the migration be done behind a
 code seam so the existing GitHub path keeps working untouched until the new one is proven.
+
+---
+
+## 1a. BLOCKER — the warehouse iPads cannot reach internal servers at all
+
+**Tested 2026-10-14 on a floor iPad:** `https://telcor.hctc.coop:3012` returns *"Safari
+cannot open the page because the server cannot be found."* That is a **DNS failure**, not a
+certificate problem. The warehouse iPads are on the **guest wifi**, which does not resolve
+internal hostnames. Laptops reach internal resources over a **VPN**; the iPads have none.
+
+**TIM works today because its backend is on the public internet.** GitHub Pages serves the
+app and `api.github.com` holds the data — both reachable from guest wifi. That was not a
+deliberate architectural choice, but it is now load-bearing: *any* move to an
+internally-hosted service breaks not only data sync but the loading of the app itself.
+
+This supersedes the certificate question as the gating issue. Trust does not matter if the
+hostname does not resolve. **Everything below in §2.1, §5 and §7 assumes a network path
+that does not currently exist.**
+
+### Options, each with a real cost — this is an IT/security decision, not Joe's
+
+| Option | Cost / risk |
+|---|---|
+| **A. Move the iPads to an internal SSID** | Cleanest technically. Shared, mobile, warehouse-floor devices on the internal network is a security conversation. Needs IT. |
+| **B. VPN on the iPads** (always-on, via MDM) | Requires MDM enrolment. A dropped VPN mid-count stalls sync silently — the exact failure TIM's offline design exists to tolerate, but harder to detect. |
+| **C. Expose the TIM service publicly**, authenticated | Preserves the current topology and asks nothing of the devices — this is effectively what GitHub does today. Largest security review. |
+| **D. Do not migrate the runtime** | Keep data on an external service; use the coop DB only for reporting/integration. Honest option, should not be dismissed by default. |
+
+**Question for Eric / whoever owns the network:** *the warehouse iPads are on guest wifi
+with no DNS for internal hosts — what is the intended path for an internal application to
+reach them?* Also needed: **are these iPads MDM-managed?** That determines whether a CA
+profile, a VPN profile, or a network change is even deployable.
 
 ---
 
@@ -38,12 +71,18 @@ Read out of the live FinalSpan checkout (`stack/stack.config.json`,
 blocking TIM already exist and are in production use. TIM does not need a backend designed
 from nothing; it needs to be onboarded.
 
-### 2.1 This also answers "what replaces GitHub Pages"
+### 2.1 What would replace GitHub Pages — conditional on §1a
 
 `stack.config.json` carries `gitlabProject` and `gitlabBranch`, and AppStack can push
-self-updates. So the GitLab-side deploy target that TIM has been missing is **AppStack
-pulling `TELCOR/TIM` `main`**. That is the endgame: GitHub Pages retires, GitLab becomes
-canonical, and the deploy is a platform function rather than a side effect of a push.
+self-updates. So the GitLab-side deploy target TIM has been missing *would* be **AppStack
+pulling `TELCOR/TIM` `main`**: GitHub Pages retires, GitLab becomes canonical, and the
+deploy becomes a platform function rather than a side effect of a push.
+
+**This is blocked by §1a and must not be treated as the plan until the network question is
+answered.** AppStack serves on `telcor.hctc.coop`, which the floor iPads cannot resolve.
+Under today's topology, moving the app there would leave the warehouse unable to load TIM
+at all — a strictly worse outcome than the status quo. GitHub Pages stays until a device
+on guest wifi can reach the replacement.
 
 ---
 
@@ -162,23 +201,31 @@ The GitHub implementation is deleted — not disabled, deleted — when **all** 
 
 ## 8. Open questions — these need answers before anyone estimates
 
-**For Eric / Alex:**
-1. **Is the `*.hctc.coop` wildcard certificate publicly trusted, or issued by an internal
-   CA?** If internal, the iPads need the CA profile installed before a browser `fetch()`
-   to the API will work at all. *This is the single gating question.*
-2. Can the warehouse iPads reach `telcor.hctc.coop` on the network they use today?
-3. **How does a user actually authenticate?** Browser session cookie from the portal? How
+**For Eric / Alex / whoever owns the network:**
+1. **ANSWERED, AND IT IS THE BLOCKER — see §1a.** The floor iPads are on guest wifi and
+   cannot resolve internal hostnames at all (`telcor.hctc.coop:3012` → "server cannot be
+   found"). The real question is now: *what is the intended path for an internal
+   application to reach devices on the guest network* — move the devices, VPN them, or
+   expose the service? Nothing else in this document can be scheduled until this is
+   settled.
+2. **Are the warehouse iPads MDM-managed?** Determines whether a CA profile, a VPN
+   profile, or an SSID change is deployable at all.
+3. Is the `*.hctc.coop` wildcard certificate publicly trusted, or issued by an internal
+   CA? Still needed, but **downstream of #1** — trust is irrelevant while DNS fails.
+   (Weak prior evidence it is CA-issued: `telcor` is configured with a `fullchain.pem`,
+   unlike `gitlab.hctc.coop`, which is self-signed.)
+4. **How does a user actually authenticate?** Browser session cookie from the portal? How
    long does it last, and what happens on expiry mid-use? (See 4.3.)
-4. Can TIM be onboarded onto AppStack the way FinalSpan is — its own port, its own
+5. Can TIM be onboarded onto AppStack the way FinalSpan is — its own port, its own
    `stack.config.json`, pulling `TELCOR/TIM` `main`?
-5. Is a **non-production instance** (dev API + dev database) included? Requesting it now,
+6. Is a **non-production instance** (dev API + dev database) included? Requesting it now,
    with the build, rather than as a second ask later.
-6. Who builds and owns the service — and does it live in `TELCOR/TIM` alongside the
+7. Who builds and owns the service — and does it live in `TELCOR/TIM` alongside the
    frontend, or a separate project? (Section 3.1: strong preference for one repo.)
 
 **For Joe to decide:**
-7. Per-user identity or per-device? TIM currently tracks a username in `localStorage` only.
-8. Does SSO replace that username, or sit alongside it?
+8. Per-user identity or per-device? TIM currently tracks a username in `localStorage` only.
+9. Does SSO replace that username, or sit alongside it?
 
 ---
 
