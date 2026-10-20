@@ -262,17 +262,20 @@ without them will reproduce the same failures.
    Odoo exports — newest import replaces the lot. History, events and the registries are
    accumulated records and must merge. Treating a ledger as a snapshot discards work.
 
-### 6.3 Field-level shapes — an outstanding action, not a gap in the design
+### 6.3 Field-level shapes — see `DATA_DICTIONARY.md`
 
-TIM maintains a full data dictionary (every field of `ProductMapEntry`, `HistoryRecord`,
-`InvSession`, `InvEvent`, `RcSession`, `RcItem`, `RcMovement`, `BoxEntry`, `PalletEntry`,
-`ReelEntry`, `OdooQuant`), kept current under a standing rule that any field added,
-removed or renamed is documented in the same commit.
+Every field of `ProductMapEntry`, `HistoryRecord`, `InvSession`, `InvEvent`, `RcSession`,
+`RcItem` (including the container variant), `RcMovement`, `BoxEntry`, `PalletEntry`,
+`ReelEntry`, `OdooQuant` and the recount-worklist source rows is documented in
+**`DATA_DICTIONARY.md`**, in this repository, beside this file.
 
-**It does not currently live in this repository**, so whoever builds the service cannot
-read it. Exporting it into the repo alongside this spec is a prerequisite to implementation
-and is a small piece of work — but it must have exactly one home, so it should be *moved*
-rather than copied, with the original pointing at it.
+It is kept current by a standing rule: a field added, removed or renamed is documented in
+the **same commit** as the code change. Now that it is version-controlled alongside the
+code, that rule is enforceable in review rather than merely asserted — the shape change
+and its documentation appear in one diff.
+
+It has exactly one home. If something there is wrong or missing, fix that file; do not
+keep a second copy.
 
 ---
 

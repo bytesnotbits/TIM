@@ -29,6 +29,8 @@ Then open http://localhost:5173. (See `.claude/launch.json`.) There are no tests
 | `styles.css` | All styling. |
 | `sw.js` | Service worker. Network-first for local files, cache-first for version-locked CDN. |
 
+**`DATA_DICTIONARY.md` is the map of the DATA** — every field of every object in `appData`. Read it before any data-layer work instead of deriving shapes from `app.js`; a field added, removed or renamed is documented in the same commit as the code change.
+
 **`TOC.md` is the map of `app.js`** — it lists every function grouped by feature area with a one-line purpose. Read it before searching. It deliberately omits line numbers; find any symbol by grepping its name (e.g. `function invProcessScan`, `var _CSV_IMPORT_TYPES`). Keep `TOC.md` in sync when you add, rename, or remove functions.
 
 ## Architecture essentials

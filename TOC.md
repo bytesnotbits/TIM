@@ -4,7 +4,8 @@
 > To find any function, grep its name: `function functionName` — unique in the file.
 > For variables/constants, grep the declaration: `var foo` / `const foo`.
 > Line numbers are intentionally omitted — they go stale; grep patterns don't.
-> **SESSION START:** For orientation read `CLAUDE.md` first (architecture, deploy/version rules, conventions), then use this map to locate code. Report what you're about to touch before editing.
+> **SESSION START:** For orientation read `CLAUDE.md` first (architecture, deploy/version rules, conventions), then use this map to locate code. Report what you are about to touch before editing.
+> **For object SHAPES read `DATA_DICTIONARY.md`, not `app.js`** — it documents every field of every `appData` object and is kept in step with the code commit-by-commit.
 
 ---
 
