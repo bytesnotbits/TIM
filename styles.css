@@ -378,6 +378,22 @@ th { background: #f1f5f9; position: sticky; top: 0; z-index: 1; }
 .tim-update-banner-btn { background: #fff; color: #1e3a8a; border: none; border-radius: 6px;
   padding: 4px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .tim-update-banner-btn:hover { background: #dbeafe; }
+/* ── Sync-state indicator (v2.72.00) ──
+   Chip lives in the header and is always truthful; the banner only appears
+   when local work is actually stranded, so it keeps its meaning. */
+.tim-sync-chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid transparent; cursor: pointer; white-space: nowrap; }
+.tim-sync-chip::before { content: "●"; font-size: 10px; line-height: 1; }
+.tim-sync-ok   { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.tim-sync-warn { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+.tim-sync-bad  { background: #fef2f2; color: #991b1b; border-color: #fca5a5; }
+.tim-sync-banner { display: flex; align-items: center; justify-content: center; gap: 14px;
+  background: #dc2626; color: #fff; font-weight: 700; font-size: 13px;
+  padding: 8px 16px; border: 2px solid #991b1b; border-radius: 8px; margin: 8px 0 4px; }
+.tim-sync-banner-btn { background: #fff; color: #991b1b; border: none; border-radius: 6px;
+  padding: 4px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.tim-sync-banner-btn:hover { background: #fee2e2; }
 .scroll { max-height: 460px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 10px; }
 /* Like .scroll but no vertical cap: the table flows with the page (page scrolls),
    while wide tables still scroll horizontally on their own. Used by the Products

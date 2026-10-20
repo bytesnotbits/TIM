@@ -218,6 +218,12 @@
     <!-- App header -->
     <div class="app-header">
       <h1 class="app-title">TIM <span class="app-version">v—</span></h1>
+      <span id="timSyncChip" class="tim-sync-chip hidden" role="status" aria-live="polite"
+            title="Sync state" onclick="switchTab('dataimport')"></span>
+    </div>
+    <div id="timSyncBanner" class="tim-sync-banner hidden" role="alert" aria-live="assertive">
+      <span>⚠️ <span id="timSyncBannerMsg"></span></span>
+      <button type="button" class="tim-sync-banner-btn" onclick="ghPushToGitHub()">Push now</button>
     </div>
     <div id="timTestingBanner" class="tim-testing-banner hidden" role="status" aria-live="polite">
       <span>🧪 TESTING MODE — GitHub push is disabled. Changes save locally only and will <b>not</b> sync to the shared repo.</span>

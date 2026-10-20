@@ -1,5 +1,5 @@
 ﻿
-const APP_VERSION = "v2.71.00";
+const APP_VERSION = "v2.72.00";
 
 // Compatibility version of the SYNCED DATA shape (not the cosmetic APP_VERSION).
 // Stamped into data/meta.json on every push and read back on pull. Bump ONLY when
@@ -2535,8 +2535,24 @@ function ghMergeConflictEntries(incoming) {
 
 // A push couldn't complete (offline, or a network drop mid-push). Remember
 // it so we can flush the local master to GitHub once connectivity returns.
-function ghMarkPendingPush() { TimDB.set(GH_PENDING_KEY, true).catch(function(){}); }
-function ghClearPendingPush() { TimDB.remove(GH_PENDING_KEY).catch(function(){}); }
+// The pending flag now stores the TIMESTAMP at which local work first went
+// un-pushed, not a bare `true`. A number is still truthy, so the two existing
+// readers (ghBindOnlineRetry, ghInit) are unaffected — but the indicator can
+// now say HOW LONG work has been stranded, which is the difference between
+// "syncing in a moment" and "this device has been alone for an hour".
+//
+// Both of these repaint the indicator. The code that changes the state is the
+// code that shows it: see the ghRenderSyncIndicator comment for why.
+function ghMarkPendingPush() {
+  if (!ghPendingSince) ghPendingSince = Date.now();
+  TimDB.set(GH_PENDING_KEY, ghPendingSince).catch(function(){});
+  ghRenderSyncIndicator();
+}
+function ghClearPendingPush() {
+  ghPendingSince = 0;
+  TimDB.remove(GH_PENDING_KEY).catch(function(){});
+  ghRenderSyncIndicator();
+}
 
 // When the device comes back online, flush any deferred push. Bound once.
 function ghBindOnlineRetry() {
@@ -2610,6 +2626,9 @@ function ghRenderTestingBanner() {
   // The gate rides with the indicator, so the buttons can never say something
   // different from the banner (v2.57.02).
   ghApplyButtonGating();
+  // Same reasoning extended to the sync chip: testing mode suppresses egress,
+  // so the chip must never read "Synced" while it is on (v2.72.00).
+  ghRenderSyncIndicator();
 }
 
 // SINGLE OWNER of the Sync/Push buttons' enabled state.
@@ -2668,6 +2687,157 @@ function ghSetStatus(msg, state) {
   el.style.color = state === "err" ? "#dc2626" : state === "ok" ? "#16a34a" : "#64748b";
   var bar = $("ghSyncStatusBar");
   if (bar) bar.classList.toggle("loaded", state === "ok");
+}
+
+// ── Sync-state indicator (v2.72.00) ─────────────────────────────────
+//
+// WHY THIS EXISTS. TIM is offline-first on purpose: a scan lands in IndexedDB
+// immediately and the shared copy catches up afterwards. That is the right
+// design for a warehouse with patchy wifi, and it has exactly one failure
+// mode — the device looks perfectly healthy while nothing is reaching the
+// repo. FinalSpan lost a three-person accounting session to that shape (nine
+// write functions that failed without telling anyone), and once the iPads are
+// on an always-on VPN, "looks online, cannot reach the backend" stops being
+// rare and becomes an ordinary Tuesday.
+//
+// The rule is therefore: NOTHING SILENT. If local work is not on the server,
+// the UI says so, and it says it louder the longer that stays true.
+//
+// TWO TIERS, deliberately:
+//   chip   — always present once sync is configured. Quiet when healthy, so
+//            "Synced 2m ago" is the normal, boring, trustworthy state. A
+//            reading of "fine" is only worth something if the same element
+//            would have said otherwise.
+//   banner — only when work is actually stranded. A banner that is always
+//            there is wallpaper inside a day; one that appears only on
+//            trouble keeps its meaning.
+//
+// ANTI-DRIFT. ghMarkPendingPush/ghClearPendingPush own the pending flag and
+// both repaint from here, so the code that changes the state is the code that
+// reports it. That is the v2.57.01 lesson from the testing-mode banner, where
+// a separate renderer let an iPad read "Off" for a full day while every push
+// was being suppressed. The chip is still only an indicator — the durability
+// guarantee is IndexedDB, not this — but it must never be able to disagree
+// with the flag it is describing.
+const GH_LASTSYNC_KEY = "tim_gh_last_sync_v1";
+var ghLastSync    = null; // { at: ms, kind: "pull" | "push" }
+var ghPendingSince = 0;   // ms when local first went un-pushed; 0 = clean
+var _ghSyncTicker  = null;
+
+var GH_SYNC_WARN_MS  = 5 * 60 * 1000;  // unpushed longer than this → go loud
+var GH_SYNC_STALE_MS = 30 * 60 * 1000; // no successful sync this long → warn
+
+function ghStampSync(kind) {
+  ghLastSync = { at: Date.now(), kind: kind || "sync" };
+  TimDB.set(GH_LASTSYNC_KEY, ghLastSync).catch(function(){});
+  ghRenderSyncIndicator();
+}
+
+// Boot hook: restore what we knew, paint once, then keep the relative time
+// honest with a ticker.
+function ghLoadSyncState() {
+  return Promise.all([
+    TimDB.get(GH_LASTSYNC_KEY).catch(function(){ return null; }),
+    TimDB.get(GH_PENDING_KEY).catch(function(){ return null; })
+  ]).then(function(r) {
+    ghLastSync = (r[0] && r[0].at) ? r[0] : null;
+    // Pre-v2.72.00 devices stored the flag as `true`, which carries no age.
+    // Treat a legacy flag as "pending as of now" rather than inventing a
+    // duration — it under-reports once, then self-corrects.
+    ghPendingSince = (typeof r[1] === "number") ? r[1] : (r[1] ? Date.now() : 0);
+    ghRenderSyncIndicator();
+    ghStartSyncTicker();
+  }).catch(function(){});
+}
+
+function _ghAgeText(ms) {
+  if (!ms) return "never";
+  var s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 45) return "just now";
+  var m = Math.round(s / 60);
+  if (m < 60) return m + "m ago";
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  return Math.floor(h / 24) + "d ago";
+}
+
+// Single source of truth for what the chip and the banner say. Returns:
+//   level  "off" | "ok" | "warn" | "bad"   (drives colour / visibility)
+//   chip   short text for the header chip
+//   loud   whether the banner should be shown
+//   detail full sentence, used as the banner text and the chip's tooltip
+function ghSyncState() {
+  if (!ghConfigured()) return { level: "off" };
+
+  var offline = (typeof navigator !== "undefined") && navigator.onLine === false;
+  var pending = !!ghPendingSince;
+  var pAge    = pending ? (Date.now() - ghPendingSince) : 0;
+
+  // Testing mode is already shouted about by its own amber banner. Say it here
+  // too, quietly, so the chip can never read "Synced" while egress is off.
+  if (ghTestingMode()) {
+    return { level: "warn", chip: "Push suppressed", loud: false,
+             detail: "Testing mode is on — nothing from this device is reaching the shared repo." };
+  }
+  if (pending && offline) {
+    return { level: "bad", chip: "Offline · not synced", loud: pAge > GH_SYNC_WARN_MS,
+             detail: "Offline with changes from " + _ghAgeText(ghPendingSince) +
+                     " that are not on the server. They are saved on this device and will push automatically when you reconnect." };
+  }
+  if (pending) {
+    return { level: pAge > GH_SYNC_WARN_MS ? "bad" : "warn",
+             chip: "Not synced", loud: pAge > GH_SYNC_WARN_MS,
+             detail: "Changes from " + _ghAgeText(ghPendingSince) + " are still only on this device." };
+  }
+  if (offline) {
+    return { level: "warn", chip: "Offline", loud: false,
+             detail: "Offline. Everything so far is on the server; new work will queue until you reconnect." };
+  }
+  if (!ghLastSync) {
+    return { level: "warn", chip: "Not synced yet", loud: false,
+             detail: "This device has not completed a sync yet." };
+  }
+  if ((Date.now() - ghLastSync.at) > GH_SYNC_STALE_MS) {
+    return { level: "warn", chip: "Synced " + _ghAgeText(ghLastSync.at), loud: false,
+             detail: "No successful sync since " + new Date(ghLastSync.at).toLocaleTimeString() + "." };
+  }
+  return { level: "ok", chip: "Synced " + _ghAgeText(ghLastSync.at), loud: false,
+           detail: "Last " + (ghLastSync.kind === "push" ? "push" : "sync") + " " +
+                   new Date(ghLastSync.at).toLocaleTimeString() + "." };
+}
+
+function ghRenderSyncIndicator() {
+  var st = ghSyncState();
+
+  var chip = $("timSyncChip");
+  if (chip) {
+    if (st.level === "off") {
+      chip.classList.add("hidden");
+    } else {
+      chip.classList.remove("hidden");
+      chip.className = "tim-sync-chip tim-sync-" + st.level;
+      chip.textContent = st.chip;              // textContent, never innerHTML
+      chip.title = st.detail || st.chip;
+    }
+  }
+
+  var banner = $("timSyncBanner");
+  if (banner) {
+    var show = (st.level !== "off") && !!st.loud;
+    banner.classList.toggle("hidden", !show);
+    var msg = $("timSyncBannerMsg");
+    if (show && msg) msg.textContent = st.detail || "";
+  }
+}
+
+function ghStartSyncTicker() {
+  if (_ghSyncTicker || typeof setInterval !== "function") return;
+  // 30s keeps "just now → 2m ago" honest without being a wake-up source.
+  _ghSyncTicker = setInterval(ghRenderSyncIndicator, 30000);
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("online",  ghRenderSyncIndicator);
+    window.addEventListener("offline", ghRenderSyncIndicator);
+  }
 }
 
 function ghHeaders(accept) {
@@ -3045,6 +3215,7 @@ function ghSyncNow(silent) {
           // If the merge produced local-only changes, they still need publishing.
           var needsPush = _ghPayloadDiffers(res.merged, remote);
           if (needsPush) { ghMarkPendingPush(); ghBindOnlineRetry(); } else { ghClearPendingPush(); }
+          ghStampSync("pull"); // a completed pull proves the server is reachable
 
           var pCount = Object.keys(PRODUCT_MAP).length;
           var hCount = (history.records || []).length;
@@ -3079,6 +3250,10 @@ function ghInit() {
   ghBindOnlineRetry();
   ghLoadDeviceLabels();
   ghLoadConflictLog().then(function() { ghRenderConflictBadge(); });
+  // Paint the sync chip from stored state before any network work, so a device
+  // that boots offline with stranded changes says so immediately rather than
+  // after a sync times out (v2.72.00).
+  ghLoadSyncState();
   return ghLoadSettings().then(function(configured) {
     if (!configured) { _bootRenderCacheStep(); return; }
     return TimDB.get(GH_PENDING_KEY).then(function(pending) {
@@ -4156,6 +4331,7 @@ function ghPushToGitHub(opts) {
     TimDB.set(GH_SHAS_KEY, newShas).catch(function(){});
     TimDB.set(GH_BASE_KEY, pushedPayload).catch(function(){}); // repo == local now → new merge base
     ghClearPendingPush(); // local is now on GitHub
+    ghStampSync("push");
     _ghMarkResolvedPublished(); // resolved choices are on the repo now → lock them
     var uc = ghUnresolvedConflictCount();
     ghRenderConflictBadge();
