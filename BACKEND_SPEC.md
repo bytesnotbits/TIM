@@ -215,11 +215,64 @@ Rules:
 - **Tombstones are records**, not deletions.
 
 ### 6.1 Collections to carry
-Shapes already documented in TIM's data dictionary; field-level detail to be attached as
-an appendix rather than restated here.
 
-`product_map` · `history` · `inventory_sessions` · `inventory_events` · `recount_sessions`
-· `recount_movements` · `boxes` · `pallets` · `reels` · `barcode_map` · `odoo_quants`
+The table below is the **sync contract**, which is what a backend author actually needs:
+the key each record is identified by, and how two diverged copies are reconciled. Field
+lists are a separate document (see 6.3) — getting a field wrong is a bug, getting the
+merge rule wrong silently destroys someone's work.
+
+Every rule here is already implemented client-side in `ghMergeMasters` and is not up for
+redesign. **The server's job is to preserve these semantics, not to impose its own.**
+
+| Collection | Shape | Identified by | How two copies reconcile |
+|---|---|---|---|
+| `product_map` | map | item number | 3-way merge, **field level**. Disjoint field edits both survive; same field set to two different non-empty values is a real conflict and is logged, never dropped |
+| `barcode_map` | map | barcode string | 3-way merge, whole value |
+| `history` | array | `normKey(serial \|\| ref)` | 3-way merge, **field level**. Stored sharded by year (`history-<year>.json`) |
+| `inventory_events` | array | `eventId` | **Union, append-only.** Never update, never overwrite. Two devices counting the same session concurrently both keep every scan |
+| `inventory_sessions` | array | `sessionId` | **Whole-record last-write-wins on `updatedAt`.** An active session is rewritten roughly every 30s by whichever device holds its write lease; LWW is what makes a lease handoff resolve deterministically instead of raising a conflict on every normal handover |
+| `recount_sessions` | array | `recountId` | Union by key |
+| `recount_movements` | array | `movementId` | Union by key |
+| `boxes` | map | `normKey(boxId)` | Whole-record LWW on `updatedAt`, union of keys. Soft-delete via tombstone, 90-day TTL |
+| `pallets` | map | `normKey(palletId)` | Whole-record LWW on `updatedAt`, union of keys. Soft-delete via tombstone, 90-day TTL |
+| `reels` | map | `normKey(reelNumber)` | Whole-record LWW on `updatedAt`, **plus the sticky-sequence rule below** |
+| `odoo_quants` | array | — | **Whole collection, newest import wins** by `importedAt`. Not row-merged — it is a snapshot of an Odoo export |
+| `external_count`, `product_movements`, `nisc_capture` | arrays | — | Whole collection, newest wins. Snapshots, same as quants |
+
+### 6.2 Four rules that are easy to get wrong
+
+These are the ones that have already cost this project data, and a backend designed
+without them will reproduce the same failures.
+
+1. **A hard delete can never win in a union model.** If a record is removed outright, the
+   next union with any other copy simply brings it back. Deletions must be **tombstones**
+   — the record stays, flagged, with a fresh `updatedAt` so the deletion out-votes stale
+   copies, and is hard-removed only by an age-based sweep that every copy performs
+   independently. TIM learned this twice: a purged pallet kept resurrecting (v2.38.05),
+   and boxes had the identical bug (v2.38.06).
+2. **Events are append-only and must never be rewritten.** `inventory_events` is the
+   record of what was physically scanned. Union by `eventId` is exactly right and loses
+   nothing; any "update the session's events" operation is wrong by construction.
+3. **A blank must never overwrite a known value** (the sticky-sequence rule, v2.55.00).
+   A reel record whose sequence markers are empty cannot erase another copy's hand-entered
+   markers just by carrying a newer timestamp. TIM lost real data to this on 2026-09-22,
+   because a routine import stamped `updatedAt` on blank records. **Newer wins the record;
+   newer does not get to delete information.**
+4. **Snapshots and ledgers merge differently.** Quants and the recount worklist inputs are
+   Odoo exports — newest import replaces the lot. History, events and the registries are
+   accumulated records and must merge. Treating a ledger as a snapshot discards work.
+
+### 6.3 Field-level shapes — an outstanding action, not a gap in the design
+
+TIM maintains a full data dictionary (every field of `ProductMapEntry`, `HistoryRecord`,
+`InvSession`, `InvEvent`, `RcSession`, `RcItem`, `RcMovement`, `BoxEntry`, `PalletEntry`,
+`ReelEntry`, `OdooQuant`), kept current under a standing rule that any field added,
+removed or renamed is documented in the same commit.
+
+**It does not currently live in this repository**, so whoever builds the service cannot
+read it. Exporting it into the repo alongside this spec is a prerequisite to implementation
+and is a small piece of work — but it must have exactly one home, so it should be *moved*
+rather than copied, with the original pointing at it.
 
 ---
 
